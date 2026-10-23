@@ -1,5 +1,8 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
-export interface Env { APP_STATE: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string }
+import { scanAssembly, SessionExpiredError } from './scan';
+import type { AssemblyContext } from '@control-kit/shared';
+
+export interface Env { APP_STATE: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string }
 type Tokens = { access_token: string; refresh_token: string };
 type Session = { tokens: Tokens; user: { id: string; name: string } };
 type OAuthState = { context?: Record<string, string>; redirectOnshapeUri?: string };
@@ -94,6 +97,28 @@ async function route(request: Request, env: Env): Promise<Response> {
     const id = sessionId(request);
     if (id) await env.APP_STATE.delete(`session:${id}`);
     return new Response(null, { status: 204, headers: { 'set-cookie': `${cookieName}=; ${cookieFlags}; Max-Age=0` } });
+  }
+  if (url.pathname === '/api/scan' && request.method === 'GET') {
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const values = ['documentId', 'workspaceOrVersion', 'workspaceOrVersionId', 'elementId'].map(key => url.searchParams.get(key));
+    if (values.some(value => !value || !/^[\w-]{1,128}$/.test(value))) return reply({ error: 'Open Control Kit from an Assembly tab.' }, 400);
+    if (!['w', 'v', 'm'].includes(values[1]!)) return reply({ error: 'Invalid document context.' }, 400);
+    const context: AssemblyContext = { documentId: values[0]!, workspaceOrVersion: values[1] as AssemblyContext['workspaceOrVersion'], workspaceOrVersionId: values[2]!, elementId: values[3]! };
+    let refreshing: Promise<void> | undefined;
+    const get = async (path: string, signal: AbortSignal) => {
+      let response = await fetch(`${env.ONSHAPE_API_BASE}${path}`, { headers: { authorization: `Bearer ${current.data.tokens.access_token}` }, signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) });
+      if (response.status !== 401) return response;
+      refreshing ??= (async () => {
+        current.data.tokens = await exchange(env, { grant_type: 'refresh_token', refresh_token: current.data.tokens.refresh_token });
+        await save(env, current.id, current.data);
+      })();
+      try { await refreshing; } catch { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
+      response = await fetch(`${env.ONSHAPE_API_BASE}${path}`, { headers: { authorization: `Bearer ${current.data.tokens.access_token}` }, signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) });
+      if (response.status === 401) { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
+      return response;
+    };
+    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get);
   }
   if (url.pathname.startsWith('/api/onshape/')) {
     const current = await getSession(request, env);

@@ -1,6 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, { type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
+import { massPath } from './scan';
+import { aggregateAssembly } from '@control-kit/shared';
 
 class MemoryKv implements Kv {
   values = new Map<string, string>();
@@ -9,9 +11,9 @@ class MemoryKv implements Kv {
   async delete(k: string) { this.values.delete(k); }
 }
 const mock = createMockOnshape();
-const env = { APP_STATE: new MemoryKv(), ONSHAPE_OAUTH_CLIENT_ID: 'test-id', ONSHAPE_OAUTH_CLIENT_SECRET: 'test-secret', ONSHAPE_OAUTH_REDIRECT_URI: 'http://localhost:8787/oauth/redirect', ONSHAPE_API_BASE: 'http://localhost:8788', ONSHAPE_OAUTH_BASE: 'http://localhost:8788', SESSION_ENCRYPTION_KEY: btoa('12345678901234567890123456789012'), WEB_ORIGIN: 'http://localhost:5173' } as Env & { APP_STATE: MemoryKv };
+const env = { APP_STATE: new MemoryKv(), ONSHAPE_OAUTH_CLIENT_ID: 'test-id', ONSHAPE_OAUTH_CLIENT_SECRET: 'test-secret', ONSHAPE_OAUTH_REDIRECT_URI: 'http://localhost:8787/oauth/redirect', ONSHAPE_API_BASE: 'http://localhost:8788', ONSHAPE_API_VERSION: 'v9', ONSHAPE_OAUTH_BASE: 'http://localhost:8788', SESSION_ENCRYPTION_KEY: btoa('12345678901234567890123456789012'), WEB_ORIGIN: 'http://localhost:5173' } as Env & { APP_STATE: MemoryKv };
 const call = (path: string, cookie?: string) => worker.fetch(new Request(`http://localhost:8787${path}`, cookie ? { headers: { cookie } } : undefined), env);
-beforeAll(() => vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => mock.handle(new Request(input, init))));
+beforeEach(() => vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => mock.handle(new Request(input, init))));
 afterAll(() => vi.unstubAllGlobals());
 
 describe('Onshape OAuth and session against mock Onshape', () => {
@@ -83,6 +85,71 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     const response = await call('/api/onshape/test?always401=1', cookie);
     expect(response.status).toBe(401);
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+    expect((await call('/api/session', cookie)).status).toBe(401);
+  });
+});
+
+describe('M2 scan stream against mock Onshape', () => {
+  async function connectedCookie() {
+    const start = await call('/oauth/start?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    return (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
+  }
+  it('scans the large fixture, retries real 429 responses twice, and keeps metadata failures local', async () => {
+    const cookie = await connectedCookie();
+    mock.setRateLimit(2);
+    const before = mock.apiRequests;
+    const response = await call('/api/scan?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    expect(response.status).toBe(200);
+    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    expect(events.filter(event => event.type === 'rate-limit')).toHaveLength(2);
+    const result = events.find(event => event.type === 'result')?.result;
+    expect(result.stats.totalInstances).toBe(260);
+    expect(result.suppressed[0].qty).toBe(4);
+    expect(result.missingMetadata).toHaveLength(1);
+    expect(result.missingMetadata[0].suppressed).toBe(true);
+    expect(mock.apiRequests - before).toBe(9); // 3 assembly attempts + one metadata call for each of 6 unique elements.
+    expect(events.some(event => event.type === 'progress' && event.stage === 'Resolving parts…')).toBe(true);
+  });
+  it('reports a failed metadata element without aborting the scan', async () => {
+    const cookie = await connectedCookie();
+    const response = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    const result = events.find(event => event.type === 'result')?.result;
+    expect(result.stats.totalInstances).toBe(11);
+    expect(result.suppressed[0].missingMetadataReason).toBe('Part metadata could not be read');
+    expect(result.missingMetadata).toHaveLength(1);
+    expect(events.some(event => event.type === 'error')).toBe(false);
+  });
+  it('requires a session and a valid Assembly context', async () => {
+    expect((await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1')).status).toBe(401);
+    const cookie = await connectedCookie();
+    expect((await call('/api/scan?documentId=simple&workspaceOrVersion=x&workspaceOrVersionId=work1&elementId=elem1', cookie)).status).toBe(400);
+  });
+  it('returns a valid empty result for the empty fixture', async () => {
+    const cookie = await connectedCookie();
+    const response = await call('/api/scan?documentId=empty&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    const result = events.find(event => event.type === 'result')?.result;
+    expect(result.lines).toEqual([]);
+    expect(result.stats.totalInstances).toBe(0);
+  });
+  it('uses a linked part microversion and configuration for metadata', () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [{ id: 'linked', name: 'Linked Gear', type: 'Part', documentId: 'other-doc', elementId: 'studio', partId: 'gear', documentMicroversion: 'revision-1', configuration: 'size=large' }] } }, { documentId: 'doc1', workspaceOrVersion: 'w', workspaceOrVersionId: 'work1', elementId: 'assembly' }, 'Robot');
+    expect(massPath(result.lines[0], 'v9')).toBe('/api/v9/partstudios/d/other-doc/m/revision-1/e/studio/massproperties?configuration=size%3Dlarge');
+  });
+  it('signals reconnect if token refresh fails during metadata', async () => {
+    const cookie = await connectedCookie();
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname === '/oauth/token') return Response.json({ error: 'invalid_grant' }, { status: 400 });
+      if (new URL(request.url).pathname.endsWith('/massproperties')) return Response.json({ error: 'expired' }, { status: 401 });
+      return mock.handle(request);
+    });
+    const response = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    expect(events.some(event => event.type === 'session-expired')).toBe(true);
+    expect(events.some(event => event.type === 'result')).toBe(false);
     expect((await call('/api/session', cookie)).status).toBe(401);
   });
 });

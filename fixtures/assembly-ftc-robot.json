@@ -1,1 +1,2026 @@
-{"rootAssembly":{"instances":[]},"subAssemblies":[],"parts":[]}
+{
+  "rootAssembly": {
+    "name": "FTC Competition Robot",
+    "instances": [
+      {
+        "id": "screw-0",
+        "name": "M3 Screw <1>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-1",
+        "name": "M3 Screw <2>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-2",
+        "name": "M3 Screw <3>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-3",
+        "name": "M3 Screw <4>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-4",
+        "name": "M3 Screw <5>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-5",
+        "name": "M3 Screw <6>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-6",
+        "name": "M3 Screw <7>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-7",
+        "name": "M3 Screw <8>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-8",
+        "name": "M3 Screw <9>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-9",
+        "name": "M3 Screw <10>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-10",
+        "name": "M3 Screw <11>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-11",
+        "name": "M3 Screw <12>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-12",
+        "name": "M3 Screw <13>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-13",
+        "name": "M3 Screw <14>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-14",
+        "name": "M3 Screw <15>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-15",
+        "name": "M3 Screw <16>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-16",
+        "name": "M3 Screw <17>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-17",
+        "name": "M3 Screw <18>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-18",
+        "name": "M3 Screw <19>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-19",
+        "name": "M3 Screw <20>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-20",
+        "name": "M3 Screw <21>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-21",
+        "name": "M3 Screw <22>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-22",
+        "name": "M3 Screw <23>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-23",
+        "name": "M3 Screw <24>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-24",
+        "name": "M3 Screw <25>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-25",
+        "name": "M3 Screw <26>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-26",
+        "name": "M3 Screw <27>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-27",
+        "name": "M3 Screw <28>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-28",
+        "name": "M3 Screw <29>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-29",
+        "name": "M3 Screw <30>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-30",
+        "name": "M3 Screw <31>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-31",
+        "name": "M3 Screw <32>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-32",
+        "name": "M3 Screw <33>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-33",
+        "name": "M3 Screw <34>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-34",
+        "name": "M3 Screw <35>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-35",
+        "name": "M3 Screw <36>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-36",
+        "name": "M3 Screw <37>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-37",
+        "name": "M3 Screw <38>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-38",
+        "name": "M3 Screw <39>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-39",
+        "name": "M3 Screw <40>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-40",
+        "name": "M3 Screw <41>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-41",
+        "name": "M3 Screw <42>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-42",
+        "name": "M3 Screw <43>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-43",
+        "name": "M3 Screw <44>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-44",
+        "name": "M3 Screw <45>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-45",
+        "name": "M3 Screw <46>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-46",
+        "name": "M3 Screw <47>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-47",
+        "name": "M3 Screw <48>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-48",
+        "name": "M3 Screw <49>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-49",
+        "name": "M3 Screw <50>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-50",
+        "name": "M3 Screw <51>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-51",
+        "name": "M3 Screw <52>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-52",
+        "name": "M3 Screw <53>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-53",
+        "name": "M3 Screw <54>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-54",
+        "name": "M3 Screw <55>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-55",
+        "name": "M3 Screw <56>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-56",
+        "name": "M3 Screw <57>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-57",
+        "name": "M3 Screw <58>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-58",
+        "name": "M3 Screw <59>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-59",
+        "name": "M3 Screw <60>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-60",
+        "name": "M3 Screw <61>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-61",
+        "name": "M3 Screw <62>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-62",
+        "name": "M3 Screw <63>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-63",
+        "name": "M3 Screw <64>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-64",
+        "name": "M3 Screw <65>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-65",
+        "name": "M3 Screw <66>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-66",
+        "name": "M3 Screw <67>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-67",
+        "name": "M3 Screw <68>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-68",
+        "name": "M3 Screw <69>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-69",
+        "name": "M3 Screw <70>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-70",
+        "name": "M3 Screw <71>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-71",
+        "name": "M3 Screw <72>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-72",
+        "name": "M3 Screw <73>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-73",
+        "name": "M3 Screw <74>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-74",
+        "name": "M3 Screw <75>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-75",
+        "name": "M3 Screw <76>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-76",
+        "name": "M3 Screw <77>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-77",
+        "name": "M3 Screw <78>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-78",
+        "name": "M3 Screw <79>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-79",
+        "name": "M3 Screw <80>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-80",
+        "name": "M3 Screw <81>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-81",
+        "name": "M3 Screw <82>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-82",
+        "name": "M3 Screw <83>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-83",
+        "name": "M3 Screw <84>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-84",
+        "name": "M3 Screw <85>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-85",
+        "name": "M3 Screw <86>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-86",
+        "name": "M3 Screw <87>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-87",
+        "name": "M3 Screw <88>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-88",
+        "name": "M3 Screw <89>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-89",
+        "name": "M3 Screw <90>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-90",
+        "name": "M3 Screw <91>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-91",
+        "name": "M3 Screw <92>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-92",
+        "name": "M3 Screw <93>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-93",
+        "name": "M3 Screw <94>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-94",
+        "name": "M3 Screw <95>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-95",
+        "name": "M3 Screw <96>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-96",
+        "name": "M3 Screw <97>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-97",
+        "name": "M3 Screw <98>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-98",
+        "name": "M3 Screw <99>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-99",
+        "name": "M3 Screw <100>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-100",
+        "name": "M3 Screw <101>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-101",
+        "name": "M3 Screw <102>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-102",
+        "name": "M3 Screw <103>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-103",
+        "name": "M3 Screw <104>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-104",
+        "name": "M3 Screw <105>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-105",
+        "name": "M3 Screw <106>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-106",
+        "name": "M3 Screw <107>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-107",
+        "name": "M3 Screw <108>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-108",
+        "name": "M3 Screw <109>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-109",
+        "name": "M3 Screw <110>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-110",
+        "name": "M3 Screw <111>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-111",
+        "name": "M3 Screw <112>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-112",
+        "name": "M3 Screw <113>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-113",
+        "name": "M3 Screw <114>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-114",
+        "name": "M3 Screw <115>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-115",
+        "name": "M3 Screw <116>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-116",
+        "name": "M3 Screw <117>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-117",
+        "name": "M3 Screw <118>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-118",
+        "name": "M3 Screw <119>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-119",
+        "name": "M3 Screw <120>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-120",
+        "name": "M3 Screw <121>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-121",
+        "name": "M3 Screw <122>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-122",
+        "name": "M3 Screw <123>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-123",
+        "name": "M3 Screw <124>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-124",
+        "name": "M3 Screw <125>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-125",
+        "name": "M3 Screw <126>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-126",
+        "name": "M3 Screw <127>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-127",
+        "name": "M3 Screw <128>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-128",
+        "name": "M3 Screw <129>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-129",
+        "name": "M3 Screw <130>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-130",
+        "name": "M3 Screw <131>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-131",
+        "name": "M3 Screw <132>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-132",
+        "name": "M3 Screw <133>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-133",
+        "name": "M3 Screw <134>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-134",
+        "name": "M3 Screw <135>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-135",
+        "name": "M3 Screw <136>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-136",
+        "name": "M3 Screw <137>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-137",
+        "name": "M3 Screw <138>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-138",
+        "name": "M3 Screw <139>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-139",
+        "name": "M3 Screw <140>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-140",
+        "name": "M3 Screw <141>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-141",
+        "name": "M3 Screw <142>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-142",
+        "name": "M3 Screw <143>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-143",
+        "name": "M3 Screw <144>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-144",
+        "name": "M3 Screw <145>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-145",
+        "name": "M3 Screw <146>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-146",
+        "name": "M3 Screw <147>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-147",
+        "name": "M3 Screw <148>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-148",
+        "name": "M3 Screw <149>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-149",
+        "name": "M3 Screw <150>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-150",
+        "name": "M3 Screw <151>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-151",
+        "name": "M3 Screw <152>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-152",
+        "name": "M3 Screw <153>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-153",
+        "name": "M3 Screw <154>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-154",
+        "name": "M3 Screw <155>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-155",
+        "name": "M3 Screw <156>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-156",
+        "name": "M3 Screw <157>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-157",
+        "name": "M3 Screw <158>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-158",
+        "name": "M3 Screw <159>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-159",
+        "name": "M3 Screw <160>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-160",
+        "name": "M3 Screw <161>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-161",
+        "name": "M3 Screw <162>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-162",
+        "name": "M3 Screw <163>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-163",
+        "name": "M3 Screw <164>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-164",
+        "name": "M3 Screw <165>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-165",
+        "name": "M3 Screw <166>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-166",
+        "name": "M3 Screw <167>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-167",
+        "name": "M3 Screw <168>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-168",
+        "name": "M3 Screw <169>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-169",
+        "name": "M3 Screw <170>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-170",
+        "name": "M3 Screw <171>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-171",
+        "name": "M3 Screw <172>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-172",
+        "name": "M3 Screw <173>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-173",
+        "name": "M3 Screw <174>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-174",
+        "name": "M3 Screw <175>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-175",
+        "name": "M3 Screw <176>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-176",
+        "name": "M3 Screw <177>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-177",
+        "name": "M3 Screw <178>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-178",
+        "name": "M3 Screw <179>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-179",
+        "name": "M3 Screw <180>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-180",
+        "name": "M3 Screw <181>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-181",
+        "name": "M3 Screw <182>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-182",
+        "name": "M3 Screw <183>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-183",
+        "name": "M3 Screw <184>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-184",
+        "name": "M3 Screw <185>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-185",
+        "name": "M3 Screw <186>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-186",
+        "name": "M3 Screw <187>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-187",
+        "name": "M3 Screw <188>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-188",
+        "name": "M3 Screw <189>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-189",
+        "name": "M3 Screw <190>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-190",
+        "name": "M3 Screw <191>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-191",
+        "name": "M3 Screw <192>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-192",
+        "name": "M3 Screw <193>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-193",
+        "name": "M3 Screw <194>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-194",
+        "name": "M3 Screw <195>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-195",
+        "name": "M3 Screw <196>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-196",
+        "name": "M3 Screw <197>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-197",
+        "name": "M3 Screw <198>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-198",
+        "name": "M3 Screw <199>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-199",
+        "name": "M3 Screw <200>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "motor-0",
+        "name": "5203 Motor <1>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-1",
+        "name": "5203 Motor <2>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-2",
+        "name": "5203 Motor <3>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-3",
+        "name": "5203 Motor <4>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-4",
+        "name": "5203 Motor <5>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-5",
+        "name": "5203 Motor <6>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-6",
+        "name": "5203 Motor <7>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-7",
+        "name": "5203 Motor <8>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-8",
+        "name": "5203 Motor <9>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-9",
+        "name": "5203 Motor <10>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-10",
+        "name": "5203 Motor <11>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-11",
+        "name": "5203 Motor <12>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-12",
+        "name": "5203 Motor <13>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-13",
+        "name": "5203 Motor <14>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-14",
+        "name": "5203 Motor <15>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-15",
+        "name": "5203 Motor <16>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-16",
+        "name": "5203 Motor <17>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-17",
+        "name": "5203 Motor <18>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-18",
+        "name": "5203 Motor <19>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "motor-19",
+        "name": "5203 Motor <20>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "motors",
+        "partId": "motor-5203"
+      },
+      {
+        "id": "print-0",
+        "name": "Custom Printed Intake Guide <1>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "prints",
+        "partId": "intake-guide"
+      },
+      {
+        "id": "print-1",
+        "name": "Custom Printed Intake Guide <2>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "prints",
+        "partId": "intake-guide"
+      },
+      {
+        "id": "print-2",
+        "name": "Custom Printed Intake Guide <3>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "prints",
+        "partId": "intake-guide"
+      },
+      {
+        "id": "print-3",
+        "name": "Custom Printed Intake Guide <4>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "prints",
+        "partId": "intake-guide"
+      },
+      {
+        "id": "print-4",
+        "name": "Custom Printed Intake Guide <5>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "prints",
+        "partId": "intake-guide"
+      },
+      {
+        "id": "print-5",
+        "name": "Custom Printed Intake Guide <6>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "prints",
+        "partId": "intake-guide"
+      },
+      {
+        "id": "print-6",
+        "name": "Custom Printed Intake Guide <7>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "prints",
+        "partId": "intake-guide"
+      },
+      {
+        "id": "print-7",
+        "name": "Custom Printed Intake Guide <8>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "prints",
+        "partId": "intake-guide"
+      },
+      {
+        "id": "print-8",
+        "name": "Custom Printed Intake Guide <9>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "prints",
+        "partId": "intake-guide"
+      },
+      {
+        "id": "print-9",
+        "name": "Custom Printed Intake Guide <10>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "prints",
+        "partId": "intake-guide"
+      },
+      {
+        "id": "spare-0",
+        "name": "Spare Gear <1>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "gears",
+        "partId": "spare-gear",
+        "suppressed": true
+      },
+      {
+        "id": "spare-1",
+        "name": "Spare Gear <2>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "gears",
+        "partId": "spare-gear",
+        "suppressed": true
+      },
+      {
+        "id": "spare-2",
+        "name": "Spare Gear <3>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "gears",
+        "partId": "spare-gear",
+        "suppressed": true
+      },
+      {
+        "id": "spare-3",
+        "name": "Spare Gear <4>",
+        "type": "Part",
+        "documentId": "robot",
+        "elementId": "gears",
+        "partId": "spare-gear",
+        "suppressed": true
+      },
+      {
+        "id": "left-drive",
+        "name": "Left Drivetrain <1>",
+        "type": "Assembly",
+        "documentId": "robot",
+        "elementId": "drive-module"
+      },
+      {
+        "id": "right-drive",
+        "name": "Right Drivetrain <1>",
+        "type": "Assembly",
+        "documentId": "robot",
+        "elementId": "drive-module"
+      }
+    ]
+  },
+  "subAssemblies": [
+    {
+      "documentId": "robot",
+      "elementId": "drive-module",
+      "instances": [
+        {
+          "id": "wheel-0",
+          "name": "96mm Wheel <1>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "wheels",
+          "partId": "wheel-96"
+        },
+        {
+          "id": "wheel-1",
+          "name": "96mm Wheel <2>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "wheels",
+          "partId": "wheel-96"
+        },
+        {
+          "id": "wheel-2",
+          "name": "96mm Wheel <3>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "wheels",
+          "partId": "wheel-96"
+        },
+        {
+          "id": "wheel-3",
+          "name": "96mm Wheel <4>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "wheels",
+          "partId": "wheel-96"
+        },
+        {
+          "id": "wheel-4",
+          "name": "96mm Wheel <5>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "wheels",
+          "partId": "wheel-96"
+        },
+        {
+          "id": "wheel-5",
+          "name": "96mm Wheel <6>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "wheels",
+          "partId": "wheel-96"
+        },
+        {
+          "id": "wheel-6",
+          "name": "96mm Wheel <7>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "wheels",
+          "partId": "wheel-96"
+        },
+        {
+          "id": "wheel-7",
+          "name": "96mm Wheel <8>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "wheels",
+          "partId": "wheel-96"
+        },
+        {
+          "id": "bearing-0",
+          "name": "Bearing <1>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "bearings",
+          "partId": "bearing-8"
+        },
+        {
+          "id": "bearing-1",
+          "name": "Bearing <2>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "bearings",
+          "partId": "bearing-8"
+        },
+        {
+          "id": "bearing-2",
+          "name": "Bearing <3>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "bearings",
+          "partId": "bearing-8"
+        },
+        {
+          "id": "bearing-3",
+          "name": "Bearing <4>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "bearings",
+          "partId": "bearing-8"
+        },
+        {
+          "id": "bearing-4",
+          "name": "Bearing <5>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "bearings",
+          "partId": "bearing-8"
+        },
+        {
+          "id": "bearing-5",
+          "name": "Bearing <6>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "bearings",
+          "partId": "bearing-8"
+        },
+        {
+          "id": "bearing-6",
+          "name": "Bearing <7>",
+          "type": "Part",
+          "documentId": "robot",
+          "elementId": "bearings",
+          "partId": "bearing-8"
+        }
+      ]
+    }
+  ],
+  "parts": []
+}
