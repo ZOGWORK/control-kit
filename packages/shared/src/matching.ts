@@ -69,9 +69,10 @@ export function findBestMatch(line: { name: string; partNumber?: string | null }
     const vendor = exact.sort(preferStockThenPrice)[0];
     return { vendor, confidence: 1, status: 'exact', reasons: ['exact normalized SKU'] };
   }
-  const ranked = candidates.map(vendor => ({ vendor, ...candidateScore(line.name, vendor) }))
-    .sort((a, b) => Math.abs(a.score - b.score) <= 0.03 ? preferStockThenPrice(a.vendor, b.vendor) : b.score - a.score);
-  const best = ranked[0];
+  const ranked = candidates.map(vendor => ({ vendor, ...candidateScore(line.name, vendor) }));
+  const highest = Math.max(...ranked.map(candidate => candidate.score));
+  const best = ranked.filter(candidate => highest - candidate.score <= 0.03)
+    .sort((a, b) => preferStockThenPrice(a.vendor, b.vendor) || b.score - a.score)[0];
   if (!best || best.score < 0.5) return { vendor: null, confidence: best?.score ?? 0, status: 'unmatched', reasons: best?.reasons ?? ['no candidates'] };
   return { vendor: best.vendor, confidence: best.score, status: classifyMatchScore(best.score), reasons: best.reasons };
 }

@@ -39,4 +39,14 @@ describe('vendor matching', () => {
     const cheap = record('96mm Wheel', 'CHEAP', 'rev', { priceUsd: 5 });
     expect(findBestMatch({ name: '96mm Wheel' }, [inStock, cheap]).vendor?.sku).toBe('CHEAP');
   });
+  it('selects close ties relative to the highest score regardless of index order', () => {
+    const words = Array.from({ length: 50 }, (_, index) => String.fromCharCode(97 + Math.floor(index / 26), 97 + index % 26));
+    const target = words.join(' ');
+    const low = record('Low', 'LOW', 'rev', { normalizedName: words.slice(0, 25).join(' '), stock: 'in', priceUsd: 1 });
+    const middle = record('Middle', 'MID', 'rev', { normalizedName: words.slice(0, 26).join(' '), stock: 'in', priceUsd: 2 });
+    const high = record('High', 'HIGH', 'rev', { normalizedName: words.slice(0, 27).join(' '), stock: 'out', priceUsd: 3 });
+    for (const candidates of [[low, middle, high], [high, low, middle], [middle, high, low]]) {
+      expect(findBestMatch({ name: target }, candidates).vendor?.sku).toBe('MID');
+    }
+  });
 });
