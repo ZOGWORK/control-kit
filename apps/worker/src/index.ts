@@ -47,8 +47,12 @@ async function getSession(request: Request, env: Env) {
 async function save(env: Env, id: string, data: Session) { await env.APP_STATE.put(`session:${id}`, await encrypt(env, data), { expirationTtl: 2592000 }); }
 function authParams(env: Env, grant: Record<string, string>) { return new URLSearchParams({ client_id: env.ONSHAPE_OAUTH_CLIENT_ID.trim(), client_secret: env.ONSHAPE_OAUTH_CLIENT_SECRET.trim(), ...grant }); }
 async function exchange(env: Env, grant: Record<string, string>): Promise<Tokens> {
-  const response = await fetch(`${env.ONSHAPE_OAUTH_BASE}/oauth/token`, { method: 'POST', body: authParams(env, grant), signal: AbortSignal.timeout(10000) });
-  if (!response.ok) throw new Error(`OAuth exchange failed ${response.status}`);
+  const response = await fetch(`${env.ONSHAPE_OAUTH_BASE}/oauth/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: authParams(env, grant), signal: AbortSignal.timeout(10000) });
+  if (!response.ok) {
+    const failure = await response.json().catch(() => null) as { error?: unknown } | null;
+    const code = typeof failure?.error === 'string' && /^[a-z_]{1,40}$/.test(failure.error) ? ` ${failure.error}` : '';
+    throw new Error(`OAuth exchange failed ${response.status}${code}`);
+  }
   const tokens = await response.json() as Partial<Tokens>;
   if (!tokens.access_token || (!tokens.refresh_token && !grant.refresh_token)) throw new Error('Incomplete token response');
   return { access_token: tokens.access_token, refresh_token: tokens.refresh_token ?? grant.refresh_token } as Tokens;

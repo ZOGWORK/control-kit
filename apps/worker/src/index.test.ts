@@ -24,9 +24,13 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     const config = { ...env, ONSHAPE_OAUTH_CLIENT_ID: ' test-id ', ONSHAPE_OAUTH_CLIENT_SECRET: ' test-secret ' };
     const credentialMock = createMockOnshape();
     const tokenCredentials: URLSearchParams[] = [];
+    const tokenContentTypes: Array<string | null> = [];
     vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
       const request = new Request(input, init);
-      if (new URL(request.url).pathname === '/oauth/token') tokenCredentials.push(new URLSearchParams(await request.clone().text()));
+      if (new URL(request.url).pathname === '/oauth/token') {
+        tokenCredentials.push(new URLSearchParams(await request.clone().text()));
+        tokenContentTypes.push(request.headers.get('content-type'));
+      }
       return credentialMock.handle(request);
     });
     const start = await worker.fetch(new Request('http://localhost:8787/oauth/start?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1'), config);
@@ -37,6 +41,7 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     expect(callback.status).toBe(302);
     expect(tokenCredentials[0]?.get('client_id')).toBe('test-id');
     expect(tokenCredentials[0]?.get('client_secret')).toBe('test-secret');
+    expect(tokenContentTypes[0]).toBe('application/x-www-form-urlencoded');
   });
   it('connects, preserves context, encrypts tokens, and survives reload', async () => {
     const start = await call('/oauth/start?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
