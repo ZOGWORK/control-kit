@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, { type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
 import { massPath } from './scan';
-import { aggregateAssembly } from '@control-kit/shared';
+import { aggregateAssembly, classificationIdentity } from '@control-kit/shared';
 import { clearCatalogMemoryCache } from './catalog';
 import { readFileSync } from 'node:fs';
 import { strFromU8, unzipSync } from 'fflate';
@@ -139,25 +139,25 @@ describe('M5 settings and classification overrides against mock Onshape', () => 
     const scan = async () => (await (await call(path, cookie)).text()).trim().split('\n').map(row => JSON.parse(row)).find(event => event.type === 'result').result;
     const first = await scan();
     const selected = first.lines[0];
-    expect((await post('/api/classification/override', { documentId: 'simple', lineKey: selected.bomLineKey, classification: 'printed' })).status).toBe(200);
+    expect((await post('/api/classification/override', { documentId: 'simple', identity: classificationIdentity(selected), classification: 'printed' })).status).toBe(200);
     const second = await scan();
     expect(second.scanId).not.toBe(first.scanId);
     expect(env.APP_STATE.values.has(`scan:mock-user:${first.scanId}`)).toBe(true);
     expect(second.lines[0].classification).toBe('printed');
     expect(second.lines[0].manualClassification).toBe('printed');
     expect(second.stats.printedLines).toBeGreaterThanOrEqual(1);
-    expect((await post('/api/classification/override', { documentId: 'simple', lineKey: selected.bomLineKey, classification: null })).status).toBe(200);
+    expect((await post('/api/classification/override', { documentId: 'simple', identity: classificationIdentity(selected), classification: null })).status).toBe(200);
     const third = await scan();
     expect(third.lines[0].manualClassification).toBeNull();
     const [a, b] = third.lines.slice(0, 2);
     await Promise.all([
-      post('/api/classification/override', { documentId: 'simple', lineKey: a.bomLineKey, classification: 'printed' }),
-      post('/api/classification/override', { documentId: 'simple', lineKey: b.bomLineKey, classification: 'commercial' }),
+      post('/api/classification/override', { documentId: 'simple', identity: classificationIdentity(a), classification: 'printed' }),
+      post('/api/classification/override', { documentId: 'simple', identity: classificationIdentity(b), classification: 'commercial' }),
     ]);
     const fourth = await scan();
     expect(fourth.lines[0].manualClassification).toBe('printed');
     expect(fourth.lines[1].manualClassification).toBe('commercial');
-    const foreign = await worker.fetch(new Request('http://localhost:8787/api/classification/override', { method: 'POST', headers: { cookie, origin: 'https://foreign.example', 'content-type': 'application/json' }, body: JSON.stringify({ documentId: 'simple', lineKey: selected.bomLineKey, classification: 'printed' }) }), env);
+    const foreign = await worker.fetch(new Request('http://localhost:8787/api/classification/override', { method: 'POST', headers: { cookie, origin: 'https://foreign.example', 'content-type': 'application/json' }, body: JSON.stringify({ documentId: 'simple', identity: classificationIdentity(selected), classification: 'printed' }) }), env);
     expect(foreign.status).toBe(403);
   });
   it('keeps Unicode failed part names in a downloadable zip', async () => {
@@ -201,7 +201,7 @@ describe('M5 settings and classification overrides against mock Onshape', () => 
     const result = (await scan.text()).trim().split('\n').map(row => JSON.parse(row)).find(event => event.type === 'result').result;
     const motor = result.lines.find((line: { partId: string }) => line.partId === 'motor-5203');
     const override = await worker.fetch(new Request('http://localhost:8787/api/classification/override', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' },
-      body: JSON.stringify({ documentId: 'robot', lineKey: motor.bomLineKey, classification: 'printed' }) }), env);
+      body: JSON.stringify({ documentId: 'robot', identity: classificationIdentity(motor), classification: 'printed' }) }), env);
     expect(override.status).toBe(200);
     const zip = await call(`/api/prints/zip?documentId=robot&scanId=${result.scanId}`, cookie);
     expect(zip.status).toBe(200);

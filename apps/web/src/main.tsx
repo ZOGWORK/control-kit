@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { applyMatchDecision, classifyLine, classifyScan, type BomLine, type ClassificationOverride, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { applyMatchDecision, classificationIdentity, classifyLine, classifyScan, type BomLine, type ClassificationOverride, type ScanResult, type UserSettings } from '@control-kit/shared';
 import './style.css';
 
 type Session = { connected: boolean; setupPending?: boolean; user?: { id: string; name: string } };
@@ -122,7 +122,7 @@ function App() {
     });
     try {
       const response = await fetch(`${workerUrl}/api/classification/override`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ documentId: result.documentId, lineKey: line.bomLineKey, classification }) });
+        body: JSON.stringify({ documentId: result.documentId, identity: classificationIdentity(line), classification }) });
       if (!response.ok) throw Error();
     } catch {
       if (scanGeneration.current === generation) setResult(current => {

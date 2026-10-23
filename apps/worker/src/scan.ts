@@ -32,16 +32,16 @@ export function massPath(line: BomLine, version: string) {
   return `/api/${version}/partstudios/d/${encodeURIComponent(line.documentId)}/${source}/e/${encodeURIComponent(line.elementId)}/massproperties${query}`;
 }
 
-export async function loadClassificationOverrides(lines: BomLine[], getOverride: (key: string, signal?: AbortSignal) => Promise<ClassificationOverride | null>, signal?: AbortSignal): Promise<ClassificationOverrides> {
+export async function loadClassificationOverrides(lines: BomLine[], getOverride: (line: BomLine, signal?: AbortSignal) => Promise<ClassificationOverride | null>, signal?: AbortSignal): Promise<ClassificationOverrides> {
   const overrides: ClassificationOverrides = {};
   for (let offset = 0; offset < lines.length; offset += 20) {
-    const choices = await Promise.all(lines.slice(offset, offset + 20).map(line => getOverride(line.bomLineKey, signal)));
+    const choices = await Promise.all(lines.slice(offset, offset + 20).map(line => getOverride(line, signal)));
     choices.forEach((choice, index) => { if (choice) overrides[lines[offset + index].bomLineKey] = choice; });
   }
   return overrides;
 }
 
-export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 24, settings: UserSettings = { teamNumber: null }, getOverride: (key: string, signal?: AbortSignal) => Promise<ClassificationOverride | null> = async () => null, onResult?: (result: ScanResult) => Promise<void>): Response {
+export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 24, settings: UserSettings = { teamNumber: null }, getOverride: (line: BomLine, signal?: AbortSignal) => Promise<ClassificationOverride | null> = async () => null, onResult?: (result: ScanResult) => Promise<void>): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {

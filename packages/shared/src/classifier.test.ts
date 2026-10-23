@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateAssembly, classificationForScore, classifyLine, classifyScan, type BomLine } from './index';
+import { aggregateAssembly, classificationForScore, classificationIdentity, classifyLine, classifyScan, type BomLine } from './index';
 
 function line(name: string): BomLine {
   const result = aggregateAssembly({ rootAssembly: { instances: [{ id: 'i', name, type: 'Part', documentId: 'doc', elementId: 'element', partId: 'part' }] } },
@@ -56,5 +56,27 @@ describe('deterministic print classification', () => {
     classifyScan(changed, { teamNumber: null }, { [result.lines[0].bomLineKey]: 'commercial' });
     expect(changed.missingMetadata[0]).toBe(changed.lines[0]);
     expect(changed.missingMetadata[0].classification).toBe('commercial');
+  });
+  it('keeps manual type identity stable across source revisions', () => {
+    const original = line('Custom bracket');
+    original.sourceType = 'm'; original.sourceId = 'microversion-one';
+    const edited = { ...original, sourceId: 'microversion-two', bomLineKey: `${original.bomLineKey}:new-revision` };
+    expect(edited.bomLineKey).not.toBe(original.bomLineKey);
+    expect(classificationIdentity(edited)).toBe(classificationIdentity(original));
+  });
+  it('keeps suppressed metadata rows distinct from active copies', () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'active', name: 'Custom bracket', type: 'Part', documentId: 'doc', elementId: 'element', partId: 'part' },
+      { id: 'suppressed', name: 'Custom bracket', type: 'Part', documentId: 'doc', elementId: 'element', partId: 'part', suppressed: true },
+    ] } }, { documentId: 'doc', workspaceOrVersion: 'w', workspaceOrVersionId: 'work', elementId: 'element' }, 'Assembly');
+    result.lines[0].missingMetadataReason = 'fixture missing';
+    result.suppressed[0].missingMetadataReason = 'fixture missing';
+    result.missingMetadata = [result.lines[0], result.suppressed[0]];
+    const next = { ...result, lines: result.lines.map(item => ({ ...item })), stats: { ...result.stats } };
+    classifyScan(next, { teamNumber: null }, {});
+    expect(next.missingMetadata[0]).toBe(next.lines[0]);
+    expect(next.missingMetadata[1]).toBe(next.suppressed[0]);
+    expect(next.missingMetadata[1].suppressed).toBe(true);
+    expect(next.missingMetadata[1].qty).toBe(1);
   });
 });

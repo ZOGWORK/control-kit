@@ -1,6 +1,6 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
 import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from './scan';
-import { applyMatchDecision, classifyScan, type AssemblyContext, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { applyMatchDecision, classificationIdentity, classifyScan, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { buildStlZip } from './stl-zip';
 
@@ -19,7 +19,7 @@ async function lineKeyDigest(lineKey: string) {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 async function matchDecisionKey(userId: string, documentId: string, lineKey: string) { return `match-decision:${userId}:${documentId}:${await lineKeyDigest(lineKey)}`; }
-async function classificationKey(userId: string, documentId: string, lineKey: string) { return `override:${userId}:${documentId}:${await lineKeyDigest(lineKey)}`; }
+async function classificationKey(userId: string, documentId: string, identity: string) { return `override:${userId}:${documentId}:${await lineKeyDigest(identity)}`; }
 const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 const b64 = (data: Uint8Array) => btoa(String.fromCharCode(...data));
 const bytes = (data: string) => Uint8Array.from(atob(data), x => x.charCodeAt(0));
@@ -136,9 +136,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
-    const body = await request.json() as { documentId?: string; lineKey?: string; classification?: string | null };
-    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.lineKey || body.lineKey.length > 16384 || ![null, 'commercial', 'printed'].includes(body.classification ?? null)) return reply({ error: 'Invalid classification override.' }, 400);
-    const key = await classificationKey(current.data.user.id, body.documentId, body.lineKey);
+    const body = await request.json() as { documentId?: string; identity?: string; classification?: string | null };
+    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.identity || body.identity.length > 16384 || ![null, 'commercial', 'printed'].includes(body.classification ?? null)) return reply({ error: 'Invalid classification override.' }, 400);
+    const key = await classificationKey(current.data.user.id, body.documentId, body.identity);
     if (body.classification) await env.APP_STATE.put(key, body.classification);
     else await env.APP_STATE.delete(key);
     return reply({ saved: true });
@@ -173,9 +173,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     };
     const settingsRaw = await env.APP_STATE.get(`settings:${current.data.user.id}`);
     const settings = settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null };
-    const getOverride = async (lineKey: string, signal?: AbortSignal): Promise<ClassificationOverride | null> => {
+    const getOverride = async (line: BomLine, signal?: AbortSignal): Promise<ClassificationOverride | null> => {
       if (signal?.aborted) throw signal.reason;
-      const value = await env.APP_STATE.get(await classificationKey(current.data.user.id, context.documentId, lineKey));
+      const value = await env.APP_STATE.get(await classificationKey(current.data.user.id, context.documentId, classificationIdentity(line)));
       return value === 'commercial' || value === 'printed' ? value : null;
     };
     const scanId = random();
@@ -206,8 +206,8 @@ async function route(request: Request, env: Env): Promise<Response> {
         if (choice && line.vendor && choice.vendorId === line.vendor.vendorId && choice.normalizedSku === line.vendor.normalizedSku) result = applyMatchDecision(result, line.bomLineKey, choice.status);
       });
     }
-    const overrides = await loadClassificationOverrides(result.lines, async lineKey => {
-      const value = await env.APP_STATE.get(await classificationKey(current.data.user.id, documentId, lineKey));
+    const overrides = await loadClassificationOverrides(result.lines, async line => {
+      const value = await env.APP_STATE.get(await classificationKey(current.data.user.id, documentId, classificationIdentity(line)));
       return value === 'commercial' || value === 'printed' ? value : null;
     }, request.signal);
     classifyScan(result, settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null }, overrides);

@@ -3,6 +3,9 @@ import type { BomLine, ScanResult } from './index';
 export type ClassificationOverride = 'commercial' | 'printed';
 export type UserSettings = { teamNumber: string | null };
 export type ClassificationOverrides = Record<string, ClassificationOverride>;
+/** Manual type follows the part/configuration across source revision changes. */
+export const classificationIdentity = (line: Pick<BomLine, 'documentId' | 'elementId' | 'partId' | 'configuration'>) =>
+  `${line.documentId}:${line.elementId}:${line.partId ?? ''}:${line.configuration ?? ''}`;
 
 const strong = /\b(?:printed|3[ -]?d print|stl|fdm|pla|petg)\b/i;
 const weak = ['custom', 'bracket', 'mount', 'plate', 'panel', 'spacer', 'adapter', 'holder', 'guide', 'cover'];
@@ -33,6 +36,8 @@ export function classifyLine(line: BomLine, teamNumber: string | null, override:
 export function classifyScan(result: ScanResult, settings: UserSettings, overrides: ClassificationOverrides): ScanResult {
   for (const line of result.lines) classifyLine(line, settings.teamNumber, overrides[line.bomLineKey] ?? null);
   result.stats.printedLines = result.lines.filter(line => line.classification === 'printed').length;
-  result.missingMetadata = result.missingMetadata.map(item => result.lines.find(line => line.bomLineKey === item.bomLineKey) ?? item);
+  result.missingMetadata = result.missingMetadata.map(item => item.suppressed
+    ? result.suppressed.find(line => line.bomLineKey === item.bomLineKey) ?? item
+    : result.lines.find(line => line.bomLineKey === item.bomLineKey) ?? item);
   return result;
 }
