@@ -84,6 +84,22 @@ describe('catalog KV read path and purchasing', () => {
     await enrichScan(changed, store, async () => ({ ...saved, normalizedSku: 'DIFFERENT' }));
     expect(changed.lines.find(item => item.partId === 'bearing-8')?.matchStatus).toBe('possible');
   });
+  it('keeps a rejected product rejected when its name becomes an automatic match', async () => {
+    clearCatalogMemoryCache();
+    const store = catalog();
+    const first = aggregateAssembly(fixture('simple'), context, 'Robot');
+    await enrichScan(first, store);
+    const bearing = first.lines.find(item => item.partId === 'bearing-8')!;
+    const identity = { vendorId: bearing.vendor!.vendorId, normalizedSku: bearing.vendor!.normalizedSku };
+    const key = `vendor:${identity.vendorId}:${identity.normalizedSku}`;
+    const improved = { ...JSON.parse(store.values.get(key)!) as VendorRecord, name: bearing.name, normalizedName: 'bearing' };
+    store.values.set(key, JSON.stringify(improved));
+    clearCatalogMemoryCache();
+    const next = aggregateAssembly(fixture('simple'), context, 'Robot');
+    await enrichScan(next, store, async () => ({ status: 'rejected', ...identity }));
+    expect(next.lines.find(item => item.partId === 'bearing-8')?.matchStatus).toBe('rejected');
+    expect(next.lines.find(item => item.partId === 'bearing-8')?.vendor).toBeNull();
+  });
   it('ignores an incomplete JSON catalog record without failing the scan', async () => {
     clearCatalogMemoryCache();
     const store = new MemoryKv();

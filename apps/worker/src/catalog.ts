@@ -75,7 +75,7 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
     line.matchStatus = match.status;
     line.matchReasons = match.reasons;
     if (match.status === 'exact') { line.classification = 'commercial'; line.classificationReasons = ['exact vendor SKU forces Commercial']; }
-    if (match.status === 'possible' && match.vendor) {
+    if (match.vendor && match.status !== 'exact') {
       const choice = await getDecision(line.bomLineKey, signal);
       if (choice?.vendorId === match.vendor.vendorId && choice.normalizedSku === match.vendor.normalizedSku) {
         line.matchStatus = choice.status;
