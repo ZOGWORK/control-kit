@@ -2,11 +2,13 @@
 
 ## Architecture
 
-`Onshape iframe → React/Vite Pages app → Cloudflare Worker → Onshape API`; Worker KV stores encrypted sessions and catalog snapshots. `packages/shared` holds domain logic and `packages/excel` will build exports. The browser never receives OAuth secrets or tokens.
+`Onshape iframe → React/Vite Pages app → Cloudflare Worker → Onshape API`; Worker KV stores encrypted sessions and catalog snapshots. `packages/shared` holds domain logic and `packages/excel` builds exports. The browser never receives OAuth secrets or tokens.
 
 ## Repository
 
-`apps/web` is the iframe UI. `apps/worker` owns OAuth, proxying, and scheduled ingestion. `fixtures`, `scripts`, and `samples` support later milestones. See README for setup and checks.
+`apps/web` is the iframe UI. `apps/worker` owns OAuth, proxying, and scheduled ingestion. `packages/shared` owns matching, classification, aggregation, and the Control Point contract. `packages/excel` owns XLSX/CSV export. `fixtures`, `scripts`, and `samples` hold test inputs and generated examples. See README for setup and checks.
+
+The browser calls only the Worker for Onshape data. The Worker keeps access/refresh tokens encrypted in KV; its cross-site iframe cookie is opaque, `HttpOnly`, `Secure`, and `SameSite=None`. Vendor reads use a short Worker memory cache then KV, returning unmatched on a miss without scraping during a scan. Classification, matching, and purchasing rules are shared between app and Worker. External calls have bounded retries/timeouts; user scans are never edge cached. Control Point has no network implementation in v1.
 
 ## Milestones and deviations
 
@@ -31,3 +33,17 @@ M5 data additions: `settings:{userId}` holds `{teamNumber}`; `override:{userId}:
 M6 workbook deviation: the user's settled purchasing rule adds separate `Qty Needed` and `Packs to Order` columns, so the BOM has 13 columns instead of the brief's 12. Pack Price is the charged price per purchasable pack. A line gets the formula `=Drow*Grow` only for a confirmed/exact match with a verified pack size and known price; unknown pack size or a possible match leaves Line Total blank. Row 4 uses separate label/value cells and an unmerged live Estimated Total formula at F4. `BomLine.alternatives` stores up to three ranked same-vendor/category in-stock catalog records for low/out-of-stock lines. `printCategory(name)` is shared by the STL zip and Excel sheet to keep folders consistent. The four-sheet XLSX is built by a pure browser-compatible function and uses the scanned result without new Onshape requests.
 
 M6 review hardening: the workbook's vendor date uses `ScanResult.vendorDataUpdatedAt` (last completed refresh) before falling back to the oldest used record timestamp, because unchanged products retain their older `VendorRecord.updatedAt`. The BOM keeps the brief's first-alternative link in the line's Alternatives cell and lists each alternative again in a detail block with its own SKU and product hyperlink. The AutoFilter ends at the last commercial line so merged printed and alternative headings cannot prevent Excel sorting; those later sections remain visible below the filter.
+
+M7 scope follows the user's correction over §14 and §18: Control Point is only an interface and in-memory test adapter. There is no HTTP adapter, link/sync UI, or live network path until its real BOM endpoint and auth are confirmed. `buildControlPointPayload` creates a stable SHA-256 idempotency key from document, element, source revisions, and BOM content rather than the random scan UUID. The test adapter records payloads and reuses a mock ID on repeat; unlink is test-only. The browser smoke routes session/scan calls to local fixture responses while existing integration tests exercise the mock Onshape server directly. Excel failure reveals a CSV fallback built from the same BOM sheet model. Generated XLSX and mock STL samples live in `samples/`.
+
+The Control Point payload changes the brief's ambiguous `unitPriceUsd` to `packPriceUsd` and adds `packsToOrder`, `lineTotalUsd`, and `matchStatus`. CAD `qty` stays individual units; a receiving system must never infer an order total from `qty × packPriceUsd`. `lineTotalUsd` remains null until pack size and match are verified. This interface will be mapped to Control Point's real schema only after that API is confirmed.
+
+M7 review hardening: CSV text fields escape formula-leading content from Onshape part names, while quantities and cached totals remain numeric. The Control Point idempotency hash includes assembly name, suppressed count, totals, canonical line data, and source revisions; only `generatedAt` is excluded so a repeated unchanged scan reuses the same key.
+
+## Tuning, tests, and release
+
+Match normalization, thresholds, and alternative ranking are in `packages/shared/src/matching.ts`; exact SKU still forces Commercial absent manual override. Print scoring thresholds and mechanism folders are in `packages/shared/src/classifier.ts`. Vendor stale hours and cron schedule are in `wrangler.toml`; catalog crawl batch limits are in `apps/worker/src/vendor-ingest.ts`. Scan metadata concurrency/backoff is in `apps/worker/src/scan.ts`; STL export bounds are in `apps/worker/src/stl-zip.ts`. Change these with fixture tests and record any changed data shape here.
+
+Run `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm exec playwright install chromium`, `pnpm test:smoke`, and `pnpm build`. `pnpm sample:excel` and `pnpm sample:stl` regenerate the committed samples. Release only from a reviewed and merged `main`: deploy Worker, build and deploy Pages with README commands, check `/api/session`, then inspect each vendor snapshot/cursor in KV. Greptile must score the exact PR head 5/5 with zero unresolved threads before merging.
+
+The §16 failure matrix is covered by mock tests and UI paths: assembly 403/404/network emit fatal scan errors with retry guidance; 429 backs off with progress; expired tokens refresh once or reconnect; metadata failures appear on affected lines; catalog misses leave lines unmatched; failed/stale catalog refreshes keep last-good data and warn; STL failures remain in zip/README and UI; Excel exceptions expose CSV; missing assembly context shows an explainer; duplicate scans/exports are guarded. Control Point sync failure is deferred with the live integration by the user's v1 scope correction.

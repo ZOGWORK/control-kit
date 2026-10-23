@@ -3,6 +3,8 @@ export { classifyMatchScore, findBestMatch, normalizeName, normalizeSku, rankVen
 export { applyClassificationChoice, classificationForScore, classificationIdentity, classifyLine, classifyScan, printCategory } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, UserSettings } from './classifier';
 export type { VendorId, VendorRecord, MatchResult } from './matching';
+export { buildControlPointPayload, MockControlPointAdapter } from './control-point';
+export type { ControlPointAdapter, ControlPointBomPayload } from './control-point';
 import type { VendorRecord } from './matching';
 
 export type AssemblyContext = { documentId: string; workspaceOrVersion: 'w' | 'v' | 'm'; workspaceOrVersionId: string; elementId: string };

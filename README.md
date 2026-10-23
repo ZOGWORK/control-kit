@@ -11,6 +11,8 @@ pnpm install --frozen-lockfile
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm exec playwright install chromium
+pnpm test:smoke
 pnpm build
 ```
 
@@ -39,14 +41,16 @@ The seed is synthetic and is not a production catalog. A matched record's price 
 
 After a scan, **Download Excel BOM** creates a workbook locally in the browser without another API call. The BOM sheet shows Qty Needed, Packs to Order, Pack Price, and formula-driven Line Total; the Estimated Total formula sums those line totals. Unverified pack sizes and unconfirmed possible matches have blank line totals. Separate sheets list printed parts, suppressed parts, and missing metadata. Vendor data age and stale status appear in the header.
 
-To regenerate the fixture workbook, bundle and run the sample script from the repository root:
+To regenerate the fixture workbook and mock STL zip from the repository root:
 
 ```sh
-node node_modules/.pnpm/esbuild@0.25.12/node_modules/esbuild/bin/esbuild scripts/generate-sample-excel.ts --bundle --platform=node --format=esm --outfile=work/generate-sample-excel.mjs
-node work/generate-sample-excel.mjs
+pnpm sample:excel
+pnpm sample:stl
 ```
 
-The checked-in sample is `fixtures/FTC_Competition_Robot_BOM_2026-10-23.xlsx`. The script calls the same `buildExcelWorkbook` function as the UI and uses only fixtures.
+The checked-in samples are `samples/FTC_Competition_Robot_BOM_2026-10-23.xlsx` and `samples/FTC_Competition_Robot_prints.zip`. Both scripts use only fixtures and the same builders as the app. Alternative product links in the workbook are illustrative fixture data. The mock STL is illustrative geometry; its README records a deliberately failed part.
+
+If XLSX generation fails, the app offers **Download CSV instead** from the same BOM sheet data. The CSV has values and no styling or live formulas.
 
 ## Printed parts and STL export
 
@@ -60,6 +64,34 @@ Five staggered Worker crons refresh public product sitemaps every six hours: goB
 
 The owner-only actions and missing inputs are listed in [MORNING.md](MORNING.md). No secret belongs in chat or Git.
 
+## Control Point integration status
+
+V1 contains a `ControlPointAdapter` contract, a deterministic BOM payload builder, and an in-memory `MockControlPointAdapter` for tests. Repeating an unchanged payload reuses its SHA-256 idempotency key and mock record ID. There is no Control Point link UI, HTTP adapter, live sync, or network request. These stay out of the product until Control Point's actual BOM endpoint and authentication are confirmed.
+
+## Deploy and verify
+
+The production Cloudflare Pages project, Worker, and two KV namespaces already exist. The namespace IDs and five staggered crons are in `wrangler.toml`. In a new account, create equivalent Pages, Worker, and KV resources first and replace the namespace IDs. Put `SESSION_ENCRYPTION_KEY`, `ONSHAPE_OAUTH_CLIENT_ID`, and `ONSHAPE_OAUTH_CLIENT_SECRET` in the Worker as secrets, not in `wrangler.toml`, Pages variables, or Git. The owner has not yet created the Onshape OAuth app, so production currently reports `setupPending`.
+
+After `pnpm install --frozen-lockfile` and the checks above, deploy from the repository root:
+
+```sh
+pnpm --filter @control-kit/worker exec wrangler deploy --config ../../wrangler.toml
+pnpm --filter @control-kit/web build
+pnpm --filter @control-kit/worker exec wrangler pages deploy ../../apps/web/dist --project-name control-kit --branch main
+```
+
+Verify `https://control-kit.pages.dev` loads and `https://control-kit.control-kit-worker.workers.dev/api/session` responds. Without OAuth secrets, the session response is `setupPending`; once configured, validate connect and iframe reload with a real Onshape assembly. In Cloudflare's KV dashboard, inspect `vendor:{vendorId}:__snapshot__` and `vendor:{vendorId}:__cursor__` for each cron. Initial full vendor backfill takes multiple six-hour cycles; a partial catalog is not served as complete.
+
+On free Onshape plans, documents must be public for some API operations and rate limits are lower, so scans may take longer. The scan performance target is under 10 seconds for 200–500 instances with warm vendor KV, excluding 429 backoff. Larger assemblies remain scannable with progress shown. No plan level is inferred when Onshape does not expose it.
+
+## Onshape App Store listing checklist
+
+- Create the OAuth application with the exact redirect and OAuth URLs below; select read-profile and read-document permissions.
+- Add an **Element right panel** extension for **Assembly** using the iframe Action URL below. Create the private store entry and subscribe for an in-document test.
+- Verify connect, iframe reload, a real FTC assembly scan, Excel export, and STL zip after the owner supplies a validation document. Check actual API permissions before requesting any additional scope.
+- Include a privacy note: the Worker stores encrypted Onshape tokens server-side under an opaque session cookie, caches a completed scan for one hour for STL export, and uses catalog data for vendor enrichment. V1 sends no data to Control Point.
+- Confirm Pages/Worker HTTPS URLs, free-plan wording, support contact, and screenshots before public submission.
+
 ## Owner's Onshape Developer Portal step
 
 1. Sign in to Onshape. Open the account icon (top right) → **My account** → **Developer** → **OAuth applications** → **Create new OAuth application**.
@@ -71,14 +103,6 @@ The owner-only actions and missing inputs are listed in [MORNING.md](MORNING.md)
 
 These clicks and fields follow [Onshape Developer settings](https://cad.onshape.com/help/Content/Plans/my_account_developer.htm), [extension parameters](https://onshape-public.github.io/docs/app-dev/extensions/), the [OAuth guide](https://onshape-public.github.io/docs/auth/oauth/), and [Onshape's sample app](https://github.com/onshape-public/app-gltf-viewer). The Pages and Worker URLs respond over HTTPS. Onshape's OAuth guide says embedded apps need third-party cookies enabled. Actual iframe/OAuth behavior and permission details still require live portal verification. No live Onshape request has been spent.
 
-## GitHub handoff
+## Repository and review
 
-The private repository is `ZOGWORK/control-kit`. From this repository root, after authenticating Git with an authorized GitHub account:
-
-```sh
-git status
-git remote -v
-git push origin main
-```
-
-M0–M3 are merged. Before any later PR merge, run Greptile on the current head and wait for 5/5 confidence with zero unresolved threads.
+The private repository is [`ZOGWORK/control-kit`](https://github.com/ZOGWORK/control-kit). Every PR is merged only after Greptile reviews its exact head commit at 5/5 confidence with zero unresolved threads.

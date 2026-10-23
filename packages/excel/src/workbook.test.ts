@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { strFromU8, unzipSync } from 'fflate';
 import { aggregateAssembly, recalculatePurchasing, type VendorRecord } from '../../shared/src/index';
-import { buildExcelWorkbook } from './workbook';
+import { buildBomCsv, buildExcelWorkbook } from './workbook';
 
 const vendor: VendorRecord = { vendorId: 'andymark', sku: 'AM-1000', normalizedSku: '1000', name: 'M3 Screw', normalizedName: 'm3 screw',
   url: 'https://www.andymark.com/products/m3-screw', priceUsd: 8.99, packSize: 10, packSizeVerified: true, stock: 'in', stockQty: 20,
@@ -60,5 +60,18 @@ describe('Excel export', () => {
     expect(links).toContain('https://www.andymark.com/products/bearing-a');
     expect(links).toContain('https://www.andymark.com/products/bearing-b');
     expect(strFromU8(zip['xl/worksheets/sheet2.xml'])).toContain('Custom Printed Intake Guide');
+    const csv = buildBomCsv(result, new Date('2026-10-23T12:00:00Z'));
+    expect(csv.filename).toBe('FTC_Robot_BOM_2026-10-23.csv');
+    const csvText = new TextDecoder().decode(csv.bytes);
+    expect(csvText).toContain('"Qty Needed","Packs to Order"');
+    expect(csvText).toContain('17.98');
+  });
+  it('writes Onshape part names as inert CSV text while retaining numeric charges', () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'bad', name: '=HYPERLINK("https://example.com","Open part")', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'bad' },
+    ] } }, { documentId: 'doc', workspaceOrVersion: 'w', workspaceOrVersionId: 'work', elementId: 'assembly' }, 'Robot');
+    const csv = new TextDecoder().decode(buildBomCsv(result).bytes);
+    expect(csv).toContain('"\'=HYPERLINK(""https://example.com"",""Open part"")"');
+    expect(csv).not.toContain(',"=HYPERLINK');
   });
 });
