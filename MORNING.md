@@ -10,4 +10,4 @@ The live connection currently stops at Onshape's token endpoint with **HTTP 401 
 
 If the token endpoint still returns `unauthorized_client` after the replacement, preserve the Onshape app and Cloudflare settings and report the error; the next investigation should focus on the app's OAuth grant configuration. Once connected, the real HORS scan, STL ZIP, and Excel export can be validated and the API counter recorded.
 
-Rotate the Onshape API key previously shared in chat after the OAuth setup is working.
+Revoke or rotate the Onshape API key previously shared in chat now. This is separate from OAuth recovery and does not need to wait for it.
