@@ -21,6 +21,14 @@ test('mock-backed scan downloads the fixture BOM workbook', async ({ page }) => 
   const workbook = await download;
   expect(workbook.suggestedFilename()).toMatch(/^Simple_FTC_Assembly_BOM_\d{4}-\d{2}-\d{2}\.xlsx$/);
   expect(unzipSync(new Uint8Array(readFileSync(await workbook.path())))['xl/media/control-kit-logo.png']).toBeDefined();
+  await page.route('**/control-kit-logo.png', route => route.fulfill({ status: 503 }));
+  await expect(page.getByRole('button', { name: 'Download Excel BOM' })).toBeEnabled();
+  const fallbackDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download Excel BOM' }).click();
+  const fallback = await fallbackDownload;
+  expect(fallback.suggestedFilename()).toMatch(/\.xlsx$/);
+  expect(unzipSync(new Uint8Array(readFileSync(await fallback.path())))['xl/media/control-kit-logo.png']).toBeUndefined();
+  expect(page.getByRole('button', { name: 'Download CSV instead' })).toHaveCount(0);
   await page.evaluate(() => {
     const original = URL.createObjectURL.bind(URL);
     let failOnce = true;

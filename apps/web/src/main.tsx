@@ -167,9 +167,10 @@ function App() {
     setExportingExcel(true);
     setExcelFailed(false);
     try {
-      const logoResponse = await fetch('/control-kit-logo.png');
-      if (!logoResponse.ok) throw new Error('Logo asset unavailable');
-      const workbook = buildExcelWorkbook(result, new Date(), new Uint8Array(await logoResponse.arrayBuffer()));
+      const logo = await fetch('/control-kit-logo.png', { signal: AbortSignal.timeout(3000) })
+        .then(async response => response.ok ? new Uint8Array(await response.arrayBuffer()) : undefined)
+        .catch(() => undefined);
+      const workbook = buildExcelWorkbook(result, new Date(), logo);
       saveFile(workbook.bytes, workbook.filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     } catch { setExcelFailed(true); }
     finally { setTimeout(() => { excelLock.current = false; setExportingExcel(false); }, 250); }
