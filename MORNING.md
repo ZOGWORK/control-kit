@@ -1,9 +1,13 @@
-# Control Kit — owner actions for the morning
+# Control Kit — owner action to finish live validation
 
-Development and tests continue against mocks and fixtures. Current owner-side setup status:
+The FTC Control Kit OAuth app is active with read-profile and read-document scopes. Its redirect URL matches the deployed Worker. The App Store entry and Assembly right-panel extension are installed, and the panel opens on the HORS 25-26 **MR. HORS** assembly. The panel receives the correct document, workspace, and element IDs.
 
-- **Done:** The Onshape OAuth application exists with the production OAuth and redirect URLs. The Worker lists `ONSHAPE_OAUTH_CLIENT_ID`, `ONSHAPE_OAUTH_CLIENT_SECRET`, and `SESSION_ENCRYPTION_KEY` as encrypted secrets. No values were read or stored in Git.
-- **In progress:** Create the private App Store entry and add the **Element right panel / Assembly** extension with the README's Action URL. Onshape currently displays an Application Development Agreement notice for store entry creation. Subscribe your account if Onshape requires it before the extension appears.
-- **Pending:** Open a real FTC assembly in Onshape, launch Control Kit, connect, reload the iframe, and confirm it remains connected. Share only the assembly document URL or IDs for the real validation gate. Do not share tokens or secrets.
+The live connection currently stops at Onshape's token endpoint with **HTTP 401 `unauthorized_client`**. No profile or assembly API call has run, and the Onshape Developer counter still reads **0 / 2,500**. Mock tests pass; the real assembly scan remains unverified.
 
-Live Onshape API requests spent by automated development and tests: **0**. Real validation will consume requests and will be counted explicitly.
+1. In Onshape, go to **My account → Developer → OAuth applications → FTC Control Kit → Keys and secret**. Regenerate the OAuth client secret. Onshape displays it only immediately after regeneration.
+2. In Cloudflare, go to **Workers & Pages → control-kit → Settings → Variables and Secrets**. Replace the encrypted `ONSHAPE_OAUTH_CLIENT_SECRET` with the newly generated **OAuth client secret**, then save. Confirm `ONSHAPE_OAUTH_CLIENT_ID` contains the **OAuth client identifier** from the same Onshape tab. These are OAuth credentials, separate from the older Onshape API key pair.
+3. Open the HORS assembly, select the FTC Control Kit right-panel icon, choose **Connect Onshape**, then return to the panel and choose **Check connection**. Never paste either secret into chat or Git.
+
+If the token endpoint still returns `unauthorized_client` after the replacement, preserve the Onshape app and Cloudflare settings and report the error; the next investigation should focus on the app's OAuth grant configuration. Once connected, the real HORS scan, STL ZIP, and Excel export can be validated and the API counter recorded.
+
+Rotate the Onshape API key previously shared in chat after the OAuth setup is working.
