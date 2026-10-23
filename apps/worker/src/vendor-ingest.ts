@@ -10,6 +10,7 @@ export const vendorSources: Record<VendorId, { origin: string; sitemap: string }
 };
 export type VendorSnapshot = { status: 'ok' | 'failed'; updatedAt: string | null; lastRunAt: string; recordCount: number; source: 'sitemap'; version: string | null; inProgress?: boolean; error?: string };
 type Cursor = { sitemaps: string[]; sitemapIndex: number; urls: string[]; urlIndex: number; records: Record<string, VendorRecord>; phase: 'fetch' | 'records' | 'indexes' | 'ready'; version?: string; publishIndex?: number; indexIndex?: number; readyAt?: number };
+type Retired = { version: string; keys: string[]; index: number; after: number }[];
 export type VendorRun = { vendor: VendorId; source: 'sitemap'; fetched: number; upserted: number; skipped: number; durationMs: number; complete: boolean };
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 const userAgent = 'Control Kit vendor catalog (+https://github.com/ZOGWORK/control-kit)';
@@ -82,6 +83,34 @@ const digest = async (text: string) => Array.from(new Uint8Array(await crypto.su
 const snapshotKey = (vendor: VendorId) => `vendor:${vendor}:__snapshot__`;
 const pointerKey = (vendor: VendorId) => `vendor:${vendor}:__lastgood__`;
 const cursorKey = (vendor: VendorId) => `vendor:${vendor}:__cursor__`;
+const retiredKey = (vendor: VendorId) => `vendor:${vendor}:__retired__`;
+const manifestKey = (vendor: VendorId, version: string) => `vendor:${vendor}:__manifest__:${version}`;
+const indexEntries = (vendor: VendorId, records: VendorRecord[]) => {
+  const indexes = new Map<string, string[]>();
+  for (const record of records) for (const token of new Set(record.normalizedName.split(' ').filter(token => token.length > 2))) {
+    let ids = indexes.get(token);
+    if (!ids) { ids = []; indexes.set(token, ids); }
+    ids.push(`${vendor}:${record.normalizedSku}`);
+  }
+  return [...indexes.entries()].sort(([a], [b]) => a.localeCompare(b));
+};
+async function cleanRetired(vendor: VendorId, kv: Kv, maxDeletes: number) {
+  const pending = JSON.parse(await kv.get(retiredKey(vendor)) ?? '[]') as Retired;
+  const active = await kv.get(pointerKey(vendor));
+  let left = maxDeletes;
+  for (const item of pending) {
+    if (item.after > Date.now() || item.version === active) continue;
+    while (item.index < item.keys.length && left > 0) {
+      await kv.delete(item.keys[item.index]);
+      item.index++;
+      left--;
+    }
+    if (item.index === item.keys.length) await kv.delete(manifestKey(vendor, item.version));
+  }
+  const remaining = pending.filter(item => item.index < item.keys.length || item.version === active || item.after > Date.now());
+  if (remaining.length) await kv.put(retiredKey(vendor), JSON.stringify(remaining));
+  else if (pending.length) await kv.delete(retiredKey(vendor));
+}
 
 /** A completed version is published by one pointer write after all records and indexes exist. */
 export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; minRequestMs?: number; publicationDelayMs?: number } = {}): Promise<VendorRun> {
@@ -89,7 +118,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
   const maxProducts = Math.max(1, Math.min(options.maxProducts ?? 40, 500));
   const minRequestMs = options.minRequestMs ?? 500;
   const previous = JSON.parse(await kv.get(snapshotKey(vendor)) ?? 'null') as VendorSnapshot | null;
-  let fetched = 0; let skipped = 0; let upserted = 0; let lastRequest = 0;
+  let fetched = 0; const skipped = 0; let upserted = 0; let lastRequest = 0;
   let cursor: Cursor | null = null;
   const fetchText = async (url: string, robots?: string) => {
     if (!allowedUrl(vendor, url)) throw Error('Sitemap linked outside the vendor host');
@@ -103,6 +132,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     return response.text();
   };
   try {
+    await cleanRetired(vendor, kv, 40);
     const robots = await fetchText(`${vendorSources[vendor].origin}/robots.txt`);
     cursor = JSON.parse(await kv.get(cursorKey(vendor)) ?? 'null') as Cursor | null;
     if (!cursor) {
@@ -114,17 +144,20 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     while (cursor.phase === 'fetch' && fetched < maxProducts) {
       if (cursor.urlIndex >= cursor.urls.length) {
         if (cursor.sitemapIndex >= cursor.sitemaps.length) break;
-        const xml = await fetchText(cursor.sitemaps[cursor.sitemapIndex++], robots);
-        cursor.urls = sitemapLocations(xml).filter(url => allowedUrl(vendor, url) && (!['andymark', 'pitsco'].includes(vendor) || new URL(url).pathname.startsWith('/products/')));
+        const xml = await fetchText(cursor.sitemaps[cursor.sitemapIndex], robots);
+        const urls = sitemapLocations(xml).filter(url => allowedUrl(vendor, url) && (!['andymark', 'pitsco'].includes(vendor) || new URL(url).pathname.startsWith('/products/')));
+        if (!urls.length) throw Error('Product sitemap contained no product URLs');
+        cursor.urls = urls;
+        cursor.sitemapIndex++;
         cursor.urlIndex = 0;
         continue;
       }
       const url = cursor.urls[cursor.urlIndex];
       const html = await fetchText(url, robots);
+      const records = parseProductPage(vendor, url, html, new Date().toISOString());
+      if (!records.length) throw Error('Product page contained no usable Product JSON-LD');
       cursor.urlIndex++;
       fetched++;
-      const records = parseProductPage(vendor, url, html, new Date().toISOString());
-      if (!records.length) skipped++;
       for (const record of records) cursor.records[record.normalizedSku] = record;
     }
     const records = Object.values(cursor.records).sort((a, b) => a.normalizedSku.localeCompare(b.normalizedSku));
@@ -146,9 +179,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
       if (cursor.publishIndex === records.length) cursor.phase = 'indexes';
     }
     if (cursor.phase === 'indexes') {
-      const indexes = new Map<string, string[]>();
-      for (const record of records) for (const token of new Set(record.normalizedName.split(' ').filter(token => token.length > 2))) indexes.set(token, [...(indexes.get(token) ?? []), `${vendor}:${record.normalizedSku}`]);
-      const entries = [...indexes.entries()].sort(([a], [b]) => a.localeCompare(b));
+      const entries = indexEntries(vendor, records);
       const end = Math.min(entries.length, (cursor.indexIndex ?? 0) + maxProducts);
       for (let index = cursor.indexIndex ?? 0; index < end; index++) {
         const [token, ids] = entries[index];
@@ -156,6 +187,11 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
         cursor.indexIndex = index + 1;
       }
       if (cursor.indexIndex === entries.length || entries.length === 0) {
+        const version = cursor.version!;
+        await kv.put(manifestKey(vendor, version), JSON.stringify([
+          ...records.map(record => `vendor-version:${vendor}:${version}:${record.normalizedSku}`),
+          ...entries.map(([token]) => `vendor-index-version:${vendor}:${version}:${token}`),
+        ]));
         cursor.phase = 'ready';
         cursor.readyAt = Date.now() + (options.publicationDelayMs ?? 65000);
         await kv.put(cursorKey(vendor), JSON.stringify(cursor));
@@ -163,6 +199,17 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     }
     if (cursor.phase === 'ready') {
       await sleep(Math.max(0, (cursor.readyAt ?? 0) - Date.now()));
+      const oldVersion = await kv.get(pointerKey(vendor));
+      if (oldVersion && oldVersion !== cursor.version) {
+        const keys = JSON.parse(await kv.get(manifestKey(vendor, oldVersion)) ?? '[]') as string[];
+        if (keys.length) {
+          const pending = JSON.parse(await kv.get(retiredKey(vendor)) ?? '[]') as Retired;
+          if (!pending.some(item => item.version === oldVersion)) {
+            pending.push({ version: oldVersion, keys, index: 0, after: Date.now() + 24 * 3600000 });
+            await kv.put(retiredKey(vendor), JSON.stringify(pending));
+          }
+        }
+      }
       await kv.put(pointerKey(vendor), cursor.version!);
       complete = true;
     }

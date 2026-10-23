@@ -58,6 +58,34 @@ describe('five captured vendor sitemap pipelines', () => {
     expect(await kv.get(`vendor:${vendor}:__lastgood__`)).toBe(version);
     expect((JSON.parse((await kv.get(`vendor:${vendor}:__snapshot__`))!) as VendorSnapshot).status).toBe('failed');
   });
+  it('retries a failed sitemap instead of publishing a partial catalog', async () => {
+    const vendor = 'rev';
+    const data = fixture(vendor);
+    const kv = new MemoryKv();
+    let failOnce = true;
+    const feed = mockFeed(vendor, data, url => {
+      if (url === data.capturedFrom.sitemapUrl && failOnce) { failOnce = false; return new Response('temporary failure', { status: 503 }); }
+      return null;
+    });
+    await expect(quickRun(vendor, kv, feed, { minRequestMs: 0 })).rejects.toThrow('503');
+    expect(await kv.get(`vendor:${vendor}:__lastgood__`)).toBeNull();
+    expect(JSON.parse((await kv.get(`vendor:${vendor}:__cursor__`))!).sitemapIndex).toBe(0);
+    expect((await quickRun(vendor, kv, feed, { minRequestMs: 0 })).complete).toBe(true);
+  });
+  it('retries an unreadable product page without dropping the last good product', async () => {
+    const vendor = 'rev';
+    const data = fixture(vendor);
+    const kv = new MemoryKv();
+    await quickRun(vendor, kv, mockFeed(vendor, data), { minRequestMs: 0 });
+    const oldVersion = await kv.get(`vendor:${vendor}:__lastgood__`);
+    let challenge = true;
+    const feed = mockFeed(vendor, data, url => url === data.capturedFrom.productUrl && challenge ? new Response('<html>challenge</html>') : null);
+    await expect(quickRun(vendor, kv, feed, { minRequestMs: 0 })).rejects.toThrow('no usable Product');
+    expect(await kv.get(`vendor:${vendor}:__lastgood__`)).toBe(oldVersion);
+    expect(JSON.parse((await kv.get(`vendor:${vendor}:__cursor__`))!).urlIndex).toBe(0);
+    challenge = false;
+    expect((await quickRun(vendor, kv, feed, { minRequestMs: 0 })).complete).toBe(true);
+  });
   it('resumes a partial page batch before publishing a snapshot', async () => {
     const vendor = 'rev';
     const data = fixture(vendor);
@@ -106,5 +134,25 @@ describe('five captured vendor sitemap pipelines', () => {
     const html = '<script type="application/ld+json">{"@type":"Product","name":"M3 Screws (Pack of 10)","sku":"REV-1000","offers":{"price":"5.00","priceCurrency":"USD","availability":"https://schema.org/InStock","inventoryLevel":{"value":3}}}</script>';
     expect(parseProductPage('rev', url, html, new Date().toISOString())[0]).toMatchObject({ packSize: 10, packSizeVerified: true, stock: 'low', stockQty: 3, priceUsd: 5 });
     expect(parseProductPage('rev', url, html.replace('"value":3', '"value":0'), new Date().toISOString())[0].stock).toBe('out');
+  });
+  it('retires previous version keys after the reader grace period', async () => {
+    const vendor = 'rev';
+    const data = fixture(vendor);
+    const kv = new MemoryKv();
+    const feed = mockFeed(vendor, data);
+    await quickRun(vendor, kv, feed, { minRequestMs: 0 });
+    const oldVersion = await kv.get(`vendor:${vendor}:__lastgood__`);
+    data.productHtml = data.productHtml.replace('"price":"11"', '"price":"12"');
+    await quickRun(vendor, kv, feed, { minRequestMs: 0 });
+    expect(await kv.get(`vendor:${vendor}:__lastgood__`)).not.toBe(oldVersion);
+    const retiredKey = `vendor:${vendor}:__retired__`;
+    const retired = JSON.parse((await kv.get(retiredKey))!);
+    expect(retired[0].version).toBe(oldVersion);
+    expect([...kv.values.keys()].some(key => key.startsWith(`vendor-version:${vendor}:${oldVersion}:`))).toBe(true);
+    retired[0].after = 0;
+    await kv.put(retiredKey, JSON.stringify(retired));
+    await quickRun(vendor, kv, feed, { minRequestMs: 0 });
+    expect([...kv.values.keys()].some(key => key.startsWith(`vendor-version:${vendor}:${oldVersion}:`))).toBe(false);
+    expect(await kv.get(retiredKey)).toBeNull();
   });
 });

@@ -99,12 +99,13 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
     if (!value) return null;
     try { return JSON.parse(value) as VendorSnapshot; } catch { return null; }
   }));
-  const timestamps = used.map((vendor, index) => snapshots[index]?.updatedAt ?? result.lines.find(line => line.vendor?.vendorId === vendor)?.vendor?.updatedAt ?? null).filter((value): value is string => Boolean(value));
+  const matchingSnapshot = (vendor: VendorId, index: number) => snapshots[index]?.version === versions.get(vendor) ? snapshots[index] : null;
+  const timestamps = used.map((vendor, index) => matchingSnapshot(vendor, index)?.updatedAt ?? result.lines.find(line => line.vendor?.vendorId === vendor)?.vendor?.updatedAt ?? null).filter((value): value is string => Boolean(value));
   result.vendorDataUpdatedAt = timestamps.length ? timestamps.sort()[0] : null;
   result.stats.staleVendorData = used.some((vendor, index) => {
-    const snapshot = snapshots[index];
+    const snapshot = matchingSnapshot(vendor, index);
     const updatedAt = snapshot?.updatedAt ?? result.lines.find(line => line.vendor?.vendorId === vendor)?.vendor?.updatedAt;
-    return snapshot?.status === 'failed' || !updatedAt || !Number.isFinite(Date.parse(updatedAt)) || Date.now() - Date.parse(updatedAt) > staleHours * 3600000;
+    return Boolean(snapshots[index] && !snapshot) || snapshot?.status === 'failed' || !updatedAt || !Number.isFinite(Date.parse(updatedAt)) || Date.now() - Date.parse(updatedAt) > staleHours * 3600000;
   });
   return recalculatePurchasing(result);
 }

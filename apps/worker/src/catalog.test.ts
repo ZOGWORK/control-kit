@@ -144,6 +144,12 @@ describe('catalog KV read path and purchasing', () => {
     await enrichScan(fresh, kv);
     expect(fresh.lines[0].vendor?.priceUsd).toBe(record.priceUsd);
     expect(fresh.stats.staleVendorData).toBe(false);
+    kv.values.set('vendor:rev:__snapshot__', JSON.stringify({ status: 'ok', updatedAt: new Date().toISOString(), version: 'version-two' }));
+    clearCatalogMemoryCache();
+    const mismatched = makeResult();
+    await enrichScan(mismatched, kv);
+    expect(mismatched.stats.staleVendorData).toBe(true);
+    expect(mismatched.vendorDataUpdatedAt).toBe(record.updatedAt);
     kv.values.set('vendor:rev:__snapshot__', JSON.stringify({ status: 'failed', updatedAt: new Date().toISOString(), version: 'version-one' }));
     clearCatalogMemoryCache();
     const failed = makeResult();
