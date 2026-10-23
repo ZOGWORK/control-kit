@@ -1,21 +1,22 @@
-name = "control-kit-worker"
+name = "control-kit"
 main = "apps/worker/src/index.ts"
 compatibility_date = "2026-10-22"
 
 [vars]
 ONSHAPE_API_BASE = "https://cad.onshape.com"
 ONSHAPE_OAUTH_BASE = "https://oauth.onshape.com"
-WEB_ORIGIN = "http://localhost:5173"
+WEB_ORIGIN = "https://control-kit.pages.dev"
+ONSHAPE_OAUTH_REDIRECT_URI = "https://control-kit.control-kit-worker.workers.dev/oauth/redirect"
 VENDOR_STALE_HOURS = "24"
 SCAN_TARGET_MS = "10000"
 
 [[kv_namespaces]]
 binding = "VENDOR_CATALOG"
-id = "REPLACE_WITH_VENDOR_CATALOG_KV_ID"
+id = "f04685dda4a64f8093960649885513d6"
 
 [[kv_namespaces]]
 binding = "APP_STATE"
-id = "REPLACE_WITH_APP_STATE_KV_ID"
+id = "c3ef1ad4a11a47f1899c2b63e7a0c3b6"
 
 [triggers]
 crons = ["0 */6 * * *", "12 */6 * * *", "24 */6 * * *", "36 */6 * * *", "48 */6 * * *"]

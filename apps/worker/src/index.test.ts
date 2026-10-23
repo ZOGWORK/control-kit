@@ -16,12 +16,13 @@ afterAll(() => vi.unstubAllGlobals());
 
 describe('Onshape OAuth and session against mock Onshape', () => {
   it('connects, preserves context, encrypts tokens, and survives reload', async () => {
-    const start = await call('/oauth/start?documentId=doc1&workspaceId=work1&elementId=elem1');
+    const start = await call('/oauth/start?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
     expect(start.status).toBe(302);
     const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
     const callback = await call(`/oauth/redirect?code=mock-code&state=${state}`);
     expect(callback.status).toBe(302);
     expect(callback.headers.get('location')).toContain('elementId=elem1');
+    expect(callback.headers.get('location')).toContain('workspaceOrVersionId=work1');
     const setCookie = callback.headers.get('set-cookie')!;
     expect(setCookie).toContain('SameSite=None');
     expect(setCookie).toContain('HttpOnly');

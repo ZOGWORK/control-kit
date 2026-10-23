@@ -4,19 +4,20 @@ import './style.css';
 
 type Session = { connected: boolean; user?: { id: string; name: string } };
 const context = new URLSearchParams(location.search);
-const required = ['documentId', 'workspaceId', 'elementId'];
+const required = ['documentId', 'workspaceOrVersion', 'workspaceOrVersionId', 'elementId'];
+const workerUrl = import.meta.env.VITE_WORKER_URL ?? '';
 
 function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
-    fetch('/api/session', { credentials: 'include' })
+    fetch(`${workerUrl}/api/session`, { credentials: 'include' })
       .then(async result => result.ok ? await result.json() as Session : { connected: false })
       .then(setSession)
       .catch(() => { setError('Could not check the Onshape connection. Reload this panel.'); setSession({ connected: false }); });
   }, []);
   if (required.some(key => !context.get(key))) return <main><h1>Control Kit</h1><p>Open an Assembly tab in Onshape, then launch Control Kit from its right panel.</p></main>;
-  const connect = `/oauth/start?${new URLSearchParams(required.map(key => [key, context.get(key)!]))}`;
+  const connect = `${workerUrl}/oauth/start?${new URLSearchParams(required.map(key => [key, context.get(key)!]))}`;
   return <main>
     <h1>Control Kit</h1>
     {error && <p role="alert">{error}</p>}

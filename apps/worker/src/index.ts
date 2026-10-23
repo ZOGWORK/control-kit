@@ -45,8 +45,9 @@ async function api(env: Env, path: string, accessToken: string) { return fetch(`
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/oauth/start') {
-    const context = Object.fromEntries(['documentId', 'workspaceId', 'elementId'].map(k => [k, url.searchParams.get(k)]));
-    if (Object.values(context).some(v => !v || !/^[\w-]{2,128}$/.test(v))) return reply({ error: 'Open Control Kit from an Assembly tab.' }, 400);
+    const context = Object.fromEntries(['documentId', 'workspaceOrVersion', 'workspaceOrVersionId', 'elementId'].map(k => [k, url.searchParams.get(k)]));
+    if (['documentId', 'workspaceOrVersionId', 'elementId'].some(k => !context[k] || !/^[\w-]{2,128}$/.test(context[k]!))) return reply({ error: 'Open Control Kit from an Assembly tab.' }, 400);
+    if (!['w', 'v', 'm'].includes(context.workspaceOrVersion!)) return reply({ error: 'Invalid Onshape workspace or version context.' }, 400);
     const state = random();
     await env.APP_STATE.put(`oauth-state:${state}`, JSON.stringify(context), { expirationTtl: 600 });
     const destination = new URL('/oauth/authorize', env.ONSHAPE_OAUTH_BASE);
@@ -103,6 +104,14 @@ async function route(request: Request, env: Env): Promise<Response> {
   return reply({ error: 'Not found' }, 404);
 }
 export default {
-  async fetch(request: Request, env: Env) { try { return await route(request, env); } catch (error) { console.error('Control Kit request failed', error); return reply({ error: 'Control Kit could not complete this request. Try again.' }, 502); } },
+  async fetch(request: Request, env: Env) {
+    const origin = request.headers.get('origin');
+    if (request.method === 'OPTIONS' && origin === env.WEB_ORIGIN) return new Response(null, { status: 204, headers: { 'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'content-type' } });
+    let result: Response;
+    try { result = await route(request, env); }
+    catch (error) { console.error('Control Kit request failed', error); result = reply({ error: 'Control Kit could not complete this request. Try again.' }, 502); }
+    if (origin === env.WEB_ORIGIN) { result.headers.set('access-control-allow-origin', origin); result.headers.set('access-control-allow-credentials', 'true'); result.headers.set('vary', 'Origin'); }
+    return result;
+  },
   scheduled() { /* Vendor ingestion begins in M4. */ },
 };
