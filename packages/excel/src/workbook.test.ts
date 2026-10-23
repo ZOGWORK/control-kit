@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { strFromU8, unzipSync } from 'fflate';
+import { readFileSync } from 'node:fs';
 import { aggregateAssembly, recalculatePurchasing, type VendorRecord } from '../../shared/src/index';
 import { buildBomCsv, buildExcelWorkbook } from './workbook';
 
@@ -31,15 +32,22 @@ describe('Excel export', () => {
     result.stats.printedLines = 1;
     result.vendorDataUpdatedAt = '2026-10-24T00:00:00Z';
     recalculatePurchasing(result);
-    const exportResult = buildExcelWorkbook(result, new Date('2026-10-23T12:00:00Z'));
+    const logo = new Uint8Array(readFileSync('apps/web/public/control-kit-logo.png'));
+    const exportResult = buildExcelWorkbook(result, new Date('2026-10-23T12:00:00Z'), logo);
     expect(exportResult.filename).toBe('FTC_Robot_BOM_2026-10-23.xlsx');
     const zip = unzipSync(exportResult.bytes);
     const workbook = strFromU8(zip['xl/workbook.xml']);
     expect([...workbook.matchAll(/<sheet name="([^"]+)"/g)].map(match => match[1])).toEqual(['BOM', '3D Printed Parts', 'Suppressed Parts', 'Missing Metadata']);
     const sheet = strFromU8(zip['xl/worksheets/sheet1.xml']);
     const styles = strFromU8(zip['xl/styles.xml']);
-    expect(styles).toContain('FF13294B');
+    expect(styles).toContain('FF09090B');
+    expect(styles).toContain('FFFFC700');
+    expect(styles).not.toContain('FF13294B');
     expect(styles).toContain('FF1F7A3A');
+    expect(zip['xl/media/control-kit-logo.png']).toEqual(logo);
+    expect(strFromU8(zip['xl/drawings/drawing1.xml'])).toContain('Control Kit logo');
+    expect(sheet).toContain('<drawing r:id="rId');
+    expect(sheet).toContain('<mergeCell ref="A1:B3"');
     expect(sheet).toContain('<pane ySplit="6"');
     expect(sheet).toContain('Vendor data as of: 2026-10-24T00:00:00Z');
     expect(sheet).toContain('<autoFilter ref="A6:M9"');

@@ -1,6 +1,6 @@
 # Control Kit
 
-Control Kit is an Onshape assembly BOM tool for FTC teams, alongside the separate Control Point and Control Scout products. This repository is a new project intended for `ZOGWORK/control-kit`.
+Control Kit is an Onshape assembly BOM tool for FTC teams, alongside the separate Control Point and Control Scout products. Its app and four-sheet Excel export use the same black-and-yellow brand palette, with a Control Kit logo embedded in the BOM sheet. This repository is the `ZOGWORK/control-kit` project.
 
 ## Fresh clone and build
 

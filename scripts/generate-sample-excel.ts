@@ -22,7 +22,8 @@ for (const line of result.lines) {
 classifyScan(result, { teamNumber: '12345' }, {});
 recalculatePurchasing(result);
 result.vendorDataUpdatedAt = '2026-10-23T00:00:00Z';
-const workbook = buildExcelWorkbook(result, new Date('2026-10-23T12:00:00Z'));
+const logo = new Uint8Array(await readFile(resolve(root, 'apps/web/public/control-kit-logo.png')));
+const workbook = buildExcelWorkbook(result, new Date('2026-10-23T12:00:00Z'), logo);
 const destination = resolve(root, 'samples', workbook.filename);
 await writeFile(destination, workbook.bytes);
 console.log(destination);

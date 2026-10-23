@@ -2,6 +2,9 @@ name = "control-kit"
 main = "apps/worker/src/index.ts"
 compatibility_date = "2026-10-22"
 
+[secrets]
+required = ["ONSHAPE_OAUTH_CLIENT_ID", "ONSHAPE_OAUTH_CLIENT_SECRET", "SESSION_ENCRYPTION_KEY"]
+
 [vars]
 ONSHAPE_API_BASE = "https://cad.onshape.com"
 ONSHAPE_API_VERSION = "v9"

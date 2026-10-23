@@ -2,7 +2,7 @@ import { strToU8, zipSync } from 'fflate';
 import { printCategory, type BomLine, type ScanResult, type VendorRecord } from '../../shared/src/index';
 
 type Cell = { col: number; type: 's' | 'n' | 'f'; value: string | number; style: number; cached?: number };
-type Sheet = { name: string; rows: Map<number, Cell[]>; widths: number[]; merges: string[]; links: { cell: string; url: string }[]; filter?: string; frozen?: number; landscape?: boolean };
+type Sheet = { name: string; rows: Map<number, Cell[]>; widths: number[]; merges: string[]; links: { cell: string; url: string }[]; filter?: string; frozen?: number; landscape?: boolean; drawing?: boolean };
 export type ExcelExport = { bytes: Uint8Array; filename: string };
 export type CsvExport = { bytes: Uint8Array; filename: string };
 const HEADERS = ['#', 'Part Name', 'Qty Needed', 'Packs to Order', 'Vendor', 'SKU / Part #', 'Pack Price', 'Line Total', 'Stock', 'Stock Qty', 'Type', 'Alternatives (in-stock)', 'Notes'];
@@ -22,7 +22,7 @@ function put(target: Sheet, row: number, column: number, value: string | number,
 }
 function renderSheet(target: Sheet) {
   const last = Math.max(1, ...target.rows.keys());
-  const rows = [...target.rows.entries()].sort(([a], [b]) => a - b).map(([number, cells]) => `<row r="${number}">${cells.sort((a, b) => a.col - b.col).map(value => {
+  const rows = [...target.rows.entries()].sort(([a], [b]) => a - b).map(([number, cells]) => `<row r="${number}"${target.drawing && number <= 3 ? ` ht="${number === 1 ? 38 : number === 2 ? 26 : 24}" customHeight="1"` : ''}>${cells.sort((a, b) => a.col - b.col).map(value => {
     const address = cellRef(value.col, number);
     if (value.type === 'f') return `<c r="${address}" s="${value.style}"><f>${esc(value.value)}</f>${value.cached === undefined ? '' : `<v>${value.cached}</v>`}</c>`;
     if (value.type === 'n') return `<c r="${address}" s="${value.style}"><v>${value.value}</v></c>`;
@@ -32,19 +32,20 @@ function renderSheet(target: Sheet) {
   const freeze = target.frozen ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${target.frozen}" topLeftCell="A${target.frozen + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` : '<sheetViews><sheetView workbookViewId="0"/></sheetViews>';
   const merges = target.merges.length ? `<mergeCells count="${target.merges.length}">${target.merges.map(range => `<mergeCell ref="${range}"/>`).join('')}</mergeCells>` : '';
   const links = target.links.length ? `<hyperlinks>${target.links.map((link, index) => `<hyperlink ref="${link.cell}" r:id="rId${index + 1}"/>`).join('')}</hyperlinks>` : '';
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${target.landscape ? '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>' : ''}<dimension ref="A1:${cellRef(target.widths.length, last)}"/>${freeze}<sheetFormatPr defaultRowHeight="16"/><cols>${widths}</cols><sheetData>${rows}</sheetData>${target.filter ? `<autoFilter ref="${target.filter}"/>` : ''}${merges}${links}<printOptions/><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>${target.landscape ? '<pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/>' : ''}</worksheet>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${target.landscape ? '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>' : ''}<dimension ref="A1:${cellRef(target.widths.length, last)}"/>${freeze}<sheetFormatPr defaultRowHeight="16"/><cols>${widths}</cols><sheetData>${rows}</sheetData>${target.filter ? `<autoFilter ref="${target.filter}"/>` : ''}${merges}${links}<printOptions/><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>${target.landscape ? '<pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/>' : ''}${target.drawing ? `<drawing r:id="rId${target.links.length + 1}"/>` : ''}</worksheet>`;
 }
 const fill = (hex: string) => `<fill><patternFill patternType="solid"><fgColor rgb="FF${hex}"/><bgColor indexed="64"/></patternFill></fill>`;
 const font = (size: number, color: string, bold = false, underline = false) => `<font>${bold ? '<b/>' : ''}${underline ? '<u/>' : ''}<sz val="${size}"/><name val="Calibri"/><color rgb="FF${color}"/></font>`;
 const xf = (fontId: number, fillId: number, currency = false, wrap = false) => `<xf numFmtId="${currency ? 164 : 0}" fontId="${fontId}" fillId="${fillId}" borderId="0" xfId="0" applyFont="1" applyFill="1"${currency ? ' applyNumberFormat="1"' : ''}${wrap ? ' applyAlignment="1"><alignment wrapText="1"/></xf>' : '/>'}`;
-// Style IDs: 0/1/2 body white/gray/lavender; 3/4/5 bold; 6 header; 7 title; 8 summary navy;
+// Style IDs: 0/1/2 body white/gray/soft yellow; 3/4/5 bold; 6 header; 7 title; 8 summary black;
 // 9–13 stock colors; 14–16 currency; 17–19 hyperlinks; 20–22 summary; 23 suppressed; 24 subheader.
-const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="$#,##0.00"/></numFmts><fonts count="7">${font(11, '202326')}${font(11, '202326', true)}${font(11, 'FFFFFF', true)}${font(16, 'FFFFFF', true)}${font(11, 'FFFFFF')}${font(11, '175CD3', false, true)}${font(11, '6B7280')}</fonts><fills count="11"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>${['FFFFFF', 'F2F4F7', '13294B', '1F7A3A', 'C0392B', 'F2B705', '6B7280', '6D28D9', 'F3EFFF'].map(fill).join('')}</fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="25">${[
-  xf(0, 2), xf(0, 3), xf(0, 10), xf(1, 2), xf(1, 3), xf(1, 10), xf(2, 4), xf(3, 4), xf(2, 4),
-  xf(4, 5), xf(4, 6), xf(0, 7), xf(4, 8), xf(4, 9), xf(0, 2, true), xf(0, 3, true), xf(0, 10, true),
-  xf(5, 2, false, true), xf(5, 3, false, true), xf(5, 10, false, true), xf(1, 2), xf(0, 2), xf(1, 2, true), xf(6, 3), xf(2, 4),
+const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="$#,##0.00"/></numFmts><fonts count="8">${font(11, '09090B')}${font(11, '09090B', true)}${font(11, 'FFC700', true)}${font(16, 'FFC700', true)}${font(11, 'F4F4F5')}${font(11, '725800', false, true)}${font(11, '71717A')}${font(11, 'FFC700', true)}</fonts><fills count="11"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>${['FFFFFF', 'F4F4F5', '09090B', '1F7A3A', 'C0392B', 'FFC700', '71717A', '26262C', 'FFF8D6'].map(fill).join('')}</fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="25">${[
+  xf(0, 2), xf(0, 3), xf(0, 10), xf(1, 2), xf(1, 3), xf(1, 10), xf(2, 4), xf(3, 4), xf(4, 4),
+  xf(4, 5), xf(4, 6), xf(0, 7), xf(4, 8), xf(7, 9), xf(0, 2, true), xf(0, 3, true), xf(0, 10, true),
+  xf(5, 2, false, true), xf(5, 3, false, true), xf(5, 10, false, true), xf(1, 2), xf(1, 10), xf(1, 10, true), xf(6, 3), xf(1, 7),
 ].join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
-function rels(target: Sheet) { return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${target.links.map((link, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${esc(link.url)}" TargetMode="External"/>`).join('')}</Relationships>`; }
+function rels(target: Sheet) { return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${target.links.map((link, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${esc(link.url)}" TargetMode="External"/>`).join('')}${target.drawing ? `<Relationship Id="rId${target.links.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>` : ''}</Relationships>`; }
+const LOGO_DRAWING = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>47625</xdr:rowOff></xdr:from><xdr:ext cx="952500" cy="952500"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="Control Kit logo" descr="Black and yellow Control Kit hexagon logo"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="952500" cy="952500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>`;
 
 const typeLabel = (line: BomLine) => line.classification === 'printed' ? '3D Printed' : line.classification === 'unknown' ? 'Unknown — verify' : 'Commercial';
 function stockLabel(line: BomLine): { value: string; style: number } {
@@ -67,16 +68,17 @@ function alternatives(line: BomLine): VendorRecord[] {
   return (line.alternatives ?? []).filter(item => item.vendorId === line.vendor?.vendorId && item.category.toLowerCase() === line.vendor?.category.toLowerCase()
     && item.stock === 'in' && item.priceUsd !== null).slice(0, 3);
 }
-function bom(result: ScanResult, now: Date): Sheet {
+function bom(result: ScanResult, now: Date, drawing = false): Sheet {
   const target = sheet('BOM', 13);
+  target.drawing = drawing;
   const documentUrl = `https://cad.onshape.com/documents/${encodeURIComponent(result.documentId)}`;
   for (const row of [1, 2, 3]) for (let c = 1; c <= 13; c++) put(target, row, c, '', row === 1 ? 7 : 8);
-  target.rows.get(1)![0].value = 'Control Kit — Bill of Materials';
-  target.rows.get(2)![0].value = `Assembly: ${result.assemblyName} · Open in Onshape`;
-  target.links.push({ cell: 'A2', url: documentUrl });
+  target.rows.get(1)![2].value = 'CONTROL KIT  /  BILL OF MATERIALS';
+  target.rows.get(2)![2].value = `Assembly: ${result.assemblyName} · Open in Onshape`;
+  target.links.push({ cell: 'C2', url: documentUrl });
   const vendorDates = result.lines.map(line => line.vendor?.updatedAt).filter((value): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value)));
-  target.rows.get(3)![0].value = `Generated: ${now.toLocaleString()} · Vendor data as of: ${result.vendorDataUpdatedAt ?? vendorDates.sort()[0] ?? 'Unknown'}${result.stats.staleVendorData ? ' — STALE' : ''}`;
-  target.merges.push('A1:M1', 'A2:M2', 'A3:M3', 'A5:M5');
+  target.rows.get(3)![2].value = `Generated: ${now.toLocaleString()} · Vendor data as of: ${result.vendorDataUpdatedAt ?? vendorDates.sort()[0] ?? 'Unknown'}${result.stats.staleVendorData ? ' — STALE' : ''}`;
+  target.merges.push('A1:B3', 'C1:M1', 'C2:M2', 'C3:M3', 'A5:M5');
   put(target, 4, 1, 'Unique parts', 20); put(target, 4, 2, result.stats.uniqueLines, 21);
   put(target, 4, 3, 'Total instances', 20); put(target, 4, 4, result.stats.totalInstances, 21);
   put(target, 4, 5, 'Estimated total', 20);
@@ -157,10 +159,10 @@ function simple(name: string, headings: string[], entries: Array<Array<{ value: 
 }
 
 const item = (value: string | number, link?: string) => ({ value, link });
-export function buildExcelWorkbook(result: ScanResult, now = new Date()): ExcelExport {
+export function buildExcelWorkbook(result: ScanResult, now = new Date(), logo?: Uint8Array): ExcelExport {
   const printed = result.lines.filter(line => line.classification === 'printed');
   const sheets = [
-    bom(result, now),
+    bom(result, now, Boolean(logo)),
     simple('3D Printed Parts', ['Part Name', 'Qty', 'Category (zip folder)', 'Classifier Score', 'Why Flagged', 'Print Files (Part Studio link)'],
       printed.map(line => [item(line.name), item(line.qty), item(printCategory(line.name)), item(line.classificationScore), item(line.classificationReasons.join('; ')), item(line.partStudioUrl, line.partStudioUrl)]), 'No 3D printed parts detected.'),
     simple('Suppressed Parts', ['Part Name', 'Qty', 'Instance Path(s)', 'Document'],
@@ -170,7 +172,7 @@ export function buildExcelWorkbook(result: ScanResult, now = new Date()): ExcelE
   ];
   const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets>${sheets.map((entry, index) => `<sheet name="${esc(entry.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join('')}</sheets><definedNames><definedName name="_xlnm.Print_Titles" localSheetId="0">'BOM'!$6:$6</definedName></definedNames><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`;
   const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')}<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${logo ? '<Default Extension="png" ContentType="image/png"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>' : ''}<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`;
   const files: Record<string, Uint8Array> = {
     '[Content_Types].xml': strToU8(contentTypes),
     '_rels/.rels': strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'),
@@ -180,8 +182,13 @@ export function buildExcelWorkbook(result: ScanResult, now = new Date()): ExcelE
   };
   sheets.forEach((entry, index) => {
     files[`xl/worksheets/sheet${index + 1}.xml`] = strToU8(renderSheet(entry));
-    if (entry.links.length) files[`xl/worksheets/_rels/sheet${index + 1}.xml.rels`] = strToU8(rels(entry));
+    if (entry.links.length || entry.drawing) files[`xl/worksheets/_rels/sheet${index + 1}.xml.rels`] = strToU8(rels(entry));
   });
+  if (logo) {
+    files['xl/media/control-kit-logo.png'] = logo;
+    files['xl/drawings/drawing1.xml'] = strToU8(LOGO_DRAWING);
+    files['xl/drawings/_rels/drawing1.xml.rels'] = strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/control-kit-logo.png"/></Relationships>');
+  }
   return { bytes: zipSync(files, { level: 6 }), filename: buildFilename(result.assemblyName, now).filename };
 }
 
