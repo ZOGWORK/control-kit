@@ -38,6 +38,8 @@ M7 scope follows the user's correction over §14 and §18: Control Point is only
 
 The Control Point payload changes the brief's ambiguous `unitPriceUsd` to `packPriceUsd` and adds `packsToOrder`, `lineTotalUsd`, and `matchStatus`. CAD `qty` stays individual units; a receiving system must never infer an order total from `qty × packPriceUsd`. `lineTotalUsd` remains null until pack size and match are verified. This interface will be mapped to Control Point's real schema only after that API is confirmed.
 
+M7 review hardening: CSV text fields escape formula-leading content from Onshape part names, while quantities and cached totals remain numeric. The Control Point idempotency hash includes assembly name, suppressed count, totals, canonical line data, and source revisions; only `generatedAt` is excluded so a repeated unchanged scan reuses the same key.
+
 ## Tuning, tests, and release
 
 Match normalization, thresholds, and alternative ranking are in `packages/shared/src/matching.ts`; exact SKU still forces Commercial absent manual override. Print scoring thresholds and mechanism folders are in `packages/shared/src/classifier.ts`. Vendor stale hours and cron schedule are in `wrangler.toml`; catalog crawl batch limits are in `apps/worker/src/vendor-ingest.ts`. Scan metadata concurrency/backoff is in `apps/worker/src/scan.ts`; STL export bounds are in `apps/worker/src/stl-zip.ts`. Change these with fixture tests and record any changed data shape here.

@@ -46,4 +46,14 @@ describe('Control Point contract scaffold', () => {
     const reversed = await buildControlPointPayload({ ...result, lines: [...result.lines].reverse() });
     expect(reversed.idempotencyKey).toBe(forward.idempotencyKey);
   });
+  it('uses a new key when assembly name or suppressed quantity changes', async () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'a', name: 'Screw', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'screw' },
+    ] } }, { documentId: 'doc', elementId: 'assembly', workspaceOrVersion: 'w', workspaceOrVersionId: 'work' }, 'Robot');
+    const original = await buildControlPointPayload(result);
+    const renamed = await buildControlPointPayload({ ...result, assemblyName: 'Robot Mk II' });
+    const suppressed = await buildControlPointPayload({ ...result, suppressed: [{ ...result.lines[0], suppressed: true }] });
+    expect(renamed.idempotencyKey).not.toBe(original.idempotencyKey);
+    expect(suppressed.idempotencyKey).not.toBe(original.idempotencyKey);
+  });
 });

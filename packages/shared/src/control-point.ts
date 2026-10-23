@@ -27,16 +27,17 @@ export async function buildControlPointPayload(result: ScanResult): Promise<Cont
     stock: line.vendor?.stock ?? 'unknown', type: line.classification,
     vendorUrl: line.vendor?.url ?? null, partStudioUrl: line.partStudioUrl,
   }));
-  const identity = JSON.stringify({ documentId: result.documentId, elementId: result.elementId,
+  const assembly = { name: result.assemblyName, documentId: result.documentId, elementId: result.elementId,
+    onshapeUrl: `https://cad.onshape.com/documents/${encodeURIComponent(result.documentId)}` };
+  const suppressedCount = result.suppressed.reduce((total, line) => total + line.qty, 0);
+  const totals = { uniqueLines: result.stats.uniqueLines, totalInstances: result.stats.totalInstances,
+    totalCostUsd: result.stats.totalCostUsd, outOfStockLines: result.stats.outOfStockLines };
+  const identity = JSON.stringify({ assembly, suppressedCount, totals,
     revisions: result.lines.map(line => [line.bomLineKey, line.sourceType, line.sourceId]).sort(([a], [b]) => String(a).localeCompare(String(b))),
     lines });
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
   const idempotencyKey = [...new Uint8Array(hash)].map(value => value.toString(16).padStart(2, '0')).join('');
-  return { idempotencyKey, source: 'control-kit',
-    assembly: { name: result.assemblyName, documentId: result.documentId, elementId: result.elementId,
-      onshapeUrl: `https://cad.onshape.com/documents/${encodeURIComponent(result.documentId)}` },
-    generatedAt: result.scannedAt, lines, suppressedCount: result.suppressed.reduce((total, line) => total + line.qty, 0),
-    totals: { uniqueLines: result.stats.uniqueLines, totalInstances: result.stats.totalInstances, totalCostUsd: result.stats.totalCostUsd, outOfStockLines: result.stats.outOfStockLines } };
+  return { idempotencyKey, source: 'control-kit', assembly, generatedAt: result.scannedAt, lines, suppressedCount, totals };
 }
 
 /** In-memory contract test adapter only. It never performs I/O or contacts Control Point. */

@@ -190,9 +190,17 @@ export function buildBomCsv(result: ScanResult, now = new Date()): CsvExport {
   const source = bom(result, now);
   const last = Math.max(6, ...source.rows.keys());
   const quote = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+  const safeText = (value: string | number) => {
+    const text = String(value);
+    let offset = 0;
+    while (offset < text.length && (text.charCodeAt(offset) <= 32 || text.charCodeAt(offset) === 127 || text[offset].trim() === '')) offset++;
+    const leader = text[offset];
+    return leader && '=+-@'.includes(leader) ? `'${text}` : text;
+  };
   const rows = Array.from({ length: last }, (_, index) => {
     const columns = Array<string>(13).fill('');
-    for (const cell of source.rows.get(index + 1) ?? []) columns[cell.col - 1] = quote(cell.type === 'f' ? cell.cached ?? '' : cell.value);
+    for (const cell of source.rows.get(index + 1) ?? []) columns[cell.col - 1] = cell.type === 'f'
+      ? cell.cached?.toString() ?? '' : cell.type === 'n' ? String(cell.value) : quote(safeText(cell.value));
     return columns.join(',');
   });
   const { filename } = buildFilename(result.assemblyName, now);

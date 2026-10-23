@@ -64,6 +64,14 @@ describe('Excel export', () => {
     expect(csv.filename).toBe('FTC_Robot_BOM_2026-10-23.csv');
     const csvText = new TextDecoder().decode(csv.bytes);
     expect(csvText).toContain('"Qty Needed","Packs to Order"');
-    expect(csvText).toContain('"17.98"');
+    expect(csvText).toContain('17.98');
+  });
+  it('writes Onshape part names as inert CSV text while retaining numeric charges', () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'bad', name: '=HYPERLINK("https://example.com","Open part")', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'bad' },
+    ] } }, { documentId: 'doc', workspaceOrVersion: 'w', workspaceOrVersionId: 'work', elementId: 'assembly' }, 'Robot');
+    const csv = new TextDecoder().decode(buildBomCsv(result).bytes);
+    expect(csv).toContain('"\'=HYPERLINK(""https://example.com"",""Open part"")"');
+    expect(csv).not.toContain(',"=HYPERLINK');
   });
 });
