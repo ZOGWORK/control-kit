@@ -1,5 +1,5 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
-import { scanAssembly } from './scan';
+import { scanAssembly, SessionExpiredError } from './scan';
 import type { AssemblyContext } from '@control-kit/shared';
 
 export interface Env { APP_STATE: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string }
@@ -113,8 +113,9 @@ async function route(request: Request, env: Env): Promise<Response> {
         current.data.tokens = await exchange(env, { grant_type: 'refresh_token', refresh_token: current.data.tokens.refresh_token });
         await save(env, current.id, current.data);
       })();
-      try { await refreshing; } catch { await env.APP_STATE.delete(`session:${current.id}`); throw new Error('Onshape session expired'); }
+      try { await refreshing; } catch { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
       response = await fetch(`${env.ONSHAPE_API_BASE}${path}`, { headers: { authorization: `Bearer ${current.data.tokens.access_token}` }, signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) });
+      if (response.status === 401) { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
       return response;
     };
     return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get);

@@ -4,7 +4,10 @@ export type ScanEvent =
   | { type: 'progress'; stage: string; current: number; total: number; instances: number }
   | { type: 'rate-limit'; retryInMs: number }
   | { type: 'result'; result: ScanResult }
+  | { type: 'session-expired' }
   | { type: 'error'; message: string };
+
+export class SessionExpiredError extends Error { constructor() { super('Onshape session expired'); } }
 
 type FetchOnshape = (path: string, signal: AbortSignal) => Promise<Response>;
 const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -20,9 +23,11 @@ export function assemblyPath(context: AssemblyContext, version: string) {
 }
 
 /** Onshape PartStudio/getPartStudioMassProperties, documented at https://onshape-public.github.io/docs/api-adv/partstudios/ */
-function massPath(line: BomLine, context: AssemblyContext, version: string) {
-  const source = `${context.workspaceOrVersion}/${encodeURIComponent(context.workspaceOrVersionId)}`;
-  return `/api/${version}/partstudios/d/${encodeURIComponent(line.documentId)}/${source}/e/${encodeURIComponent(line.elementId)}/massproperties`;
+export function massPath(line: BomLine, version: string) {
+  if (!line.sourceType || !line.sourceId) return null;
+  const source = `${line.sourceType}/${encodeURIComponent(line.sourceId)}`;
+  const query = line.configuration ? `?configuration=${encodeURIComponent(line.configuration)}` : '';
+  return `/api/${version}/partstudios/d/${encodeURIComponent(line.documentId)}/${source}/e/${encodeURIComponent(line.elementId)}/massproperties${query}`;
 }
 
 export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape): Response {
@@ -57,7 +62,7 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         const unique = new Map<string, BomLine[]>();
         for (const line of [...result.lines, ...result.suppressed]) {
           if (line.unresolvedSubassembly) { line.missingMetadataReason = 'Subassembly has no resolvable children'; continue; }
-          const key = `${line.documentId}:${line.elementId}`;
+          const key = `${line.documentId}:${line.elementId}:${line.sourceType}:${line.sourceId}:${line.configuration ?? ''}`;
           unique.set(key, [...(unique.get(key) ?? []), line]);
         }
         const entries = [...unique.values()];
@@ -67,7 +72,9 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         for (let offset = 0; offset < entries.length; offset += 6) {
           await Promise.all(entries.slice(offset, offset + 6).map(async lines => {
             try {
-              const response = await get(massPath(lines[0], context, version));
+              const path = massPath(lines[0], version);
+              if (!path) { for (const line of lines) line.missingMetadataReason = 'Source revision unavailable for linked document'; return; }
+              const response = await get(path);
               if (!response.ok) throw new Error(`metadata HTTP ${response.status}`);
               const value = await response.json() as { bodies?: Record<string, { mass?: number[]; material?: string }> };
               for (const line of lines) {
@@ -77,6 +84,7 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
                 if (!body) line.missingMetadataReason = 'Mass properties unavailable for this part';
               }
             } catch (error) {
+              if (error instanceof SessionExpiredError) throw error;
               if (request.signal.aborted) throw error;
               for (const line of lines) line.missingMetadataReason = 'Part metadata could not be read';
             } finally {
@@ -89,7 +97,10 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         emit({ type: 'progress', stage: 'Preparing results…', current: 1, total: 1, instances: count });
         emit({ type: 'result', result });
       } catch (error) {
-        if (!request.signal.aborted) { console.error('Scan failed', error); emit({ type: 'error', message: 'The scan stopped unexpectedly. Try again.' }); }
+        if (!request.signal.aborted) {
+          if (error instanceof SessionExpiredError) emit({ type: 'session-expired' });
+          else { console.error('Scan failed', error); emit({ type: 'error', message: 'The scan stopped unexpectedly. Try again.' }); }
+        }
       } finally { controller.close(); }
     },
   });

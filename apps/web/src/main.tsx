@@ -51,10 +51,12 @@ function App() {
             | { type: 'progress'; stage: string; current: number; total: number; instances: number }
             | { type: 'rate-limit'; retryInMs: number }
             | { type: 'result'; result: ScanResult }
+            | { type: 'session-expired' }
             | { type: 'error'; message: string };
           if (event.type === 'progress') setProgress({ ...event });
           if (event.type === 'rate-limit') setProgress(previous => previous && { ...previous, retry: `Onshape rate limit — retrying in ${Math.ceil(event.retryInMs / 1000)}s…` });
           if (event.type === 'result') { setResult(event.result); setActiveTab('bom'); }
+          if (event.type === 'session-expired') { setSession({ connected: false }); throw new Error('Your Onshape connection expired. Reconnect and retry.'); }
           if (event.type === 'error') throw new Error(event.message);
         }
       }

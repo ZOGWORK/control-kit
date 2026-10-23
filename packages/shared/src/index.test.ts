@@ -35,4 +35,22 @@ describe('assembly traversal and aggregation', () => {
     expect(result.lines[0].unresolvedSubassembly).toBe(true);
     expect(result.lines[0].qty).toBe(1);
   });
+  it('does not count a resolved but empty child assembly as a part', () => {
+    const definition: AssemblyDefinition = { rootAssembly: { instances: [{ id: 'empty', name: 'Empty Module', type: 'Assembly', documentId: 'doc1', elementId: 'module' }] }, subAssemblies: [{ documentId: 'doc1', elementId: 'module', instances: [] }] };
+    expect(aggregateAssembly(definition, context, 'Robot').stats.totalInstances).toBe(0);
+  });
+  it('keeps two revisions of a subassembly and linked part metadata sources separate', () => {
+    const module = (id: string, revision: string) => ({ id, name: `Module ${id}`, type: 'Assembly', documentId: 'linked', elementId: 'module', documentMicroversion: revision });
+    const leaf = (id: string, revision: string) => ({ id, name: `Part ${id}`, type: 'Part', documentId: 'linked', elementId: 'studio', partId: id, documentMicroversion: revision });
+    const definition: AssemblyDefinition = {
+      rootAssembly: { instances: [module('a', 'rev-a'), module('b', 'rev-b')] },
+      subAssemblies: [
+        { documentId: 'linked', elementId: 'module', documentMicroversion: 'rev-a', instances: [leaf('part-a', 'rev-a')] },
+        { documentId: 'linked', elementId: 'module', documentMicroversion: 'rev-b', instances: [leaf('part-b', 'rev-b')] },
+      ],
+    };
+    const result = aggregateAssembly(definition, context, 'Robot');
+    expect(result.lines.map(line => line.partId)).toEqual(['part-a', 'part-b']);
+    expect(result.lines.map(line => line.sourceId)).toEqual(['rev-a', 'rev-b']);
+  });
 });
