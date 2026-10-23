@@ -6,6 +6,20 @@ import { aggregateAssembly, type AssemblyDefinition } from '../packages/shared/s
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/assembly-simple.json', import.meta.url), 'utf8')) as AssemblyDefinition;
 const result = aggregateAssembly(fixture, { documentId: 'simple', workspaceOrVersion: 'w', workspaceOrVersionId: 'work1', elementId: 'elem1' }, 'Simple FTC Assembly');
 
+test('embedded connection opens outside the panel and can be rechecked', async ({ page }) => {
+  let connected = false;
+  await page.route('**/api/session', route => route.fulfill({ status: connected ? 200 : 401, contentType: 'application/json', body: JSON.stringify({ connected, ...(connected ? { user: { id: 'fixture', name: 'Test User' } } : {}) }) }));
+  await page.route('**/api/settings', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ teamNumber: null }) }));
+  await page.goto('/?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
+  const connect = page.getByRole('link', { name: 'Connect Onshape' });
+  await expect(connect).toHaveAttribute('target', '_blank');
+  await expect(connect).toHaveAttribute('rel', 'noopener noreferrer');
+  await expect(connect).toHaveAttribute('href', /\/oauth\/start\?.*documentId=simple/);
+  connected = true;
+  await page.getByRole('button', { name: 'Check connection' }).click();
+  await expect(page.getByRole('button', { name: 'Scan Assembly' })).toBeVisible();
+});
+
 test('mock-backed scan downloads the fixture BOM workbook', async ({ page }) => {
   await page.route('**/api/session', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ connected: true, user: { id: 'fixture', name: 'Test User' } }) }));
   await page.route('**/api/settings', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ teamNumber: null }) }));

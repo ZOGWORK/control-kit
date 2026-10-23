@@ -31,11 +31,19 @@ function App() {
   const [excelFailed, setExcelFailed] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
   const excelLock = useRef(false);
+  async function refreshSession() {
+    try {
+      const response = await fetch(`${workerUrl}/api/session`, { credentials: 'include' });
+      const next = response.ok ? await response.json() as Session : { connected: false };
+      setSession(next);
+      if (next.connected) setError('');
+    } catch {
+      setError('Could not check the Onshape connection. Try again.');
+      setSession({ connected: false });
+    }
+  }
   useEffect(() => {
-    fetch(`${workerUrl}/api/session`, { credentials: 'include' })
-      .then(async response => response.ok ? await response.json() as Session : { connected: false })
-      .then(setSession)
-      .catch(() => { setError('Could not check the Onshape connection. Reload this panel.'); setSession({ connected: false }); });
+    void refreshSession();
     return () => abort.current?.abort();
   }, []);
   useEffect(() => {
@@ -190,7 +198,7 @@ function App() {
     {error && <div className="alert" role="alert">{error}</div>}
     {!session && <p>Checking Onshape connection…</p>}
     {session?.setupPending && <p>Onshape connection setup is in progress. Return after the OAuth application is linked.</p>}
-    {session && !session.connected && !session.setupPending && <section className="card"><p>Connect Onshape to prepare an assembly bill of materials.</p><a className="button" href={connect}>Connect Onshape</a></section>}
+    {session && !session.connected && !session.setupPending && <section className="card"><p>Connect Onshape to prepare an assembly bill of materials.</p><a className="button" href={connect} target="_blank" rel="noopener noreferrer">Connect Onshape</a><p className="muted">Authorization opens in a new tab. After granting access, return here and check the connection.</p><button className="secondary" onClick={() => void refreshSession()}>Check connection</button></section>}
     {session?.connected && <>
       <section className="card"><div className="row"><div><h2>Settings</h2><p className="muted">Team number helps identify custom printed parts.</p></div><label>Team number <input aria-label="Team number" inputMode="numeric" value={teamInput} onChange={event => setTeamInput(event.target.value)} placeholder="Optional" /></label><button disabled={pendingSettings} onClick={saveSettings}>Save</button></div></section>
       <section className="card"><div className="row"><div><h2>{result?.assemblyName ?? `Assembly ${context.get('elementId')}`}</h2><p className="muted">Connected as {session.user?.name}</p></div><button onClick={scan} disabled={Boolean(progress)}>{result ? 'Scan Again' : 'Scan Assembly'}</button></div>
