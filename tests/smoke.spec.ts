@@ -22,6 +22,7 @@ test('embedded connection opens outside the panel and can be rechecked', async (
   await connect.click();
   const auth = await opened;
   await expect(auth).toHaveTitle('Mock Onshape authorization');
+  await expect(auth).toHaveURL(/\/oauth\/start\?.*documentId=simple.*elementId=elem1/);
   await expect(panel.getByRole('link', { name: 'Connect Onshape' })).toBeVisible();
   expect(page.url()).toMatch(/\/host$/);
   connected = true;
