@@ -28,12 +28,18 @@ describe('Excel export', () => {
     const workbook = strFromU8(zip['xl/workbook.xml']);
     expect([...workbook.matchAll(/<sheet name="([^"]+)"/g)].map(match => match[1])).toEqual(['BOM', '3D Printed Parts', 'Suppressed Parts', 'Missing Metadata']);
     const sheet = strFromU8(zip['xl/worksheets/sheet1.xml']);
+    const styles = strFromU8(zip['xl/styles.xml']);
+    expect(styles).toContain('FF13294B');
+    expect(styles).toContain('FF1F7A3A');
     expect(sheet).toContain('<pane ySplit="6"');
+    expect(sheet).toContain('<c r="A6" s="6"');
+    expect(sheet).toMatch(/<c r="I\d+" s="9" t="inlineStr"><is><t xml:space="preserve">In Stock<\/t><\/is><\/c>/);
     expect(sheet).toContain('<f>SUM(H7:H');
     expect(sheet).toMatch(/<c r="D\d+"[^>]*><v>2<\/v><\/c>/);
     expect(sheet).toMatch(/<c r="H\d+"[^>]*><f>D\d+\*G\d+<\/f><v>17\.98<\/v><\/c>/);
     expect((sheet.match(/<f>D\d+\*G\d+<\/f>/g) ?? [])).toHaveLength(1);
     expect(sheet).not.toContain('<mergeCell ref="E4:F4"');
+    expect(sheet).toContain('— 3D PRINTED PARTS —');
     expect(strFromU8(zip['xl/worksheets/sheet2.xml'])).toContain('Custom Printed Intake Guide');
   });
 });

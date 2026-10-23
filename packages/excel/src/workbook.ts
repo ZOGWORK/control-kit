@@ -131,7 +131,8 @@ function simple(name: string, headings: string[], entries: Array<Array<{ value: 
   const target = sheet(name, headings.length);
   headings.forEach((heading, index) => put(target, 1, index + 1, heading, 6));
   if (!entries.length) put(target, 2, 1, empty);
-  entries.forEach((entry, index) => entry.forEach((item, c) => put(target, index + 2, c + 1, item.value, item.link ? 17 : index % 2 ? 1 : 0, typeof item.value === 'number' ? 'n' : 's', item.link)));
+  entries.forEach((entry, index) => entry.forEach((item, c) => put(target, index + 2, c + 1, item.value,
+    name === 'Suppressed Parts' ? 23 : item.link ? 17 : index % 2 ? 1 : 0, typeof item.value === 'number' ? 'n' : 's', item.link)));
   target.frozen = 1;
   if (entries.length) target.filter = `A1:${cellRef(headings.length, entries.length + 1)}`;
   return target;
