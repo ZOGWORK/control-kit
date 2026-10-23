@@ -4,6 +4,7 @@ import { printCategory, type BomLine, type ScanResult, type VendorRecord } from 
 type Cell = { col: number; type: 's' | 'n' | 'f'; value: string | number; style: number; cached?: number };
 type Sheet = { name: string; rows: Map<number, Cell[]>; widths: number[]; merges: string[]; links: { cell: string; url: string }[]; filter?: string; frozen?: number; landscape?: boolean };
 export type ExcelExport = { bytes: Uint8Array; filename: string };
+export type CsvExport = { bytes: Uint8Array; filename: string };
 const HEADERS = ['#', 'Part Name', 'Qty Needed', 'Packs to Order', 'Vendor', 'SKU / Part #', 'Pack Price', 'Line Total', 'Stock', 'Stock Qty', 'Type', 'Alternatives (in-stock)', 'Notes'];
 const esc = (value: string | number) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 const col = (index: number) => { let out = ''; for (let n = index; n; n = Math.floor((n - 1) / 26)) out = String.fromCharCode(65 + (n - 1) % 26) + out; return out; };
@@ -181,7 +182,25 @@ export function buildExcelWorkbook(result: ScanResult, now = new Date()): ExcelE
     files[`xl/worksheets/sheet${index + 1}.xml`] = strToU8(renderSheet(entry));
     if (entry.links.length) files[`xl/worksheets/_rels/sheet${index + 1}.xml.rels`] = strToU8(rels(entry));
   });
+  return { bytes: zipSync(files, { level: 6 }), filename: buildFilename(result.assemblyName, now).filename };
+}
+
+/** Plain BOM fallback derived from the same sheet model as the XLSX export. */
+export function buildBomCsv(result: ScanResult, now = new Date()): CsvExport {
+  const source = bom(result, now);
+  const last = Math.max(6, ...source.rows.keys());
+  const quote = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+  const rows = Array.from({ length: last }, (_, index) => {
+    const columns = Array<string>(13).fill('');
+    for (const cell of source.rows.get(index + 1) ?? []) columns[cell.col - 1] = quote(cell.type === 'f' ? cell.cached ?? '' : cell.value);
+    return columns.join(',');
+  });
+  const { filename } = buildFilename(result.assemblyName, now);
+  return { bytes: strToU8(`\uFEFF${rows.join('\r\n')}\r\n`), filename: filename.replace(/\.xlsx$/, '.csv') };
+}
+
+function buildFilename(assemblyName: string, now: Date) {
   const date = now.toISOString().slice(0, 10);
-  const assembly = result.assemblyName.replace(/[^a-zA-Z0-9-_ ]/g, '').trim().replace(/ +/g, '_').slice(0, 80) || 'Assembly';
-  return { bytes: zipSync(files, { level: 6 }), filename: `${assembly}_BOM_${date}.xlsx` };
+  const assembly = assemblyName.replace(/[^a-zA-Z0-9-_ ]/g, '').trim().replace(/ +/g, '_').slice(0, 80) || 'Assembly';
+  return { filename: `${assembly}_BOM_${date}.xlsx` };
 }

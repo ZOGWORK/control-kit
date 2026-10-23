@@ -114,7 +114,12 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
       } catch (error) {
         if (!request.signal.aborted) {
           if (error instanceof SessionExpiredError) emit({ type: 'session-expired' });
-          else { console.error('Scan failed', error); emit({ type: 'error', message: 'The scan stopped unexpectedly. Try again.' }); }
+          else {
+            console.error('Scan failed', error);
+            emit({ type: 'error', message: error instanceof TypeError
+              ? 'Could not reach Onshape. Check your connection and retry.'
+              : 'The scan stopped unexpectedly. Try again.' });
+          }
         }
       } finally { controller.close(); }
     },

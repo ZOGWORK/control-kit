@@ -260,6 +260,30 @@ describe('M2 scan stream against mock Onshape', () => {
     expect(result.lines).toEqual([]);
     expect(result.stats.totalInstances).toBe(0);
   });
+  it.each([403, 404])('reports assembly HTTP %s as a fatal access error with no partial BOM', async status => {
+    const cookie = await connectedCookie();
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.includes('/assemblies/')) return Response.json({ error: 'unavailable' }, { status });
+      return mock.handle(request);
+    });
+    const response = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    expect(events.find(event => event.type === 'error')?.message).toContain('may need to be public');
+    expect(events.some(event => event.type === 'result')).toBe(false);
+  });
+  it('reports a network failure as a fatal scan error with retry guidance', async () => {
+    const cookie = await connectedCookie();
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.includes('/assemblies/')) throw new TypeError('fetch failed');
+      return mock.handle(request);
+    });
+    const response = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    expect(events.find(event => event.type === 'error')?.message).toContain('Check your connection and retry');
+    expect(events.some(event => event.type === 'result')).toBe(false);
+  });
   it('uses a linked part microversion and configuration for metadata', () => {
     const result = aggregateAssembly({ rootAssembly: { instances: [{ id: 'linked', name: 'Linked Gear', type: 'Part', documentId: 'other-doc', elementId: 'studio', partId: 'gear', documentMicroversion: 'revision-1', configuration: 'size=large' }] } }, { documentId: 'doc1', workspaceOrVersion: 'w', workspaceOrVersionId: 'work1', elementId: 'assembly' }, 'Robot');
     expect(massPath(result.lines[0], 'v9')).toBe('/api/v9/partstudios/d/other-doc/m/revision-1/e/studio/massproperties?configuration=size%3Dlarge');

@@ -1,1 +1,1 @@
-export { buildExcelWorkbook, type ExcelExport } from './workbook';
+export { buildExcelWorkbook, buildBomCsv, type ExcelExport, type CsvExport } from './workbook';
