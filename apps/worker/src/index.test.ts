@@ -45,17 +45,25 @@ describe('Onshape OAuth and session against mock Onshape', () => {
   });
   it('logs only a safe OAuth error code when the token endpoint rejects the client', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const start = await call('/oauth/start');
-    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
-    vi.stubGlobal('fetch', () => Response.json({ error: 'invalid_client', error_description: 'sensitive diagnostic details' }, { status: 401 }));
     try {
-      const callback = await call(`/oauth/redirect?code=mock-code&state=${state}`);
-      expect(callback.status).toBe(502);
-      expect(await callback.json()).toEqual({ error: 'Control Kit could not complete this request. Try again.' });
-      const message = log.mock.calls.map(args => args.map(String).join(' ')).join(' ');
-      expect(message).toContain('OAuth exchange failed 401 invalid_client');
-      expect(message).not.toContain('sensitive diagnostic details');
-      expect(message).not.toContain('mock-code');
+      for (const [body, expected] of [
+        [JSON.stringify({ error: 'invalid_client', error_description: 'sensitive diagnostic details' }), 'OAuth exchange failed 401 invalid_client'],
+        [JSON.stringify({ error: 'bad token value', error_description: 'sensitive diagnostic details' }), 'OAuth exchange failed 401'],
+        ['not json sensitive diagnostic details', 'OAuth exchange failed 401']
+      ]) {
+        log.mockClear();
+        const start = await call('/oauth/start');
+        const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+        vi.stubGlobal('fetch', () => new Response(body, { status: 401 }));
+        const callback = await call(`/oauth/redirect?code=mock-code&state=${state}`);
+        expect(callback.status).toBe(502);
+        expect(await callback.json()).toEqual({ error: 'Control Kit could not complete this request. Try again.' });
+        const message = log.mock.calls.map(args => args.map(String).join(' ')).join(' ');
+        expect(message).toContain(expected);
+        expect(message).not.toContain('sensitive diagnostic details');
+        expect(message).not.toContain('mock-code');
+        expect(message).not.toContain('bad token value');
+      }
     } finally {
       log.mockRestore();
     }
