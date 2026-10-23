@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { applyMatchDecision, classificationIdentity, classifyLine, classifyScan, type BomLine, type ClassificationOverride, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, type BomLine, type ClassificationOverride, type ScanResult, type UserSettings } from '@control-kit/shared';
 import './style.css';
 
 type Session = { connected: boolean; setupPending?: boolean; user?: { id: string; name: string } };
@@ -113,26 +113,20 @@ function App() {
     if (!result || pendingOverride) return;
     const before = result;
     const generation = scanGeneration.current;
+    const identity = classificationIdentity(line);
+    const previousChoice = before.lines.find(item => classificationIdentity(item) === identity)?.manualClassification ?? null;
     setPendingOverride(true);
-    setResult(previous => {
-      if (!previous) return previous;
-      const lines = previous.lines.map(item => item.bomLineKey === line.bomLineKey ? classifyLine({ ...item }, settings.teamNumber, classification) : item);
-      return classifyScan({ ...previous, lines, stats: { ...previous.stats } }, settings,
-        Object.fromEntries(lines.filter(item => item.manualClassification).map(item => [item.bomLineKey, item.manualClassification!])));
-    });
+    setResult(previous => previous && applyClassificationChoice(previous, identity, classification, settings));
     try {
       const response = await fetch(`${workerUrl}/api/classification/override`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ documentId: result.documentId, identity: classificationIdentity(line), classification }) });
+        body: JSON.stringify({ documentId: result.documentId, identity, classification }) });
       if (!response.ok) throw Error();
     } catch {
       if (scanGeneration.current === generation) setResult(current => {
         if (!current || current.scanId !== before.scanId) return current;
-        const oldLine = before.lines.find(item => item.bomLineKey === line.bomLineKey);
         const active = current.lines.find(item => item.bomLineKey === line.bomLineKey);
-        if (!oldLine || !active || active.manualClassification !== classification) return current;
-        const lines = current.lines.map(item => item.bomLineKey === line.bomLineKey ? oldLine : item);
-        return classifyScan({ ...current, lines, stats: { ...current.stats } }, settings,
-          Object.fromEntries(lines.filter(item => item.manualClassification).map(item => [item.bomLineKey, item.manualClassification!])));
+        if (!active || active.manualClassification !== classification) return current;
+        return applyClassificationChoice(current, identity, previousChoice, settings);
       });
       setError('Could not save the type override. Try again.');
     }

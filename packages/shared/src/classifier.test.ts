@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateAssembly, classificationForScore, classificationIdentity, classifyLine, classifyScan, type BomLine } from './index';
+import { aggregateAssembly, applyClassificationChoice, classificationForScore, classificationIdentity, classifyLine, classifyScan, type BomLine } from './index';
 
 function line(name: string): BomLine {
   const result = aggregateAssembly({ rootAssembly: { instances: [{ id: 'i', name, type: 'Part', documentId: 'doc', elementId: 'element', partId: 'part' }] } },
@@ -63,6 +63,22 @@ describe('deterministic print classification', () => {
     const edited = { ...original, sourceId: 'microversion-two', bomLineKey: `${original.bomLineKey}:new-revision` };
     expect(edited.bomLineKey).not.toBe(original.bomLineKey);
     expect(classificationIdentity(edited)).toBe(classificationIdentity(original));
+  });
+  it('updates and rolls back every revision row sharing a saved type identity', () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'rev1', name: 'Custom bracket', type: 'Part', documentId: 'doc', elementId: 'studio', partId: 'part', documentMicroversion: 'revision-one' },
+      { id: 'rev2', name: 'Custom bracket', type: 'Part', documentId: 'doc', elementId: 'studio', partId: 'part', documentMicroversion: 'revision-two' },
+      { id: 'other', name: 'Printed guide', type: 'Part', documentId: 'doc', elementId: 'other', partId: 'guide' },
+    ] } }, { documentId: 'doc', workspaceOrVersion: 'w', workspaceOrVersionId: 'work', elementId: 'assembly' }, 'Assembly');
+    const identity = classificationIdentity(result.lines[0]);
+    expect(result.lines[0].bomLineKey).not.toBe(result.lines[1].bomLineKey);
+    expect(classificationIdentity(result.lines[1])).toBe(identity);
+    const selected = applyClassificationChoice(result, identity, 'commercial', { teamNumber: null });
+    expect(selected.lines.slice(0, 2).map(line => line.manualClassification)).toEqual(['commercial', 'commercial']);
+    expect(selected.lines[2].manualClassification).toBeNull();
+    const rolledBack = applyClassificationChoice(selected, identity, null, { teamNumber: null });
+    expect(rolledBack.lines.slice(0, 2).map(line => line.manualClassification)).toEqual([null, null]);
+    expect(rolledBack.lines[2].classification).toBe(selected.lines[2].classification);
   });
   it('keeps suppressed metadata rows distinct from active copies', () => {
     const result = aggregateAssembly({ rootAssembly: { instances: [

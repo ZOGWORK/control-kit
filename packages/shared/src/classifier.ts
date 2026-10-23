@@ -41,3 +41,9 @@ export function classifyScan(result: ScanResult, settings: UserSettings, overrid
     : result.lines.find(line => line.bomLineKey === item.bomLineKey) ?? item);
   return result;
 }
+
+export function applyClassificationChoice(result: ScanResult, identity: string, choice: ClassificationOverride | null, settings: UserSettings): ScanResult {
+  const lines = result.lines.map(line => ({ ...line, manualClassification: classificationIdentity(line) === identity ? choice : line.manualClassification }));
+  return classifyScan({ ...result, lines, stats: { ...result.stats } }, settings,
+    Object.fromEntries(lines.filter(line => line.manualClassification).map(line => [line.bomLineKey, line.manualClassification!])));
+}
