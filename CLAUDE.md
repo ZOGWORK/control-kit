@@ -1,0 +1,13 @@
+# Control Kit engineering notes
+
+## Architecture
+
+`Onshape iframe → React/Vite Pages app → Cloudflare Worker → Onshape API`; Worker KV stores encrypted sessions and catalog snapshots. `packages/shared` holds domain logic and `packages/excel` will build exports. The browser never receives OAuth secrets or tokens.
+
+## Repository
+
+`apps/web` is the iframe UI. `apps/worker` owns OAuth, proxying, and scheduled ingestion. `fixtures`, `scripts`, and `samples` support later milestones. See README for setup and checks.
+
+## Milestones and deviations
+
+M0 is scaffold only. M1 adds OAuth and mock Onshape. Scanning, vendor ingestion, classification, STL, and Excel are subsequent milestones. The new repository is `ZOGWORK/control-kit`; no Control Point source is modified. No API endpoint or vendor feed has yet been verified live. The mock server is reused directly by tests because this sandbox blocks loopback connections. The Worker stores AES-GCM encrypted Onshape tokens under an opaque cookie ID in APP_STATE KV and uses one-use OAuth state. Real iframe behavior, endpoint paths, and scopes await portal verification. Do not use an API key for this App Store flow.
