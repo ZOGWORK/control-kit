@@ -16,11 +16,16 @@ describe('Excel export', () => {
     const screw = result.lines.find(line => line.name === 'M3 Screw')!;
     screw.vendor = vendor; screw.matchStatus = 'exact'; screw.classification = 'commercial';
     const bearing = result.lines.find(line => line.name === 'Bearing')!;
-    bearing.vendor = { ...vendor, sku: 'AM-2000', normalizedSku: '2000', name: 'Bearing', packSize: null, packSizeVerified: false };
+    bearing.vendor = { ...vendor, sku: 'AM-2000', normalizedSku: '2000', name: 'Bearing', packSize: null, packSizeVerified: false, stock: 'out' };
     bearing.matchStatus = 'confirmed'; bearing.classification = 'commercial';
+    bearing.alternatives = [
+      { ...vendor, sku: 'AM-2001', normalizedSku: '2001', name: 'Bearing Option A', category: 'hardware', url: 'https://www.andymark.com/products/bearing-a' },
+      { ...vendor, sku: 'AM-2002', normalizedSku: '2002', name: 'Bearing Option B', category: 'hardware', url: 'https://www.andymark.com/products/bearing-b' },
+    ];
     const printed = result.lines.find(line => line.name.includes('Printed'))!;
     printed.classification = 'printed';
     result.stats.printedLines = 1;
+    result.vendorDataUpdatedAt = '2026-10-24T00:00:00Z';
     recalculatePurchasing(result);
     const exportResult = buildExcelWorkbook(result, new Date('2026-10-23T12:00:00Z'));
     expect(exportResult.filename).toBe('FTC_Robot_BOM_2026-10-23.xlsx');
@@ -32,6 +37,8 @@ describe('Excel export', () => {
     expect(styles).toContain('FF13294B');
     expect(styles).toContain('FF1F7A3A');
     expect(sheet).toContain('<pane ySplit="6"');
+    expect(sheet).toContain('Vendor data as of: 2026-10-24T00:00:00Z');
+    expect(sheet).toContain('<autoFilter ref="A6:M8"');
     expect(sheet).toContain('<c r="A6" s="6"');
     expect(sheet).toMatch(/<c r="I\d+" s="9" t="inlineStr"><is><t xml:space="preserve">In Stock<\/t><\/is><\/c>/);
     expect(sheet).toContain('<f>SUM(H7:H');
@@ -40,6 +47,10 @@ describe('Excel export', () => {
     expect((sheet.match(/<f>D\d+\*G\d+<\/f>/g) ?? [])).toHaveLength(1);
     expect(sheet).not.toContain('<mergeCell ref="E4:F4"');
     expect(sheet).toContain('— 3D PRINTED PARTS —');
+    expect(sheet).toContain('— IN-STOCK ALTERNATIVES —');
+    const links = strFromU8(zip['xl/worksheets/_rels/sheet1.xml.rels']);
+    expect(links).toContain('https://www.andymark.com/products/bearing-a');
+    expect(links).toContain('https://www.andymark.com/products/bearing-b');
     expect(strFromU8(zip['xl/worksheets/sheet2.xml'])).toContain('Custom Printed Intake Guide');
   });
 });

@@ -74,7 +74,7 @@ function bom(result: ScanResult, now: Date): Sheet {
   target.rows.get(2)![0].value = `Assembly: ${result.assemblyName} · Open in Onshape`;
   target.links.push({ cell: 'A2', url: documentUrl });
   const vendorDates = result.lines.map(line => line.vendor?.updatedAt).filter((value): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value)));
-  target.rows.get(3)![0].value = `Generated: ${now.toLocaleString()} · Vendor data as of: ${vendorDates.sort()[0] ?? 'Unknown'}${result.stats.staleVendorData ? ' — STALE' : ''}`;
+  target.rows.get(3)![0].value = `Generated: ${now.toLocaleString()} · Vendor data as of: ${result.vendorDataUpdatedAt ?? vendorDates.sort()[0] ?? 'Unknown'}${result.stats.staleVendorData ? ' — STALE' : ''}`;
   target.merges.push('A1:M1', 'A2:M2', 'A3:M3', 'A5:M5');
   put(target, 4, 1, 'Unique parts', 20); put(target, 4, 2, result.stats.uniqueLines, 21);
   put(target, 4, 3, 'Total instances', 20); put(target, 4, 4, result.stats.totalInstances, 21);
@@ -86,6 +86,7 @@ function bom(result: ScanResult, now: Date): Sheet {
   const commercial = result.lines.filter(line => line.classification !== 'printed').sort((a, b) => (a.vendor?.vendorId ?? 'zz').localeCompare(b.vendor?.vendorId ?? 'zz') || a.name.localeCompare(b.name));
   const printed = result.lines.filter(line => line.classification === 'printed').sort((a, b) => a.name.localeCompare(b.name));
   let row = 7; let ordinal = 1; let total = 0;
+  const alternativeRows: Array<{ source: string; choice: VendorRecord }> = [];
   const write = (line: BomLine, isPrinted: boolean) => {
     const band = isPrinted ? row % 2 ? 2 : 0 : row % 2 ? 0 : 1;
     const bold = isPrinted ? row % 2 ? 5 : 3 : row % 2 ? 3 : 4;
@@ -109,10 +110,12 @@ function bom(result: ScanResult, now: Date): Sheet {
     put(target, row, 11, typeLabel(line), band);
     const choices = alternatives(line);
     if (choices.length) put(target, row, 12, choices.map(item => `${item.name} — $${item.priceUsd!.toFixed(2)}`).join('\n'), linkStyle, 's', choices[0].url);
+    for (const choice of choices) alternativeRows.push({ source: line.name, choice });
     put(target, row, 13, notes(line, result), band);
     row++;
   };
   commercial.forEach(line => write(line, false));
+  const commercialEnd = row - 1;
   if (printed.length) {
     row++;
     put(target, row, 1, '— 3D PRINTED PARTS —', 24);
@@ -121,8 +124,22 @@ function bom(result: ScanResult, now: Date): Sheet {
     row++;
     printed.forEach(line => write(line, true));
   }
-  put(target, 4, 6, `SUM(H7:H${Math.max(7, row - 1)})`, 22, 'f', undefined, Math.round(total * 100) / 100);
-  target.filter = `A6:M${Math.max(6, row - 1)}`;
+  const bomEnd = row - 1;
+  if (alternativeRows.length) {
+    row += 2;
+    put(target, row, 1, '— IN-STOCK ALTERNATIVES —', 24);
+    for (let c = 2; c <= 13; c++) put(target, row, c, '', 24);
+    target.merges.push(`A${row}:M${row}`);
+    for (const alternative of alternativeRows) {
+      row++;
+      put(target, row, 2, alternative.source, row % 2 ? 0 : 1);
+      put(target, row, 5, alternative.choice.vendorId, row % 2 ? 0 : 1);
+      put(target, row, 6, alternative.choice.sku, row % 2 ? 3 : 4);
+      put(target, row, 12, `${alternative.choice.name} — $${alternative.choice.priceUsd!.toFixed(2)}`, row % 2 ? 17 : 18, 's', alternative.choice.url);
+    }
+  }
+  put(target, 4, 6, `SUM(H7:H${Math.max(7, bomEnd)})`, 22, 'f', undefined, Math.round(total * 100) / 100);
+  target.filter = `A6:M${Math.max(6, commercialEnd)}`;
   target.frozen = 6;
   target.landscape = true;
   return target;
