@@ -64,12 +64,13 @@ export async function buildStlZip(result: ScanResult, apiVersion: string, fetchO
         // Onshape Translations/getTranslation: https://onshape-public.github.io/docs/api-adv/translation/
         const status = await fetchOnshape(`/api/${apiVersion}/translations/${encode(translationId)}`, { signal });
         if (!status.ok) throw Error(`STL translation status failed (HTTP ${status.status})`);
-        const value = await status.json() as { requestState?: string; resultExternalDataId?: string; failureReason?: string };
+        const value = await status.json() as { requestState?: string; resultExternalDataIds?: string[]; failureReason?: string };
         if (value.requestState === 'FAILED') throw Error(value.failureReason ?? 'Onshape translation failed');
         if (value.requestState === 'DONE') {
-          if (!value.resultExternalDataId) throw Error('STL translation output missing');
+          const externalDataId = value.resultExternalDataIds?.[0];
+          if (!externalDataId) throw Error('STL translation output missing');
           // Onshape Documents/downloadExternalData: https://onshape-public.github.io/docs/api-adv/documents/
-          const output = await fetchOnshape(`/api/${apiVersion}/documents/d/${encode(line.documentId)}/externaldata/${encode(value.resultExternalDataId)}`, { signal });
+          const output = await fetchOnshape(`/api/${apiVersion}/documents/d/${encode(line.documentId)}/externaldata/${encode(externalDataId)}`, { signal });
           if (!output.ok) throw Error(`STL download failed (HTTP ${output.status})`);
           const bytes = new Uint8Array(await output.arrayBuffer());
           if (!bytes.length) throw Error('STL download was empty');

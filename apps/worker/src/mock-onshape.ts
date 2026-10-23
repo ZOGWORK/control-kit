@@ -43,8 +43,9 @@ export function createMockOnshape() {
     }
     if (/^\/api\/v\d+\/parts\/d\/[^/]+\/[wvm]\/[^/]+\/e\/[^/]+\/partid\/[^/]+\/stl$/.test(url.pathname)) {
       apiRequests++;
-      return url.pathname.includes('/partid/intake-guide/') ? new Response('solid intake-guide\nendsolid intake-guide\n', { headers: { 'content-type': 'application/sla' } }) : json(404, { error: 'no_direct_stl' });
+      return url.pathname.includes('/partid/intake-guide/') ? Response.redirect('http://localhost:8788/api/v9/stl-download/intake-guide', 307) : json(404, { error: 'no_direct_stl' });
     }
+    if (url.pathname === '/api/v9/stl-download/intake-guide') { apiRequests++; return new Response('solid intake-guide\nendsolid intake-guide\n', { headers: { 'content-type': 'application/sla' } }); }
     if (/^\/api\/v\d+\/partstudios\/d\/[^/]+\/[wvm]\/[^/]+\/e\/[^/]+\/translations$/.test(url.pathname) && request.method === 'POST') {
       apiRequests++;
       return json(200, { id: 'mock-translation' });

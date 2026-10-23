@@ -39,7 +39,7 @@ describe('STL zip from fixture B', () => {
     const fetcher = async (path: string) => {
       if (path.includes('/stl?')) return new Response('unsupported', { status: 404 });
       if (path.endsWith('/translations') && path.includes('/partstudios/')) return Response.json({ id: 'translation-1' });
-      if (path.endsWith('/translations/translation-1')) return Response.json({ requestState: 'DONE', resultExternalDataId: 'file-1' });
+      if (path.endsWith('/translations/translation-1')) return Response.json({ requestState: 'DONE', resultExternalDataIds: ['file-1'] });
       if (path.endsWith('/externaldata/file-1')) return new Response(stl);
       return new Response('unexpected', { status: 500 });
     };

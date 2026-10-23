@@ -196,7 +196,17 @@ async function route(request: Request, env: Env): Promise<Response> {
     classifyScan(result, settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null }, overridesRaw ? JSON.parse(overridesRaw) as ClassificationOverrides : {});
     let refreshing: Promise<void> | undefined;
     const fetchStl = async (path: string, init: RequestInit) => {
-      const send = () => fetch(`${env.ONSHAPE_API_BASE}${path}`, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), authorization: `Bearer ${current.data.tokens.access_token}` } });
+      const send = async () => {
+        let target = new URL(path, env.ONSHAPE_API_BASE);
+        for (let hops = 0; hops <= 2; hops++) {
+          const response = await fetch(target, { ...init, redirect: 'manual', headers: { ...Object.fromEntries(new Headers(init.headers)), authorization: `Bearer ${current.data.tokens.access_token}` } });
+          if (init.method === 'POST' || ![307, 308].includes(response.status) || !response.headers.get('location')) return response;
+          const next = new URL(response.headers.get('location')!, target);
+          if (next.origin !== new URL(env.ONSHAPE_API_BASE).origin) return response;
+          target = next;
+        }
+        throw Error('Onshape STL redirect limit exceeded');
+      };
       for (let attempt = 0; attempt <= 4; attempt++) {
         let response = await send();
         if (response.status === 401) {
