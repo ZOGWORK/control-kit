@@ -20,6 +20,24 @@ beforeEach(() => vi.stubGlobal('fetch', (input: string | URL | Request, init?: R
 afterAll(() => vi.unstubAllGlobals());
 
 describe('Onshape OAuth and session against mock Onshape', () => {
+  it('removes accidental whitespace from configured OAuth credentials', async () => {
+    const config = { ...env, ONSHAPE_OAUTH_CLIENT_ID: ' test-id ', ONSHAPE_OAUTH_CLIENT_SECRET: ' test-secret ' };
+    const credentialMock = createMockOnshape();
+    const tokenCredentials: URLSearchParams[] = [];
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname === '/oauth/token') tokenCredentials.push(new URLSearchParams(await request.clone().text()));
+      return credentialMock.handle(request);
+    });
+    const start = await worker.fetch(new Request('http://localhost:8787/oauth/start?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1'), config);
+    const authorize = new URL(start.headers.get('location')!);
+    expect(authorize.searchParams.get('client_id')).toBe('test-id');
+    const state = authorize.searchParams.get('state');
+    const callback = await worker.fetch(new Request(`http://localhost:8787/oauth/redirect?code=mock-code&state=${state}`), config);
+    expect(callback.status).toBe(302);
+    expect(tokenCredentials[0]?.get('client_id')).toBe('test-id');
+    expect(tokenCredentials[0]?.get('client_secret')).toBe('test-secret');
+  });
   it('connects, preserves context, encrypts tokens, and survives reload', async () => {
     const start = await call('/oauth/start?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
     expect(start.status).toBe(302);

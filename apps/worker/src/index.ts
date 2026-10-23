@@ -45,7 +45,7 @@ async function getSession(request: Request, env: Env) {
   try { return { id, data: await decrypt(env, value) }; } catch { return null; }
 }
 async function save(env: Env, id: string, data: Session) { await env.APP_STATE.put(`session:${id}`, await encrypt(env, data), { expirationTtl: 2592000 }); }
-function authParams(env: Env, grant: Record<string, string>) { return new URLSearchParams({ client_id: env.ONSHAPE_OAUTH_CLIENT_ID, client_secret: env.ONSHAPE_OAUTH_CLIENT_SECRET, ...grant }); }
+function authParams(env: Env, grant: Record<string, string>) { return new URLSearchParams({ client_id: env.ONSHAPE_OAUTH_CLIENT_ID.trim(), client_secret: env.ONSHAPE_OAUTH_CLIENT_SECRET.trim(), ...grant }); }
 async function exchange(env: Env, grant: Record<string, string>): Promise<Tokens> {
   const response = await fetch(`${env.ONSHAPE_OAUTH_BASE}/oauth/token`, { method: 'POST', body: authParams(env, grant), signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw new Error(`OAuth exchange failed ${response.status}`);
@@ -72,7 +72,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const stateData: OAuthState = { ...(hasContext ? { context: context as Record<string, string> } : {}), ...(returnUri ? { redirectOnshapeUri: returnUri } : {}) };
     await env.APP_STATE.put(`oauth-state:${state}`, JSON.stringify(stateData), { expirationTtl: 600 });
     const destination = new URL('/oauth/authorize', env.ONSHAPE_OAUTH_BASE);
-    destination.search = new URLSearchParams({ response_type: 'code', client_id: env.ONSHAPE_OAUTH_CLIENT_ID, redirect_uri: env.ONSHAPE_OAUTH_REDIRECT_URI, state }).toString();
+    destination.search = new URLSearchParams({ response_type: 'code', client_id: env.ONSHAPE_OAUTH_CLIENT_ID.trim(), redirect_uri: env.ONSHAPE_OAUTH_REDIRECT_URI, state }).toString();
     return Response.redirect(destination, 302);
   }
   if (url.pathname === '/oauth/redirect') {
