@@ -2,6 +2,7 @@ export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: 
 export interface Env { APP_STATE: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string }
 type Tokens = { access_token: string; refresh_token: string };
 type Session = { tokens: Tokens; user: { id: string; name: string } };
+type OAuthState = { context?: Record<string, string>; redirectOnshapeUri?: string };
 const cookieName = 'controlkit_session';
 // SameSite=None is required because Onshape embeds Control Kit in a cross-site iframe.
 const cookieFlags = 'HttpOnly; Secure; SameSite=None; Path=/';
@@ -45,10 +46,20 @@ async function api(env: Env, path: string, accessToken: string) { return fetch(`
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/oauth/start') {
-    const context = Object.fromEntries(['documentId', 'workspaceId', 'elementId'].map(k => [k, url.searchParams.get(k)]));
-    if (Object.values(context).some(v => !v || !/^[\w-]{2,128}$/.test(v))) return reply({ error: 'Open Control Kit from an Assembly tab.' }, 400);
+    if (!env.ONSHAPE_OAUTH_CLIENT_ID || !env.ONSHAPE_OAUTH_CLIENT_SECRET) return reply({ error: 'Control Kit OAuth setup is pending.' }, 503);
+    const context = Object.fromEntries(['documentId', 'workspaceOrVersion', 'workspaceOrVersionId', 'elementId'].map(k => [k, url.searchParams.get(k)]));
+    const hasContext = Object.values(context).some(Boolean);
+    if (hasContext && ['documentId', 'workspaceOrVersionId', 'elementId'].some(k => !context[k] || !/^[\w-]{2,128}$/.test(context[k]!))) return reply({ error: 'Open Control Kit from an Assembly tab.' }, 400);
+    if (hasContext && !['w', 'v'].includes(context.workspaceOrVersion!)) return reply({ error: 'Invalid Onshape workspace or version context.' }, 400);
+    const returnUri = url.searchParams.get('redirectOnshapeUri');
+    if (returnUri) {
+      let parsed: URL;
+      try { parsed = new URL(returnUri); } catch { return reply({ error: 'Invalid Onshape return URL.' }, 400); }
+      if (parsed.protocol !== 'https:' || parsed.hostname !== 'cad.onshape.com' || parsed.username || parsed.password) return reply({ error: 'Invalid Onshape return URL.' }, 400);
+    }
     const state = random();
-    await env.APP_STATE.put(`oauth-state:${state}`, JSON.stringify(context), { expirationTtl: 600 });
+    const stateData: OAuthState = { ...(hasContext ? { context: context as Record<string, string> } : {}), ...(returnUri ? { redirectOnshapeUri: returnUri } : {}) };
+    await env.APP_STATE.put(`oauth-state:${state}`, JSON.stringify(stateData), { expirationTtl: 600 });
     const destination = new URL('/oauth/authorize', env.ONSHAPE_OAUTH_BASE);
     destination.search = new URLSearchParams({ response_type: 'code', client_id: env.ONSHAPE_OAUTH_CLIENT_ID, redirect_uri: env.ONSHAPE_OAUTH_REDIRECT_URI, state }).toString();
     return Response.redirect(destination, 302);
@@ -67,11 +78,13 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!user.id) return reply({ error: 'Onshape profile has no ID.' }, 502);
     const id = random();
     await save(env, id, { tokens, user });
-    const destination = new URL('/', env.WEB_ORIGIN);
-    for (const [k, v] of Object.entries(JSON.parse(stored) as Record<string, string>)) destination.searchParams.set(k, v);
+    const stateData = JSON.parse(stored) as OAuthState;
+    const destination = stateData.redirectOnshapeUri ? new URL(stateData.redirectOnshapeUri) : new URL('/', env.WEB_ORIGIN);
+    for (const [k, v] of Object.entries(stateData.context ?? {})) destination.searchParams.set(k, v);
     return new Response(null, { status: 302, headers: { location: destination.toString(), 'set-cookie': `${cookieName}=${id}; ${cookieFlags}` } });
   }
   if (url.pathname === '/api/session') {
+    if (!env.ONSHAPE_OAUTH_CLIENT_ID || !env.ONSHAPE_OAUTH_CLIENT_SECRET) return reply({ connected: false, setupPending: true });
     const current = await getSession(request, env);
     if (!current) return reply({ connected: false }, 401);
     await save(env, current.id, current.data);
@@ -103,6 +116,14 @@ async function route(request: Request, env: Env): Promise<Response> {
   return reply({ error: 'Not found' }, 404);
 }
 export default {
-  async fetch(request: Request, env: Env) { try { return await route(request, env); } catch (error) { console.error('Control Kit request failed', error); return reply({ error: 'Control Kit could not complete this request. Try again.' }, 502); } },
+  async fetch(request: Request, env: Env) {
+    const origin = request.headers.get('origin');
+    if (request.method === 'OPTIONS' && origin === env.WEB_ORIGIN) return new Response(null, { status: 204, headers: { 'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'content-type' } });
+    let result: Response;
+    try { result = await route(request, env); }
+    catch (error) { console.error('Control Kit request failed', error); result = reply({ error: 'Control Kit could not complete this request. Try again.' }, 502); }
+    if (origin === env.WEB_ORIGIN) { result.headers.set('access-control-allow-origin', origin); result.headers.set('access-control-allow-credentials', 'true'); result.headers.set('vary', 'Origin'); }
+    return result;
+  },
   scheduled() { /* Vendor ingestion begins in M4. */ },
 };
