@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from 'fflate';
-import type { BomLine, ScanResult } from '@control-kit/shared';
+import { printCategory, type BomLine, type ScanResult } from '@control-kit/shared';
 
 type FetchOnshape = (path: string, init: RequestInit) => Promise<Response>;
 type ZipOptions = { pollMs?: number; timeoutMs?: number; now?: Date };
@@ -11,16 +11,6 @@ const encode = encodeURIComponent;
 function source(line: BomLine) {
   if (!line.sourceType || !line.sourceId) return null;
   return `d/${encode(line.documentId)}/${line.sourceType}/${encode(line.sourceId)}/e/${encode(line.elementId)}`;
-}
-function category(name: string) {
-  if (/wheel|drive|swerve/i.test(name)) return 'drivetrain';
-  if (/intake|roller/i.test(name)) return 'intake';
-  if (/lift|slide|elevator/i.test(name)) return 'lift';
-  if (/shooter|launch/i.test(name)) return 'shooter';
-  if (/turret/i.test(name)) return 'turret';
-  if (/frame|channel|rail/i.test(name)) return 'chassis';
-  if (/electronic|sensor|circuit|wire/i.test(name)) return 'electronics';
-  return 'misc';
 }
 function filename(line: BomLine) {
   const clean = line.name.toLowerCase().replace(/[^a-z0-9-_ ]/g, '').trim().replace(/ +/g, '_').slice(0, 80).replace(/[_-]+$/, '') || 'part';
@@ -86,7 +76,7 @@ export async function buildStlZip(result: ScanResult, apiVersion: string, fetchO
       const line = printed[index++];
       try {
         const bytes = await exportLine(line);
-        const folder = category(line.name);
+        const folder = printCategory(line.name);
         let path = `${root}/${folder}/${filename(line)}`;
         for (let suffix = 2; files[path]; suffix++) path = `${root}/${folder}/${filename(line).replace(/\.stl$/, `_${suffix}.stl`)}`;
         files[path] = bytes;

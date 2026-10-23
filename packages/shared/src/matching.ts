@@ -83,6 +83,16 @@ export function findBestMatch(line: { name: string; partNumber?: string | null }
   return { vendor: best.vendor, confidence: best.score, status: classifyMatchScore(best.score), reasons: best.reasons };
 }
 
+export function rankVendorAlternatives(lineName: string, selected: VendorRecord | null, candidates: VendorRecord[]): VendorRecord[] {
+  if (!selected || !['out', 'low'].includes(selected.stock)) return [];
+  const distinct = new Map(candidates.filter(candidate => candidate.vendorId === selected.vendorId
+    && candidate.category.toLowerCase() === selected.category.toLowerCase()
+    && candidate.normalizedSku !== selected.normalizedSku && candidate.stock === 'in' && candidate.priceUsd !== null)
+    .map(candidate => [candidate.normalizedSku, candidate]));
+  return [...distinct.values()].sort((a, b) => candidateScore(lineName, b).score - candidateScore(lineName, a).score
+    || a.priceUsd! - b.priceUsd! || a.name.localeCompare(b.name)).slice(0, 3);
+}
+
 function preferStockThenPrice(a: VendorRecord, b: VendorRecord) {
   const availability = (record: VendorRecord) => record.stock === 'in' ? 2 : record.stock === 'low' ? 1 : 0;
   return availability(b) - availability(a) || (a.priceUsd ?? Infinity) - (b.priceUsd ?? Infinity) || a.name.localeCompare(b.name);

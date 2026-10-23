@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, type BomLine, type ClassificationOverride, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { buildExcelWorkbook } from '@control-kit/excel';
 import './style.css';
 
 type Session = { connected: boolean; setupPending?: boolean; user?: { id: string; name: string } };
@@ -149,6 +150,19 @@ function App() {
     finally { setDownloading(false); }
   }
 
+  function downloadExcel() {
+    if (!result) return;
+    try {
+      const workbook = buildExcelWorkbook(result);
+      const url = URL.createObjectURL(new Blob([new Uint8Array(workbook.bytes)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = workbook.filename;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch { setError('Excel export failed. Try again.'); }
+  }
+
   if (required.some(key => !context.get(key))) return <main><h1>Control Kit</h1><p>Open an Assembly tab in Onshape, then launch Control Kit from its right panel.</p></main>;
   const connect = `${workerUrl}/oauth/start?${new URLSearchParams(required.map(key => [key, context.get(key)!]))}`;
   const rows = (activeTab === 'bom' ? result?.lines : activeTab === 'suppressed' ? result?.suppressed : result?.missingMetadata) ?? [];
@@ -166,7 +180,7 @@ function App() {
       {progress && <section className="card" aria-live="polite"><div className="row"><strong>{progress.stage}</strong><button className="secondary" onClick={() => abort.current?.abort()}>Cancel</button></div>
         <progress value={progress.current} max={Math.max(progress.total, 1)} /><p>{progress.instances} instances found</p>{progress.retry && <p>{progress.retry}</p>}</section>}
       {result && !progress && <><section className="stats"><div><strong>{result.stats.uniqueLines}</strong><span>Unique lines</span></div><div><strong>{result.stats.totalInstances}</strong><span>Active instances</span></div><div><strong>{result.stats.totalCostUsd === null ? '—' : `$${result.stats.totalCostUsd.toFixed(2)}`}</strong><span>Known purchasing total</span></div><div><strong>{result.stats.printedLines}</strong><span>Printed lines</span></div><div><strong>{result.suppressed.reduce((n, line) => n + line.qty, 0)}</strong><span>Suppressed</span></div><div><strong>{result.missingMetadata.length}</strong><span>Missing metadata</span></div></section>
-        <div className="row"><button onClick={downloadPrints} disabled={downloading || !result.scanId || result.stats.printedLines === 0}>{downloading ? 'Preparing STL zip…' : 'Download printed parts STL zip'}</button><span className="muted">Includes printed lines and a README with source links and failures.</span></div>
+        <div className="row"><button onClick={downloadExcel}>Download Excel BOM</button><button onClick={downloadPrints} disabled={downloading || !result.scanId || result.stats.printedLines === 0}>{downloading ? 'Preparing STL zip…' : 'Download printed parts STL zip'}</button><span className="muted">STL zip includes printed lines and a README with source links and failures.</span></div>
         {printFailures.length > 0 && <div className="alert" role="status"><strong>STL export failed for some parts</strong><ul>{printFailures.map(item => <li key={`${item.name}:${item.reason}`}>{item.name}: {item.reason} <a href={item.url} target="_blank" rel="noreferrer">Open in Onshape</a></li>)}</ul><p>See README.txt in the zip for the full list.</p></div>}
         {result.vendorDataUpdatedAt && <p className="muted">Vendor data checked {new Date(result.vendorDataUpdatedAt).toLocaleString()}</p>}
         {result.stats.staleVendorData && <div className="alert" role="status">Some used vendor data is stale or its latest refresh failed. Check prices and stock before ordering.</div>}

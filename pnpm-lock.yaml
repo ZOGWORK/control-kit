@@ -32,6 +32,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@control-kit/excel':
+        specifier: workspace:*
+        version: link:../../packages/excel
       '@control-kit/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -71,7 +74,14 @@ importers:
         specifier: ^4.45.0
         version: 4.151.3(@cloudflare/workers-types@5.20261023.1)(@types/node@24.19.2)
 
-  packages/excel: {}
+  packages/excel:
+    dependencies:
+      '@control-kit/shared':
+        specifier: workspace:*
+        version: link:../shared
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
 
   packages/shared: {}
 
