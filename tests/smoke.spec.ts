@@ -10,14 +10,23 @@ test('embedded connection opens outside the panel and can be rechecked', async (
   let connected = false;
   await page.route('**/api/session', route => route.fulfill({ status: connected ? 200 : 401, contentType: 'application/json', body: JSON.stringify({ connected, ...(connected ? { user: { id: 'fixture', name: 'Test User' } } : {}) }) }));
   await page.route('**/api/settings', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ teamNumber: null }) }));
-  await page.goto('/?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
-  const connect = page.getByRole('link', { name: 'Connect Onshape' });
+  await page.context().route('**/oauth/start?**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>Mock Onshape authorization</title>' }));
+  await page.route('**/host', route => route.fulfill({ contentType: 'text/html', body: '<iframe title="Onshape right panel" src="/?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1"></iframe>' }));
+  await page.goto('/host');
+  const panel = page.frameLocator('iframe[title="Onshape right panel"]');
+  const connect = panel.getByRole('link', { name: 'Connect Onshape' });
   await expect(connect).toHaveAttribute('target', '_blank');
   await expect(connect).toHaveAttribute('rel', 'noopener noreferrer');
   await expect(connect).toHaveAttribute('href', /\/oauth\/start\?.*documentId=simple/);
+  const opened = page.context().waitForEvent('page');
+  await connect.click();
+  const auth = await opened;
+  await expect(auth).toHaveTitle('Mock Onshape authorization');
+  await expect(panel.getByRole('link', { name: 'Connect Onshape' })).toBeVisible();
+  expect(page.url()).toMatch(/\/host$/);
   connected = true;
-  await page.getByRole('button', { name: 'Check connection' }).click();
-  await expect(page.getByRole('button', { name: 'Scan Assembly' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Check connection' }).click();
+  await expect(panel.getByRole('button', { name: 'Scan Assembly' })).toBeVisible();
 });
 
 test('mock-backed scan downloads the fixture BOM workbook', async ({ page }) => {
