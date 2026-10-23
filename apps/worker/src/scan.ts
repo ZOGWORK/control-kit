@@ -1,4 +1,4 @@
-import { aggregateAssembly, type AssemblyContext, type AssemblyDefinition, type BomLine, type MatchDecision, type ScanResult } from '@control-kit/shared';
+import { aggregateAssembly, classifyScan, type AssemblyContext, type AssemblyDefinition, type BomLine, type ClassificationOverride, type ClassificationOverrides, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { enrichScan } from './catalog';
 import type { Kv } from './index';
 
@@ -32,7 +32,16 @@ export function massPath(line: BomLine, version: string) {
   return `/api/${version}/partstudios/d/${encodeURIComponent(line.documentId)}/${source}/e/${encodeURIComponent(line.elementId)}/massproperties${query}`;
 }
 
-export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 24): Response {
+export async function loadClassificationOverrides(lines: BomLine[], getOverride: (line: BomLine, signal?: AbortSignal) => Promise<ClassificationOverride | null>, signal?: AbortSignal): Promise<ClassificationOverrides> {
+  const overrides: ClassificationOverrides = {};
+  for (let offset = 0; offset < lines.length; offset += 20) {
+    const choices = await Promise.all(lines.slice(offset, offset + 20).map(line => getOverride(line, signal)));
+    choices.forEach((choice, index) => { if (choice) overrides[lines[offset + index].bomLineKey] = choice; });
+  }
+  return overrides;
+}
+
+export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 24, settings: UserSettings = { teamNumber: null }, getOverride: (line: BomLine, signal?: AbortSignal) => Promise<ClassificationOverride | null> = async () => null, onResult?: (result: ScanResult) => Promise<void>): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -98,7 +107,9 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         result.missingMetadata = [...result.lines, ...result.suppressed].filter(line => line.missingMetadataReason !== null);
         emit({ type: 'progress', stage: 'Matching vendors…', current: 0, total: result.lines.length, instances: count });
         await enrichScan(result, catalog, getDecision, request.signal, staleHours);
+        classifyScan(result, settings, await loadClassificationOverrides(result.lines, getOverride, request.signal));
         emit({ type: 'progress', stage: 'Matching vendors…', current: result.lines.length, total: result.lines.length, instances: count });
+        if (onResult) await onResult(result);
         emit({ type: 'result', result });
       } catch (error) {
         if (!request.signal.aborted) {
