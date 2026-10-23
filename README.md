@@ -70,7 +70,7 @@ V1 contains a `ControlPointAdapter` contract, a deterministic BOM payload builde
 
 ## Deploy and verify
 
-The production Cloudflare Pages project, Worker, and two KV namespaces already exist. The namespace IDs and five staggered crons are in `wrangler.toml`. In a new account, create equivalent Pages, Worker, and KV resources first and replace the namespace IDs. Put `SESSION_ENCRYPTION_KEY`, `ONSHAPE_OAUTH_CLIENT_ID`, and `ONSHAPE_OAUTH_CLIENT_SECRET` in the Worker as secrets, not in `wrangler.toml`, Pages variables, or Git. The owner has not yet created the Onshape OAuth app, so production currently reports `setupPending`.
+The production Cloudflare Pages project, Worker, and two KV namespaces already exist. The namespace IDs and five staggered crons are in `wrangler.toml`. In a new account, create equivalent Pages, Worker, and KV resources first and replace the namespace IDs. Put `SESSION_ENCRYPTION_KEY`, `ONSHAPE_OAUTH_CLIENT_ID`, and `ONSHAPE_OAUTH_CLIENT_SECRET` in the Worker as secrets, not in `wrangler.toml`, Pages variables, or Git. The owner created the OAuth app and installed all three encrypted Worker secrets on 2026-10-23; production now returns `{"connected":false}` to an unauthenticated `/api/session` request rather than `setupPending`.
 
 After `pnpm install --frozen-lockfile` and the checks above, deploy from the repository root:
 
@@ -86,7 +86,7 @@ On free Onshape plans, documents must be public for some API operations and rate
 
 ## Onshape App Store listing checklist
 
-- Create the OAuth application with the exact redirect and OAuth URLs below; select read-profile and read-document permissions.
+- OAuth application and encrypted Worker secrets: complete. The exact redirect and OAuth URLs remain below for reference.
 - Add an **Element right panel** extension for **Assembly** using the iframe Action URL below. Create the private store entry and subscribe for an in-document test.
 - Verify connect, iframe reload, a real FTC assembly scan, Excel export, and STL zip after the owner supplies a validation document. Check actual API permissions before requesting any additional scope.
 - Include a privacy note: the Worker stores encrypted Onshape tokens server-side under an opaque session cookie, caches a completed scan for one hour for STL export, and uses catalog data for vendor enrichment. V1 sends no data to Control Point.
