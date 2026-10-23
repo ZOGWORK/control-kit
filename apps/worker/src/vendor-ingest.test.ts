@@ -155,4 +155,31 @@ describe('five captured vendor sitemap pipelines', () => {
     expect([...kv.values.keys()].some(key => key.startsWith(`vendor-version:${vendor}:${oldVersion}:`))).toBe(false);
     expect(await kv.get(retiredKey)).toBeNull();
   });
+  it('cancels retirement when a previous catalog version returns', async () => {
+    const vendor = 'rev';
+    const data = fixture(vendor);
+    const original = data.productHtml;
+    const kv = new MemoryKv();
+    const feed = mockFeed(vendor, data);
+    await quickRun(vendor, kv, feed, { minRequestMs: 0 });
+    const firstVersion = await kv.get(`vendor:${vendor}:__lastgood__`);
+    data.productHtml = original.replace('"price":"11"', '"price":"12"');
+    await quickRun(vendor, kv, feed, { minRequestMs: 0 });
+    const secondVersion = await kv.get(`vendor:${vendor}:__lastgood__`);
+    expect(secondVersion).not.toBe(firstVersion);
+    const retiredKey = `vendor:${vendor}:__retired__`;
+    const retired = JSON.parse((await kv.get(retiredKey))!);
+    retired[0].after = 0;
+    await kv.put(retiredKey, JSON.stringify(retired));
+    data.productHtml = original;
+    let run = await quickRun(vendor, kv, feed, { maxProducts: 1, minRequestMs: 0 });
+    for (let attempt = 0; attempt < 20 && !run.complete; attempt++) {
+      run = await quickRun(vendor, kv, feed, { maxProducts: 1, minRequestMs: 0 });
+      expect((JSON.parse(await kv.get(retiredKey) ?? '[]') as { version: string }[]).some(item => item.version === firstVersion)).toBe(false);
+    }
+    expect(run.complete).toBe(true);
+    expect(await kv.get(`vendor:${vendor}:__lastgood__`)).toBe(firstVersion);
+    expect([...kv.values.keys()].some(key => key.startsWith(`vendor-version:${vendor}:${firstVersion}:`))).toBe(true);
+    expect(JSON.parse((await kv.get(retiredKey))!)[0].version).toBe(secondVersion);
+  });
 });

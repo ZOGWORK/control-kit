@@ -94,12 +94,12 @@ const indexEntries = (vendor: VendorId, records: VendorRecord[]) => {
   }
   return [...indexes.entries()].sort(([a], [b]) => a.localeCompare(b));
 };
-async function cleanRetired(vendor: VendorId, kv: Kv, maxDeletes: number) {
+async function cleanRetired(vendor: VendorId, kv: Kv, maxDeletes: number, rebuildingVersion?: string) {
   const pending = JSON.parse(await kv.get(retiredKey(vendor)) ?? '[]') as Retired;
   const active = await kv.get(pointerKey(vendor));
   let left = maxDeletes;
   for (const item of pending) {
-    if (item.after > Date.now() || item.version === active) continue;
+    if (item.after > Date.now() || item.version === active || item.version === rebuildingVersion) continue;
     while (item.index < item.keys.length && left > 0) {
       await kv.delete(item.keys[item.index]);
       item.index++;
@@ -107,9 +107,16 @@ async function cleanRetired(vendor: VendorId, kv: Kv, maxDeletes: number) {
     }
     if (item.index === item.keys.length) await kv.delete(manifestKey(vendor, item.version));
   }
-  const remaining = pending.filter(item => item.index < item.keys.length || item.version === active || item.after > Date.now());
+  const remaining = pending.filter(item => item.index < item.keys.length || item.version === active || item.version === rebuildingVersion || item.after > Date.now());
   if (remaining.length) await kv.put(retiredKey(vendor), JSON.stringify(remaining));
   else if (pending.length) await kv.delete(retiredKey(vendor));
+}
+async function unretire(vendor: VendorId, kv: Kv, version: string) {
+  const pending = JSON.parse(await kv.get(retiredKey(vendor)) ?? '[]') as Retired;
+  if (!pending.some(item => item.version === version)) return;
+  const remaining = pending.filter(item => item.version !== version);
+  if (remaining.length) await kv.put(retiredKey(vendor), JSON.stringify(remaining));
+  else await kv.delete(retiredKey(vendor));
 }
 
 /** A completed version is published by one pointer write after all records and indexes exist. */
@@ -132,9 +139,10 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     return response.text();
   };
   try {
-    await cleanRetired(vendor, kv, 40);
-    const robots = await fetchText(`${vendorSources[vendor].origin}/robots.txt`);
     cursor = JSON.parse(await kv.get(cursorKey(vendor)) ?? 'null') as Cursor | null;
+    await cleanRetired(vendor, kv, 40, cursor?.version);
+    if (cursor?.version) await unretire(vendor, kv, cursor.version);
+    const robots = await fetchText(`${vendorSources[vendor].origin}/robots.txt`);
     if (!cursor) {
       const root = await fetchText(vendorSources[vendor].sitemap, robots);
       const sitemaps = sitemapLocations(root).filter(url => /(?:type=products|sitemap_products)/i.test(url) && allowedUrl(vendor, url));
@@ -164,6 +172,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     if (cursor.phase === 'fetch' && cursor.sitemapIndex >= cursor.sitemaps.length && cursor.urlIndex >= cursor.urls.length) {
       if (!records.length) throw Error('Product sitemap contained no usable records');
       cursor.version = await digest(JSON.stringify(records.map(record => ({ ...record, updatedAt: undefined }))));
+      await unretire(vendor, kv, cursor.version);
       cursor.phase = 'records';
     }
     let complete = false;
