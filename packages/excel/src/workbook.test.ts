@@ -11,6 +11,7 @@ describe('Excel export', () => {
   it('creates four worksheets and charges verified packs, leaving unverified totals blank', () => {
     const instances = Array.from({ length: 12 }, (_, index) => ({ id: `s${index}`, name: `M3 Screw <${index + 1}>`, type: 'Part', documentId: 'doc', elementId: 'screws', partId: 'screw' }));
     instances.push({ id: 'bearing', name: 'Bearing', type: 'Part', documentId: 'doc', elementId: 'bearings', partId: 'bearing' });
+    instances.push({ id: 'motor', name: 'Possible Motor', type: 'Part', documentId: 'doc', elementId: 'motors', partId: 'motor' });
     instances.push({ id: 'print', name: 'Custom Printed Intake Guide', type: 'Part', documentId: 'doc', elementId: 'print', partId: 'print' });
     const result = aggregateAssembly({ rootAssembly: { instances } }, { documentId: 'doc', workspaceOrVersion: 'w', workspaceOrVersionId: 'w1', elementId: 'assembly' }, 'FTC Robot');
     const screw = result.lines.find(line => line.name === 'M3 Screw')!;
@@ -22,6 +23,9 @@ describe('Excel export', () => {
       { ...vendor, sku: 'AM-2001', normalizedSku: '2001', name: 'Bearing Option A', category: 'hardware', url: 'https://www.andymark.com/products/bearing-a' },
       { ...vendor, sku: 'AM-2002', normalizedSku: '2002', name: 'Bearing Option B', category: 'hardware', url: 'https://www.andymark.com/products/bearing-b' },
     ];
+    const possible = result.lines.find(line => line.name === 'Possible Motor')!;
+    possible.vendor = { ...vendor, sku: 'AM-3000', normalizedSku: '3000', name: 'Motor', packSize: 1, packSizeVerified: true };
+    possible.matchStatus = 'possible'; possible.classification = 'commercial';
     const printed = result.lines.find(line => line.name.includes('Printed'))!;
     printed.classification = 'printed';
     result.stats.printedLines = 1;
@@ -38,13 +42,17 @@ describe('Excel export', () => {
     expect(styles).toContain('FF1F7A3A');
     expect(sheet).toContain('<pane ySplit="6"');
     expect(sheet).toContain('Vendor data as of: 2026-10-24T00:00:00Z');
-    expect(sheet).toContain('<autoFilter ref="A6:M8"');
+    expect(sheet).toContain('<autoFilter ref="A6:M9"');
     expect(sheet).toContain('<c r="A6" s="6"');
     expect(sheet).toMatch(/<c r="I\d+" s="9" t="inlineStr"><is><t xml:space="preserve">In Stock<\/t><\/is><\/c>/);
     expect(sheet).toContain('<f>SUM(H7:H');
     expect(sheet).toMatch(/<c r="D\d+"[^>]*><v>2<\/v><\/c>/);
     expect(sheet).toMatch(/<c r="H\d+"[^>]*><f>D\d+\*G\d+<\/f><v>17\.98<\/v><\/c>/);
     expect((sheet.match(/<f>D\d+\*G\d+<\/f>/g) ?? [])).toHaveLength(1);
+    expect(sheet).toContain('<c r="G9" s="14"><v>8.99</v></c>');
+    expect(sheet).not.toContain('<c r="H9"');
+    expect(sheet).toContain('<c r="F4" s="22"><f>SUM(H7:H');
+    expect(sheet).toContain('<v>17.98</v></c>');
     expect(sheet).not.toContain('<mergeCell ref="E4:F4"');
     expect(sheet).toContain('— 3D PRINTED PARTS —');
     expect(sheet).toContain('— IN-STOCK ALTERNATIVES —');
