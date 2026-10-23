@@ -19,6 +19,8 @@ function App() {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<'name' | 'qty'>('name');
   const abort = useRef<AbortController | null>(null);
+  const scanGeneration = useRef(0);
+  const [pendingDecision, setPendingDecision] = useState(false);
   useEffect(() => {
     fetch(`${workerUrl}/api/session`, { credentials: 'include' })
       .then(async response => response.ok ? await response.json() as Session : { connected: false })
@@ -29,6 +31,7 @@ function App() {
 
   async function scan() {
     if (abort.current) return;
+    scanGeneration.current++;
     const controller = new AbortController();
     abort.current = controller;
     setError(''); setResult(null); setProgress({ stage: 'Fetching assembly…', current: 0, total: 1, instances: 0 });
@@ -66,13 +69,18 @@ function App() {
   }
 
   async function decide(line: BomLine, decision: 'confirmed' | 'rejected') {
-    if (!result) return;
+    if (!result || !line.vendor || pendingDecision) return;
+    setPendingDecision(true);
+    const generation = scanGeneration.current;
     const before = result;
     setResult(applyMatchDecision(result, line.bomLineKey, decision));
     try {
-      const response = await fetch(`${workerUrl}/api/matches/decision`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ documentId: result.documentId, lineKey: line.bomLineKey, decision }) });
+      const response = await fetch(`${workerUrl}/api/matches/decision`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ documentId: result.documentId, lineKey: line.bomLineKey, decision, vendorId: line.vendor.vendorId, normalizedSku: line.vendor.normalizedSku }) });
       if (!response.ok) throw new Error();
-    } catch { setResult(before); setError('Could not save the match choice. Try again.'); }
+    } catch {
+      if (scanGeneration.current === generation) setResult(before);
+      setError('Could not save the match choice. Try again.');
+    } finally { setPendingDecision(false); }
   }
 
   if (required.some(key => !context.get(key))) return <main><h1>Control Kit</h1><p>Open an Assembly tab in Onshape, then launch Control Kit from its right panel.</p></main>;
@@ -95,7 +103,7 @@ function App() {
         <nav aria-label="Results sections"><button className={activeTab === 'bom' ? 'selected' : 'secondary'} onClick={() => setActiveTab('bom')}>BOM</button><button className={activeTab === 'suppressed' ? 'selected' : 'secondary'} onClick={() => setActiveTab('suppressed')}>Suppressed</button><button className={activeTab === 'missing' ? 'selected' : 'secondary'} onClick={() => setActiveTab('missing')}>Missing metadata</button></nav>
         {activeTab === 'suppressed' && <p className="muted">Excluded from active quantities and purchasing totals.</p>}
         <div className="row filters"><input aria-label="Search parts" placeholder="Search parts" value={search} onChange={event => setSearch(event.target.value)} /><label>Sort <select value={sort} onChange={event => setSort(event.target.value as 'name' | 'qty')}><option value="name">Name</option><option value="qty">Quantity</option></select></label></div>
-        <div className="table-wrap"><table><thead><tr><th>Part</th><th>Qty Needed</th><th>Packs to Order</th><th>Vendor / SKU</th><th>Pack Price</th><th>Line Total</th><th>Stock</th><th>Type</th><th>Match</th></tr></thead><tbody>{visible.map((line: BomLine) => <tr key={`${activeTab}-${line.bomLineKey}`} className={line.suppressed ? 'dimmed' : ''} title={line.missingMetadataReason ?? line.instancePaths.join('; ')}><td><a href={line.partStudioUrl} target="_blank" rel="noreferrer">{line.name}</a></td><td>{line.qty}</td><td>{line.packsToOrder ?? '—'}</td><td>{line.vendor ? <a href={line.vendor.url} target="_blank" rel="noreferrer">{line.vendor.vendorId} · {line.vendor.sku}</a> : '—'}</td><td>{line.vendor?.priceUsd === null || !line.vendor ? '—' : `$${line.vendor.priceUsd.toFixed(2)}`}</td><td>{line.lineTotalUsd === null ? '—' : `$${line.lineTotalUsd.toFixed(2)}`}</td><td>{line.vendor?.stock ?? 'Unknown'}</td><td>{line.classification === 'commercial' ? 'Commercial' : 'Unknown'}</td><td>{line.matchStatus === 'possible' ? <div className="actions"><span>Possible match</span><button aria-label={`Confirm match for ${line.name}`} onClick={() => decide(line, 'confirmed')}>Confirm</button><button className="secondary" aria-label={`Reject match for ${line.name}`} onClick={() => decide(line, 'rejected')}>Reject</button></div> : line.matchStatus === 'exact' ? 'Exact SKU' : line.matchStatus === 'confirmed' ? 'Matched' : line.matchStatus === 'rejected' ? 'Rejected' : 'Unmatched'}</td></tr>)}</tbody></table>{visible.length === 0 && <p className="empty">No parts in this section.</p>}</div>
+        <div className="table-wrap"><table><thead><tr><th>Part</th><th>Qty Needed</th><th>Packs to Order</th><th>Vendor / SKU</th><th>Pack Price</th><th>Line Total</th><th>Stock</th><th>Type</th><th>Match</th></tr></thead><tbody>{visible.map((line: BomLine) => <tr key={`${activeTab}-${line.bomLineKey}`} className={line.suppressed ? 'dimmed' : ''} title={line.missingMetadataReason ?? line.instancePaths.join('; ')}><td><a href={line.partStudioUrl} target="_blank" rel="noreferrer">{line.name}</a></td><td>{line.qty}</td><td>{line.packsToOrder ?? '—'}</td><td>{line.vendor ? <a href={line.vendor.url} target="_blank" rel="noreferrer">{line.vendor.vendorId} · {line.vendor.sku}</a> : '—'}</td><td>{line.vendor?.priceUsd === null || !line.vendor ? '—' : `$${line.vendor.priceUsd.toFixed(2)}`}</td><td>{line.lineTotalUsd === null ? '—' : `$${line.lineTotalUsd.toFixed(2)}`}</td><td>{line.vendor?.stock ?? 'Unknown'}</td><td>{line.classification === 'commercial' ? 'Commercial' : 'Unknown'}</td><td>{line.matchStatus === 'possible' ? <div className="actions"><span>Possible match</span><button disabled={pendingDecision} aria-label={`Confirm match for ${line.name}`} onClick={() => decide(line, 'confirmed')}>Confirm</button><button disabled={pendingDecision} className="secondary" aria-label={`Reject match for ${line.name}`} onClick={() => decide(line, 'rejected')}>Reject</button></div> : line.matchStatus === 'exact' ? 'Exact SKU' : line.matchStatus === 'confirmed' ? 'Matched' : line.matchStatus === 'rejected' ? 'Rejected' : 'Unmatched'}</td></tr>)}</tbody></table>{visible.length === 0 && <p className="empty">No parts in this section.</p>}</div>
       </>}
     </>}
   </main>;

@@ -69,4 +69,49 @@ describe('catalog KV read path and purchasing', () => {
     expect(result.lines[0].packsToOrder).toBe(6);
     expect(result.lines[0].lineTotalUsd).toBe(75);
   });
+  it('keeps a saved choice bound to the same catalog product', async () => {
+    clearCatalogMemoryCache();
+    const result = aggregateAssembly(fixture('simple'), context, 'Robot');
+    const store = catalog();
+    await enrichScan(result, store);
+    const line = result.lines.find(item => item.partId === 'bearing-8')!;
+    expect(line.matchStatus).toBe('possible');
+    const saved = { status: 'confirmed' as const, vendorId: line.vendor!.vendorId, normalizedSku: line.vendor!.normalizedSku };
+    const same = aggregateAssembly(fixture('simple'), context, 'Robot');
+    await enrichScan(same, store, async () => saved);
+    expect(same.lines.find(item => item.partId === 'bearing-8')?.matchStatus).toBe('confirmed');
+    const changed = aggregateAssembly(fixture('simple'), context, 'Robot');
+    await enrichScan(changed, store, async () => ({ ...saved, normalizedSku: 'DIFFERENT' }));
+    expect(changed.lines.find(item => item.partId === 'bearing-8')?.matchStatus).toBe('possible');
+  });
+  it('ignores an incomplete JSON catalog record without failing the scan', async () => {
+    clearCatalogMemoryCache();
+    const store = new MemoryKv();
+    store.values.set('vendor:rev:311234', JSON.stringify({ vendorId: 'rev', name: 'Incomplete' }));
+    const result = aggregateAssembly(fixture('empty'), context, 'Robot');
+    result.lines.push({ ...aggregateAssembly(fixture('simple'), context, 'Robot').lines[0], bomLineKey: 'bad-record', partNumber: 'REV-31-1234' });
+    await expect(enrichScan(result, store)).resolves.toBe(result);
+    expect(result.lines[0].matchStatus).toBe('unmatched');
+  });
+  it('stops catalog reads after cancellation', async () => {
+    clearCatalogMemoryCache();
+    const controller = new AbortController();
+    let reads = 0;
+    const store = new MemoryKv();
+    store.get = async () => { reads++; controller.abort(); return null; };
+    const result = aggregateAssembly(fixture('simple'), context, 'Robot');
+    await expect(enrichScan(result, store, async () => null, controller.signal)).rejects.toBeDefined();
+    expect(reads).toBe(1);
+  });
+  it('keeps missing-metadata references aligned with an optimistic choice', async () => {
+    clearCatalogMemoryCache();
+    const result = aggregateAssembly(fixture('simple'), context, 'Robot');
+    await enrichScan(result, catalog());
+    const line = result.lines.find(item => item.partId === 'bearing-8')!;
+    line.missingMetadataReason = 'Metadata unavailable';
+    result.missingMetadata = [line];
+    const changed = applyMatchDecision(result, line.bomLineKey, 'confirmed');
+    expect(changed.missingMetadata[0]).toBe(changed.lines.find(item => item.bomLineKey === line.bomLineKey));
+    expect(changed.missingMetadata[0].matchStatus).toBe('confirmed');
+  });
 });

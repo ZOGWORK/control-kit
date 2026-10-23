@@ -1,6 +1,6 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
 import { scanAssembly, SessionExpiredError } from './scan';
-import type { AssemblyContext } from '@control-kit/shared';
+import type { AssemblyContext, MatchDecision } from '@control-kit/shared';
 
 export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string }
 type Tokens = { access_token: string; refresh_token: string };
@@ -102,12 +102,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
-    const body = await request.json() as { documentId?: string; lineKey?: string; decision?: string };
-    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.lineKey || body.lineKey.length > 512 || !['confirmed', 'rejected'].includes(body.decision ?? '')) return reply({ error: 'Invalid match decision.' }, 400);
-    const key = `match-decisions:${current.data.user.id}:${body.documentId}`;
-    const values = JSON.parse(await env.APP_STATE.get(key) ?? '{}') as Record<string, 'confirmed' | 'rejected'>;
-    values[body.lineKey] = body.decision as 'confirmed' | 'rejected';
-    await env.APP_STATE.put(key, JSON.stringify(values));
+    const body = await request.json() as { documentId?: string; lineKey?: string; decision?: string; vendorId?: string; normalizedSku?: string };
+    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.lineKey || body.lineKey.length > 512 || !['confirmed', 'rejected'].includes(body.decision ?? '') || !['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'].includes(body.vendorId ?? '') || !body.normalizedSku || !/^[A-Z0-9]+$/.test(body.normalizedSku)) return reply({ error: 'Invalid match decision.' }, 400);
+    const key = `match-decision:${current.data.user.id}:${body.documentId}:${encodeURIComponent(body.lineKey)}`;
+    const value: MatchDecision = { status: body.decision as MatchDecision['status'], vendorId: body.vendorId as MatchDecision['vendorId'], normalizedSku: body.normalizedSku };
+    await env.APP_STATE.put(key, JSON.stringify(value));
     return reply({ saved: true });
   }
   if (url.pathname === '/api/scan' && request.method === 'GET') {
@@ -130,8 +129,14 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (response.status === 401) { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
       return response;
     };
-    const decisions = JSON.parse(await env.APP_STATE.get(`match-decisions:${current.data.user.id}:${context.documentId}`) ?? '{}') as Record<string, 'confirmed' | 'rejected'>;
-    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, decisions);
+    const getDecision = async (lineKey: string, signal?: AbortSignal): Promise<MatchDecision | null> => {
+      if (signal?.aborted) throw signal.reason;
+      const raw = await env.APP_STATE.get(`match-decision:${current.data.user.id}:${context.documentId}:${encodeURIComponent(lineKey)}`);
+      if (signal?.aborted) throw signal.reason;
+      if (!raw) return null;
+      try { return JSON.parse(raw) as MatchDecision; } catch { return null; }
+    };
+    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision);
   }
   if (url.pathname.startsWith('/api/onshape/')) {
     const current = await getSession(request, env);

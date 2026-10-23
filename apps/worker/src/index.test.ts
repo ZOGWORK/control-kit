@@ -106,11 +106,16 @@ describe('M3 match decisions against local catalog KV', () => {
     const line = first.lines.find((item: { partId: string }) => item.partId === 'bearing-8');
     expect(line.matchStatus).toBe('possible');
     expect(line.lineTotalUsd).toBeNull();
-    const body = JSON.stringify({ documentId: 'simple', lineKey: line.bomLineKey, decision: 'confirmed' });
+    const body = JSON.stringify({ documentId: 'simple', lineKey: line.bomLineKey, decision: 'confirmed', vendorId: line.vendor.vendorId, normalizedSku: line.vendor.normalizedSku });
     const foreign = await worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: 'https://foreign.example', 'content-type': 'application/json' }, body }), env);
     expect(foreign.status).toBe(403);
     const saved = await worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' }, body }), env);
     expect(saved.status).toBe(200);
+    const secondBody = JSON.stringify({ documentId: 'simple', lineKey: 'second-line', decision: 'rejected', vendorId: line.vendor.vendorId, normalizedSku: line.vendor.normalizedSku });
+    const concurrent = await Promise.all([body, secondBody].map(value => worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' }, body: value }), env)));
+    expect(concurrent.map(response => response.status)).toEqual([200, 200]);
+    expect([...env.APP_STATE.values.keys()].filter(key => key.startsWith('match-decision:') && key.endsWith(encodeURIComponent(line.bomLineKey)))).toHaveLength(1);
+    expect([...env.APP_STATE.values.keys()].filter(key => key.startsWith('match-decision:') && key.endsWith('second-line'))).toHaveLength(1);
     const second = (await (await call(path, cookie)).text()).trim().split('\n').map(line => JSON.parse(line)).find(event => event.type === 'result').result;
     expect(second.lines.find((item: { partId: string }) => item.partId === 'bearing-8').matchStatus).toBe('confirmed');
     env.VENDOR_CATALOG.values.clear(); clearCatalogMemoryCache();

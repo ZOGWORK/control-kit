@@ -8,6 +8,7 @@ export type AssemblyInstance = { id: string; name: string; type: string; documen
 export type AssemblyDefinition = { rootAssembly: { name?: string; instances?: AssemblyInstance[] }; subAssemblies?: Array<{ documentId: string; elementId: string; configuration?: string; documentMicroversion?: string; instances?: AssemblyInstance[] }>; parts?: Array<{ documentId: string; elementId: string; partId: string; name?: string }> };
 export type BomLine = { bomLineKey: string; name: string; description: string | null; documentId: string; elementId: string; partId: string | null; partNumber: string | null; configuration: string | null; sourceType: 'w' | 'v' | 'm' | null; sourceId: string | null; qty: number; packsToOrder: number | null; lineTotalUsd: number | null; suppressed: boolean; instancePaths: string[]; massKg: number | null; material: string | null; missingMetadataReason: string | null; vendor: VendorRecord | null; matchConfidence: number; matchStatus: 'unmatched' | 'possible' | 'confirmed' | 'exact' | 'rejected'; matchReasons: string[]; classification: 'commercial' | 'printed' | 'unknown'; classificationScore: number; classificationReasons: string[]; partStudioUrl: string; unresolvedSubassembly?: boolean };
 export type ScanResult = { assemblyName: string; documentId: string; elementId: string; scannedAt: string; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
+export type MatchDecision = { status: 'confirmed' | 'rejected'; vendorId: VendorRecord['vendorId']; normalizedSku: string };
 
 export function updatePurchasing(line: BomLine): BomLine {
   const record = line.vendor;
@@ -32,6 +33,7 @@ export function applyMatchDecision(result: ScanResult, key: string, decision: 'c
   if (!line || line.matchStatus !== 'possible') return next;
   line.matchStatus = decision;
   if (decision === 'rejected') line.vendor = null;
+  next.missingMetadata = next.missingMetadata.map(item => next.lines.find(active => active.bomLineKey === item.bomLineKey) ?? item);
   return recalculatePurchasing(next);
 }
 
