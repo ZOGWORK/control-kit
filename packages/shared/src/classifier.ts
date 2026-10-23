@@ -6,6 +6,16 @@ export type ClassificationOverrides = Record<string, ClassificationOverride>;
 /** Manual type follows the part/configuration across source revision changes. */
 export const classificationIdentity = (line: Pick<BomLine, 'documentId' | 'elementId' | 'partId' | 'configuration'>) =>
   `${line.documentId}:${line.elementId}:${line.partId ?? ''}:${line.configuration ?? ''}`;
+export function printCategory(name: string) {
+  if (/wheel|drive|swerve/i.test(name)) return 'drivetrain';
+  if (/intake|roller/i.test(name)) return 'intake';
+  if (/lift|slide|elevator/i.test(name)) return 'lift';
+  if (/shooter|launch/i.test(name)) return 'shooter';
+  if (/turret/i.test(name)) return 'turret';
+  if (/frame|channel|rail/i.test(name)) return 'chassis';
+  if (/electronic|sensor|circuit|wire/i.test(name)) return 'electronics';
+  return 'misc';
+}
 
 const strong = /\b(?:printed|3[ -]?d print|stl|fdm|pla|petg)\b/i;
 const weak = ['custom', 'bracket', 'mount', 'plate', 'panel', 'spacer', 'adapter', 'holder', 'guide', 'cover'];

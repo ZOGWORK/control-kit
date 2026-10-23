@@ -1,1 +1,1 @@
-export const excelPackageName = '@control-kit/excel';
+export { buildExcelWorkbook, type ExcelExport } from './workbook';

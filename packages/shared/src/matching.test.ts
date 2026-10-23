@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyMatchScore, findBestMatch, normalizeName, normalizeSku, skuCandidates, type VendorId, type VendorRecord } from './matching';
+import { classifyMatchScore, findBestMatch, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates, type VendorId, type VendorRecord } from './matching';
 
 const record = (name: string, sku: string, vendorId: VendorId = 'rev', overrides: Partial<VendorRecord> = {}): VendorRecord => ({
   vendorId, sku, normalizedSku: normalizeSku(sku, vendorId), name, normalizedName: normalizeName(name), url: 'https://vendor.example/product',
@@ -59,5 +59,15 @@ describe('vendor matching', () => {
     const result = findBestMatch({ name: '8mm flanged bearing' }, [weak, valid]);
     expect(result.status).toBe('possible');
     expect(result.vendor?.sku).toBe('VALID');
+  });
+  it('ranks only in-stock alternatives from the same vendor and category for low/out lines', () => {
+    const selected = record('M3 10mm screw', 'OUT', 'rev', { stock: 'out' });
+    const near = record('M3 10mm screw stainless', 'NEAR', 'rev', { priceUsd: 5 });
+    const distant = record('M4 20mm screw', 'DISTANT', 'rev', { priceUsd: 2 });
+    const otherVendor = record('M3 10mm screw', 'OTHER', 'andymark');
+    const otherCategory = record('M3 10mm screw', 'CAT', 'rev', { category: 'motors' });
+    const out = record('M3 10mm screw', 'OUT2', 'rev', { stock: 'out' });
+    expect(rankVendorAlternatives(selected.name, selected, [distant, otherVendor, otherCategory, near, out]).map(value => value.sku)).toEqual(['NEAR', 'DISTANT']);
+    expect(rankVendorAlternatives(selected.name, { ...selected, stock: 'in' }, [near])).toEqual([]);
   });
 });

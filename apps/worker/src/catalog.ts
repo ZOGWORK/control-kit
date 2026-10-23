@@ -1,4 +1,4 @@
-import { findBestMatch, normalizeName, normalizeSku, recalculatePurchasing, skuCandidates, type MatchDecision, type ScanResult, type VendorId, type VendorRecord } from '@control-kit/shared';
+import { findBestMatch, normalizeName, normalizeSku, rankVendorAlternatives, recalculatePurchasing, skuCandidates, type MatchDecision, type ScanResult, type VendorId, type VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
 import type { VendorSnapshot } from './vendor-ingest';
 
@@ -90,6 +90,7 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
         if (choice.status === 'rejected') line.vendor = null;
       }
     }
+    line.alternatives = rankVendorAlternatives(line.name, line.vendor, candidates);
   });
   // KV is not a network scrape, but keep in-flight gets bounded at 20 per batch and results deterministic.
   await Promise.all(jobs);

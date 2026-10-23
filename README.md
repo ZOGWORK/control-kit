@@ -35,6 +35,19 @@ pnpm --filter @control-kit/worker exec wrangler kv bulk put ../../.wrangler/seed
 
 The seed is synthetic and is not a production catalog. A matched record's price is a **pack price**: Control Kit shows Qty Needed and Packs to Order separately, calculates charges from packs, and leaves the line total blank unless the pack size is verified. Possible matches also stay out of totals until confirmed.
 
+## Excel BOM export
+
+After a scan, **Download Excel BOM** creates a workbook locally in the browser without another API call. The BOM sheet shows Qty Needed, Packs to Order, Pack Price, and formula-driven Line Total; the Estimated Total formula sums those line totals. Unverified pack sizes and unconfirmed possible matches have blank line totals. Separate sheets list printed parts, suppressed parts, and missing metadata. Vendor data age and stale status appear in the header.
+
+To regenerate the fixture workbook, bundle and run the sample script from the repository root:
+
+```sh
+node node_modules/.pnpm/esbuild@0.25.12/node_modules/esbuild/bin/esbuild scripts/generate-sample-excel.ts --bundle --platform=node --format=esm --outfile=work/generate-sample-excel.mjs
+node work/generate-sample-excel.mjs
+```
+
+The checked-in sample is `fixtures/FTC_Competition_Robot_BOM_2026-10-23.xlsx`. The script calls the same `buildExcelWorkbook` function as the UI and uses only fixtures.
+
 ## Printed parts and STL export
 
 The deterministic classifier scores each active BOM line using print keywords, custom-part terms, vendor matches, and the optional team number saved in Settings. Scores of 60 or more are Printed, 35–59 are Possibly printed, and lower scores are Commercial. An exact normalized vendor SKU always forces Commercial unless the user explicitly sets a manual type. Manual Commercial/Printed choices are stored per user and document and reapplied on every rescan.
