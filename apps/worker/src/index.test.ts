@@ -5,6 +5,7 @@ import { massPath } from './scan';
 import { aggregateAssembly } from '@control-kit/shared';
 import { clearCatalogMemoryCache } from './catalog';
 import { readFileSync } from 'node:fs';
+import { strFromU8, unzipSync } from 'fflate';
 
 class MemoryKv implements Kv {
   values = new Map<string, string>();
@@ -14,7 +15,7 @@ class MemoryKv implements Kv {
 }
 const mock = createMockOnshape();
 const env = { APP_STATE: new MemoryKv(), VENDOR_CATALOG: new MemoryKv(), ONSHAPE_OAUTH_CLIENT_ID: 'test-id', ONSHAPE_OAUTH_CLIENT_SECRET: 'test-secret', ONSHAPE_OAUTH_REDIRECT_URI: 'http://localhost:8787/oauth/redirect', ONSHAPE_API_BASE: 'http://localhost:8788', ONSHAPE_API_VERSION: 'v9', ONSHAPE_OAUTH_BASE: 'http://localhost:8788', SESSION_ENCRYPTION_KEY: btoa('12345678901234567890123456789012'), WEB_ORIGIN: 'http://localhost:5173' } as Env & { APP_STATE: MemoryKv; VENDOR_CATALOG: MemoryKv };
-const call = (path: string, cookie?: string) => worker.fetch(new Request(`http://localhost:8787${path}`, cookie ? { headers: { cookie } } : undefined), env);
+const call = (path: string, cookie?: string) => worker.fetch(new Request(`http://localhost:8787${path}`, { headers: { origin: env.WEB_ORIGIN, ...(cookie ? { cookie } : {}) } }), env);
 beforeEach(() => vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => mock.handle(new Request(input, init))));
 afterAll(() => vi.unstubAllGlobals());
 
@@ -123,6 +124,51 @@ describe('M3 match decisions against local catalog KV', () => {
     const second = (await (await call(path, cookie)).text()).trim().split('\n').map(line => JSON.parse(line)).find(event => event.type === 'result').result;
     expect(second.lines.find((item: { partId: string }) => item.partId === 'bearing-8').matchStatus).toBe('confirmed');
     env.VENDOR_CATALOG.values.clear(); clearCatalogMemoryCache();
+  });
+});
+
+describe('M5 settings and classification overrides against mock Onshape', () => {
+  it('persists a manual type across a rescan and lets the user return to automatic scoring', async () => {
+    const start = await call('/oauth/start?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
+    const post = (path: string, body: unknown) => worker.fetch(new Request(`http://localhost:8787${path}`, { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' }, body: JSON.stringify(body) }), env);
+    expect((await post('/api/settings', { teamNumber: '1234' })).status).toBe(200);
+    expect(await (await call('/api/settings', cookie)).json()).toEqual({ teamNumber: '1234' });
+    const path = '/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1';
+    const scan = async () => (await (await call(path, cookie)).text()).trim().split('\n').map(row => JSON.parse(row)).find(event => event.type === 'result').result;
+    const first = await scan();
+    const selected = first.lines[0];
+    expect((await post('/api/classification/override', { documentId: 'simple', lineKey: selected.bomLineKey, classification: 'printed' })).status).toBe(200);
+    const second = await scan();
+    expect(second.lines[0].classification).toBe('printed');
+    expect(second.lines[0].manualClassification).toBe('printed');
+    expect(second.stats.printedLines).toBeGreaterThanOrEqual(1);
+    expect((await post('/api/classification/override', { documentId: 'simple', lineKey: selected.bomLineKey, classification: null })).status).toBe(200);
+    const third = await scan();
+    expect(third.lines[0].manualClassification).toBeNull();
+    const foreign = await worker.fetch(new Request('http://localhost:8787/api/classification/override', { method: 'POST', headers: { cookie, origin: 'https://foreign.example', 'content-type': 'application/json' }, body: JSON.stringify({ documentId: 'simple', lineKey: selected.bomLineKey, classification: 'printed' }) }), env);
+    expect(foreign.status).toBe(403);
+  });
+  it('exports fixture B STLs through the authenticated route and lists a failed part', async () => {
+    const start = await call('/oauth/start?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
+    const scan = await call('/api/scan?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    const result = (await scan.text()).trim().split('\n').map(row => JSON.parse(row)).find(event => event.type === 'result').result;
+    const motor = result.lines.find((line: { partId: string }) => line.partId === 'motor-5203');
+    const override = await worker.fetch(new Request('http://localhost:8787/api/classification/override', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' },
+      body: JSON.stringify({ documentId: 'robot', lineKey: motor.bomLineKey, classification: 'printed' }) }), env);
+    expect(override.status).toBe(200);
+    const zip = await call('/api/prints/zip?documentId=robot', cookie);
+    expect(zip.status).toBe(200);
+    expect(zip.headers.get('content-type')).toBe('application/zip');
+    const files = unzipSync(new Uint8Array(await zip.arrayBuffer()));
+    expect(Object.keys(files).some(name => name.includes('/intake/custom_printed_intake_guide__'))).toBe(true);
+    expect(strFromU8(files['FTC_Competition_Robot_prints/README.txt'])).toContain('5203 Motor: Deliberate fixture STL failure');
+    expect(JSON.parse(zip.headers.get('x-control-kit-failures')!)).toEqual(expect.arrayContaining([expect.objectContaining({ name: '5203 Motor' })]));
+    const foreign = await worker.fetch(new Request('http://localhost:8787/api/prints/zip?documentId=robot', { headers: { cookie, origin: 'https://foreign.example' } }), env);
+    expect(foreign.status).toBe(403);
   });
 });
 

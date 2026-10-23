@@ -1,4 +1,4 @@
-import { aggregateAssembly, type AssemblyContext, type AssemblyDefinition, type BomLine, type MatchDecision, type ScanResult } from '@control-kit/shared';
+import { aggregateAssembly, classifyScan, type AssemblyContext, type AssemblyDefinition, type BomLine, type ClassificationOverrides, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { enrichScan } from './catalog';
 import type { Kv } from './index';
 
@@ -32,7 +32,7 @@ export function massPath(line: BomLine, version: string) {
   return `/api/${version}/partstudios/d/${encodeURIComponent(line.documentId)}/${source}/e/${encodeURIComponent(line.elementId)}/massproperties${query}`;
 }
 
-export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 24): Response {
+export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 24, settings: UserSettings = { teamNumber: null }, overrides: ClassificationOverrides = {}, onResult?: (result: ScanResult) => Promise<void>): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -98,7 +98,9 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         result.missingMetadata = [...result.lines, ...result.suppressed].filter(line => line.missingMetadataReason !== null);
         emit({ type: 'progress', stage: 'Matching vendors…', current: 0, total: result.lines.length, instances: count });
         await enrichScan(result, catalog, getDecision, request.signal, staleHours);
+        classifyScan(result, settings, overrides);
         emit({ type: 'progress', stage: 'Matching vendors…', current: result.lines.length, total: result.lines.length, instances: count });
+        if (onResult) await onResult(result);
         emit({ type: 'result', result });
       } catch (error) {
         if (!request.signal.aborted) {

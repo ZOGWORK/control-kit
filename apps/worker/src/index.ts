@@ -1,7 +1,8 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
 import { scanAssembly, SessionExpiredError } from './scan';
-import type { AssemblyContext, MatchDecision } from '@control-kit/shared';
+import { classifyScan, type AssemblyContext, type ClassificationOverrides, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
+import { buildStlZip } from './stl-zip';
 
 export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string }
 type Tokens = { access_token: string; refresh_token: string };
@@ -115,7 +116,36 @@ async function route(request: Request, env: Env): Promise<Response> {
     await env.APP_STATE.put(key, JSON.stringify(value));
     return reply({ saved: true });
   }
+  if (url.pathname === '/api/settings' && request.method === 'GET') {
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const raw = await env.APP_STATE.get(`settings:${current.data.user.id}`);
+    return reply(raw ? JSON.parse(raw) as UserSettings : { teamNumber: null });
+  }
+  if (url.pathname === '/api/settings' && request.method === 'POST') {
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const body = await request.json() as UserSettings;
+    if (body.teamNumber !== null && (typeof body.teamNumber !== 'string' || !/^\d{1,6}$/.test(body.teamNumber))) return reply({ error: 'Team number must be 1–6 digits.' }, 400);
+    await env.APP_STATE.put(`settings:${current.data.user.id}`, JSON.stringify({ teamNumber: body.teamNumber }));
+    return reply({ saved: true });
+  }
+  if (url.pathname === '/api/classification/override' && request.method === 'POST') {
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const body = await request.json() as { documentId?: string; lineKey?: string; classification?: string | null };
+    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.lineKey || body.lineKey.length > 16384 || ![null, 'commercial', 'printed'].includes(body.classification ?? null)) return reply({ error: 'Invalid classification override.' }, 400);
+    const key = `overrides:${current.data.user.id}:${body.documentId}`;
+    const overrides = JSON.parse(await env.APP_STATE.get(key) ?? '{}') as ClassificationOverrides;
+    if (body.classification) overrides[body.lineKey] = body.classification as 'commercial' | 'printed';
+    else delete overrides[body.lineKey];
+    await env.APP_STATE.put(key, JSON.stringify(overrides));
+    return reply({ saved: true });
+  }
   if (url.pathname === '/api/scan' && request.method === 'GET') {
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
     const values = ['documentId', 'workspaceOrVersion', 'workspaceOrVersionId', 'elementId'].map(key => url.searchParams.get(key));
@@ -142,9 +172,59 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!raw) return null;
       try { return JSON.parse(raw) as MatchDecision; } catch { return null; }
     };
-    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 24));
+    const [settingsRaw, overridesRaw] = await Promise.all([
+      env.APP_STATE.get(`settings:${current.data.user.id}`),
+      env.APP_STATE.get(`overrides:${current.data.user.id}:${context.documentId}`),
+    ]);
+    const settings = settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null };
+    const overrides = overridesRaw ? JSON.parse(overridesRaw) as ClassificationOverrides : {};
+    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 24), settings, overrides,
+      async result => env.APP_STATE.put(`scan:${current.data.user.id}:${context.documentId}`, JSON.stringify(result), { expirationTtl: 3600 }));
+  }
+  if (url.pathname === '/api/prints/zip' && request.method === 'GET') {
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const documentId = url.searchParams.get('documentId');
+    if (!documentId || !/^[\w-]{1,128}$/.test(documentId)) return reply({ error: 'Invalid document ID.' }, 400);
+    const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${documentId}`);
+    if (!raw) return reply({ error: 'Scan this assembly before exporting STLs.' }, 409);
+    const result = JSON.parse(raw) as ScanResult;
+    const [settingsRaw, overridesRaw] = await Promise.all([
+      env.APP_STATE.get(`settings:${current.data.user.id}`), env.APP_STATE.get(`overrides:${current.data.user.id}:${documentId}`),
+    ]);
+    classifyScan(result, settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null }, overridesRaw ? JSON.parse(overridesRaw) as ClassificationOverrides : {});
+    let refreshing: Promise<void> | undefined;
+    const fetchStl = async (path: string, init: RequestInit) => {
+      const send = () => fetch(`${env.ONSHAPE_API_BASE}${path}`, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), authorization: `Bearer ${current.data.tokens.access_token}` } });
+      for (let attempt = 0; attempt <= 4; attempt++) {
+        let response = await send();
+        if (response.status === 401) {
+          refreshing ??= (async () => {
+            current.data.tokens = await exchange(env, { grant_type: 'refresh_token', refresh_token: current.data.tokens.refresh_token });
+            await save(env, current.id, current.data);
+          })();
+          try { await refreshing; } catch { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
+          response = await send();
+          if (response.status === 401) { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
+        }
+        if (response.status !== 429 || attempt === 4) return response;
+        const retryAfter = Number(response.headers.get('retry-after'));
+        const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 8000) : Math.round(2 ** attempt * 1000 * (0.8 + Math.random() * 0.4));
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, delay);
+          init.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(init.signal?.reason); }, { once: true });
+        });
+      }
+      throw Error('Onshape rate limit exhausted');
+    };
+    const zip = await buildStlZip(result, env.ONSHAPE_API_VERSION, fetchStl, request.signal);
+    return new Response(zip.bytes.buffer.slice(zip.bytes.byteOffset, zip.bytes.byteOffset + zip.bytes.byteLength) as ArrayBuffer,
+      { headers: { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${zip.filename}"`, 'cache-control': 'no-store',
+        'x-control-kit-failures': JSON.stringify(zip.failures.slice(0, 10)), 'access-control-expose-headers': 'x-control-kit-failures' } });
   }
   if (url.pathname.startsWith('/api/onshape/')) {
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
     const path = `/api/${url.pathname.slice('/api/onshape/'.length)}${url.search}`;
@@ -171,7 +251,13 @@ export default {
     let result: Response;
     try { result = await route(request, env); }
     catch (error) { console.error('Control Kit request failed', error); result = reply({ error: 'Control Kit could not complete this request. Try again.' }, 502); }
-    if (origin === env.WEB_ORIGIN) { result.headers.set('access-control-allow-origin', origin); result.headers.set('access-control-allow-credentials', 'true'); result.headers.set('vary', 'Origin'); }
+    if (origin === env.WEB_ORIGIN) {
+      const headers = new Headers(result.headers);
+      headers.set('access-control-allow-origin', origin);
+      headers.set('access-control-allow-credentials', 'true');
+      headers.set('vary', 'Origin');
+      result = new Response(result.body, { status: result.status, statusText: result.statusText, headers });
+    }
     return result;
   },
   scheduled(event: { cron: string }, env: Env, context: { waitUntil(promise: Promise<unknown>): void }) {

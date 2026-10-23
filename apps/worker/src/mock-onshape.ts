@@ -41,6 +41,18 @@ export function createMockOnshape() {
       const id = ids[mass[1]];
       return id ? json(200, { bodies: { [id]: { mass: [0.012], material: 'Steel' } } }) : json(404, { error: 'not_found' });
     }
+    if (/^\/api\/v\d+\/parts\/d\/[^/]+\/[wvm]\/[^/]+\/e\/[^/]+\/partid\/[^/]+\/stl$/.test(url.pathname)) {
+      apiRequests++;
+      return url.pathname.includes('/partid/intake-guide/') ? new Response('solid intake-guide\nendsolid intake-guide\n', { headers: { 'content-type': 'application/sla' } }) : json(404, { error: 'no_direct_stl' });
+    }
+    if (/^\/api\/v\d+\/partstudios\/d\/[^/]+\/[wvm]\/[^/]+\/e\/[^/]+\/translations$/.test(url.pathname) && request.method === 'POST') {
+      apiRequests++;
+      return json(200, { id: 'mock-translation' });
+    }
+    if (/^\/api\/v\d+\/translations\/mock-translation$/.test(url.pathname)) {
+      apiRequests++;
+      return json(200, { requestState: 'FAILED', failureReason: 'Deliberate fixture STL failure' });
+    }
     if (url.pathname.startsWith('/api/')) {
       apiRequests++;
       if (url.searchParams.has('always401')) return json(401, { error: 'expired' });
