@@ -1,0 +1,7 @@
+[
+  {"vendorId":"rev","sku":"REV-31-1234","normalizedSku":"311234","name":"96mm Wheel","normalizedName":"96mm wheel","url":"https://www.revrobotics.com/","priceUsd":12.5,"packSize":2,"packSizeVerified":true,"stock":"in","stockQty":12,"category":"wheels","updatedAt":"2026-10-23T00:00:00Z","source":"feed"},
+  {"vendorId":"gobilda","sku":"GB-5203","normalizedSku":"5203","name":"5203 Motor","normalizedName":"5203 motor","url":"https://www.gobilda.com/","priceUsd":34.99,"packSize":1,"packSizeVerified":true,"stock":"in","stockQty":null,"category":"motors","updatedAt":"2026-10-23T00:00:00Z","source":"sitemap"},
+  {"vendorId":"andymark","sku":"AM-1000","normalizedSku":"1000","name":"M3 Screw","normalizedName":"m3 screw","url":"https://www.andymark.com/","priceUsd":8.99,"packSize":10,"packSizeVerified":true,"stock":"in","stockQty":null,"category":"hardware","updatedAt":"2026-10-23T00:00:00Z","source":"feed"},
+  {"vendorId":"servocity","sku":"SC-8000","normalizedSku":"8000","name":"8mm Bearing","normalizedName":"8mm bearing","url":"https://www.servocity.com/","priceUsd":6,"packSize":null,"packSizeVerified":false,"stock":"unknown","stockQty":null,"category":"bearings","updatedAt":"2026-10-23T00:00:00Z","source":"feed"},
+  {"vendorId":"pitsco","sku":"PIT-7000","normalizedSku":"PIT7000","name":"Custom Printed Sensor Mount","normalizedName":"custom printed sensor mount","url":"https://www.pitsco.com/","priceUsd":5,"packSize":null,"packSizeVerified":false,"stock":"out","stockQty":0,"category":"structure","updatedAt":"2026-10-23T00:00:00Z","source":"sitemap"}
+]

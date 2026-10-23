@@ -1,4 +1,6 @@
 import { aggregateAssembly, type AssemblyContext, type AssemblyDefinition, type BomLine, type ScanResult } from '@control-kit/shared';
+import { enrichScan } from './catalog';
+import type { Kv } from './index';
 
 export type ScanEvent =
   | { type: 'progress'; stage: string; current: number; total: number; instances: number }
@@ -30,7 +32,7 @@ export function massPath(line: BomLine, version: string) {
   return `/api/${version}/partstudios/d/${encodeURIComponent(line.documentId)}/${source}/e/${encodeURIComponent(line.elementId)}/massproperties${query}`;
 }
 
-export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape): Response {
+export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, decisions: Record<string, 'confirmed' | 'rejected'>): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -94,7 +96,9 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
           }));
         }
         result.missingMetadata = [...result.lines, ...result.suppressed].filter(line => line.missingMetadataReason !== null);
-        emit({ type: 'progress', stage: 'Preparing results…', current: 1, total: 1, instances: count });
+        emit({ type: 'progress', stage: 'Matching vendors…', current: 0, total: result.lines.length, instances: count });
+        await enrichScan(result, catalog, decisions);
+        emit({ type: 'progress', stage: 'Matching vendors…', current: result.lines.length, total: result.lines.length, instances: count });
         emit({ type: 'result', result });
       } catch (error) {
         if (!request.signal.aborted) {
