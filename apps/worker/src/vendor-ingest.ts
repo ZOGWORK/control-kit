@@ -9,7 +9,7 @@ export const vendorSources: Record<VendorId, { origin: string; sitemap: string }
   pitsco: { origin: 'https://www.pitsco.com', sitemap: 'https://www.pitsco.com/sitemap.xml' },
 };
 export type VendorSnapshot = { status: 'ok' | 'failed'; updatedAt: string | null; lastRunAt: string; recordCount: number; source: 'sitemap'; version: string | null; inProgress?: boolean; error?: string };
-type Cursor = { sitemaps: string[]; sitemapIndex: number; urls: string[]; urlIndex: number; records: Record<string, VendorRecord>; phase: 'fetch' | 'records' | 'indexes'; version?: string; publishIndex?: number; indexIndex?: number };
+type Cursor = { sitemaps: string[]; sitemapIndex: number; urls: string[]; urlIndex: number; records: Record<string, VendorRecord>; phase: 'fetch' | 'records' | 'indexes' | 'ready'; version?: string; publishIndex?: number; indexIndex?: number; readyAt?: number };
 export type VendorRun = { vendor: VendorId; source: 'sitemap'; fetched: number; upserted: number; skipped: number; durationMs: number; complete: boolean };
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 const userAgent = 'Control Kit vendor catalog (+https://github.com/ZOGWORK/control-kit)';
@@ -84,7 +84,7 @@ const pointerKey = (vendor: VendorId) => `vendor:${vendor}:__lastgood__`;
 const cursorKey = (vendor: VendorId) => `vendor:${vendor}:__cursor__`;
 
 /** A completed version is published by one pointer write after all records and indexes exist. */
-export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; minRequestMs?: number } = {}): Promise<VendorRun> {
+export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; minRequestMs?: number; publicationDelayMs?: number } = {}): Promise<VendorRun> {
   const started = Date.now();
   const maxProducts = Math.max(1, Math.min(options.maxProducts ?? 40, 500));
   const minRequestMs = options.minRequestMs ?? 500;
@@ -155,7 +155,16 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
         await kv.put(`vendor-index-version:${vendor}:${cursor.version}:${token}`, JSON.stringify(ids));
         cursor.indexIndex = index + 1;
       }
-      if (cursor.indexIndex === entries.length || entries.length === 0) { await kv.put(pointerKey(vendor), cursor.version!); complete = true; }
+      if (cursor.indexIndex === entries.length || entries.length === 0) {
+        cursor.phase = 'ready';
+        cursor.readyAt = Date.now() + (options.publicationDelayMs ?? 65000);
+        await kv.put(cursorKey(vendor), JSON.stringify(cursor));
+      }
+    }
+    if (cursor.phase === 'ready') {
+      await sleep(Math.max(0, (cursor.readyAt ?? 0) - Date.now()));
+      await kv.put(pointerKey(vendor), cursor.version!);
+      complete = true;
     }
     if (complete) await kv.delete(cursorKey(vendor));
     else await kv.put(cursorKey(vendor), JSON.stringify(cursor));

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { VendorId, VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
 import { parseProductPage, runVendor, vendorSources, type VendorSnapshot } from './vendor-ingest';
+const quickRun: typeof runVendor = (vendor, kv, fetcher, options) => runVendor(vendor, kv, fetcher, { ...options, publicationDelayMs: 0 });
 
 class MemoryKv implements Kv {
   values = new Map<string, string>();
@@ -30,7 +31,7 @@ describe('five captured vendor sitemap pipelines', () => {
     const data = fixture(vendor);
     const kv = new MemoryKv();
     const feed = mockFeed(vendor, data);
-    const first = await runVendor(vendor, kv, feed, { maxProducts: 10, minRequestMs: 0 });
+    const first = await quickRun(vendor, kv, feed, { maxProducts: 10, minRequestMs: 0 });
     expect(first).toMatchObject({ vendor, source: 'sitemap', fetched: 1, upserted: 1, complete: true });
     const version = await kv.get(`vendor:${vendor}:__lastgood__`);
     expect(version).toMatch(/^[a-f0-9]{64}$/);
@@ -42,7 +43,7 @@ describe('five captured vendor sitemap pipelines', () => {
     expect(product.url).toBe(data.capturedFrom.productUrl);
     expect(product.priceUsd).toBeGreaterThan(0);
     expect(product.packSizeVerified).toBe(false);
-    const second = await runVendor(vendor, kv, feed, { maxProducts: 10, minRequestMs: 0 });
+    const second = await quickRun(vendor, kv, feed, { maxProducts: 10, minRequestMs: 0 });
     expect(second.upserted).toBe(0);
     expect(await kv.get(`vendor:${vendor}:__lastgood__`)).toBe(version);
   });
@@ -50,10 +51,10 @@ describe('five captured vendor sitemap pipelines', () => {
     const vendor = 'rev';
     const data = fixture(vendor);
     const kv = new MemoryKv();
-    await runVendor(vendor, kv, mockFeed(vendor, data), { minRequestMs: 0 });
+    await quickRun(vendor, kv, mockFeed(vendor, data), { minRequestMs: 0 });
     const version = await kv.get(`vendor:${vendor}:__lastgood__`);
     const failing = mockFeed(vendor, data, url => url === data.capturedFrom.productUrl ? new Response('rate limited', { status: 429, headers: { 'retry-after': '0' } }) : null);
-    await expect(runVendor(vendor, kv, failing, { minRequestMs: 0 })).rejects.toThrow('429');
+    await expect(quickRun(vendor, kv, failing, { minRequestMs: 0 })).rejects.toThrow('429');
     expect(await kv.get(`vendor:${vendor}:__lastgood__`)).toBe(version);
     expect((JSON.parse((await kv.get(`vendor:${vendor}:__snapshot__`))!) as VendorSnapshot).status).toBe('failed');
   });
@@ -64,15 +65,15 @@ describe('five captured vendor sitemap pipelines', () => {
     data.productXml = `<urlset><url><loc>${data.capturedFrom.productUrl}</loc></url><url><loc>${nextUrl}</loc></url></urlset>`;
     const kv = new MemoryKv();
     const feed = mockFeed(vendor, data, url => url === nextUrl ? new Response(data.productHtml.replace('REV-21-2807', 'REV-21-2808')) : null);
-    const partial = await runVendor(vendor, kv, feed, { maxProducts: 1, minRequestMs: 0 });
+    const partial = await quickRun(vendor, kv, feed, { maxProducts: 1, minRequestMs: 0 });
     expect(partial.complete).toBe(false);
     expect(await kv.get(`vendor:${vendor}:__lastgood__`)).toBeNull();
-    let complete = await runVendor(vendor, kv, feed, { maxProducts: 1, minRequestMs: 0 });
+    let complete = await quickRun(vendor, kv, feed, { maxProducts: 1, minRequestMs: 0 });
     let upserted = complete.upserted;
     expect(complete.complete).toBe(false);
     expect(await kv.get(`vendor:${vendor}:__lastgood__`)).toBeNull();
     for (let i = 0; i < 10 && !complete.complete; i++) {
-      complete = await runVendor(vendor, kv, feed, { maxProducts: 1, minRequestMs: 0 });
+      complete = await quickRun(vendor, kv, feed, { maxProducts: 1, minRequestMs: 0 });
       upserted += complete.upserted;
     }
     expect(complete.complete).toBe(true);
@@ -84,7 +85,7 @@ describe('five captured vendor sitemap pipelines', () => {
     const data = fixture(vendor);
     const kv = new MemoryKv();
     const feed = mockFeed(vendor, data);
-    await runVendor(vendor, kv, feed, { minRequestMs: 0 });
+    await quickRun(vendor, kv, feed, { minRequestMs: 0 });
     const oldVersion = await kv.get(`vendor:${vendor}:__lastgood__`);
     data.productHtml = data.productHtml.replace('"price":"11"', '"price":"12"');
     const originalPut = kv.put.bind(kv);
@@ -93,10 +94,10 @@ describe('five captured vendor sitemap pipelines', () => {
       if (failOnce && key.startsWith('vendor-index-version:')) { failOnce = false; throw Error('simulated KV write failure'); }
       await originalPut(key, value);
     };
-    await expect(runVendor(vendor, kv, feed, { minRequestMs: 0 })).rejects.toThrow('simulated KV write failure');
+    await expect(quickRun(vendor, kv, feed, { minRequestMs: 0 })).rejects.toThrow('simulated KV write failure');
     expect(await kv.get(`vendor:${vendor}:__lastgood__`)).toBe(oldVersion);
     expect((JSON.parse((await kv.get(`vendor:${vendor}:__snapshot__`))!) as VendorSnapshot).status).toBe('failed');
-    const resumed = await runVendor(vendor, kv, feed, { minRequestMs: 0 });
+    const resumed = await quickRun(vendor, kv, feed, { minRequestMs: 0 });
     expect(resumed.complete).toBe(true);
     expect(await kv.get(`vendor:${vendor}:__lastgood__`)).not.toBe(oldVersion);
   });
