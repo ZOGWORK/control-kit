@@ -17,4 +17,18 @@ test('mock-backed scan downloads the fixture BOM workbook', async ({ page }) => 
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download Excel BOM' }).click();
   expect((await download).suggestedFilename()).toMatch(/^Simple_FTC_Assembly_BOM_\d{4}-\d{2}-\d{2}\.xlsx$/);
+  await page.evaluate(() => {
+    const original = URL.createObjectURL.bind(URL);
+    let failOnce = true;
+    URL.createObjectURL = blob => {
+      if (failOnce) { failOnce = false; throw new Error('simulated download failure'); }
+      return original(blob);
+    };
+  });
+  await expect(page.getByRole('button', { name: 'Download Excel BOM' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Download Excel BOM' }).click();
+  await expect(page.getByRole('button', { name: 'Download CSV instead' })).toBeVisible();
+  const csvDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download CSV instead' }).click();
+  expect((await csvDownload).suggestedFilename()).toMatch(/^Simple_FTC_Assembly_BOM_\d{4}-\d{2}-\d{2}\.csv$/);
 });
