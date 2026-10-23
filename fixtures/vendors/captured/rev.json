@@ -1,0 +1,10 @@
+{
+  "capturedFrom": {
+    "root": "https://www.revrobotics.com/xmlsitemap.php",
+    "sitemapUrl": "https://www.revrobotics.com/xmlsitemap.php?type=products&page=1",
+    "productUrl": "https://www.revrobotics.com/rev-21-2807/"
+  },
+  "rootXml": "<sitemapindex><sitemap><loc>https://www.revrobotics.com/xmlsitemap.php?type=products&amp;page=1</loc></sitemap></sitemapindex>",
+  "productXml": "<urlset><url><loc>https://www.revrobotics.com/rev-21-2807/</loc></url></urlset>",
+  "productHtml": "<script type=\"application/ld+json\">{\"@context\":\"https://schema.org\",\"@type\":\"Product\",\"name\":\"Vortex Shaft - 8mm\",\"sku\":\"REV-21-2807\",\"category\":\"\",\"offers\":{\"@type\":\"Offer\",\"price\":\"11\",\"priceCurrency\":\"USD\",\"availability\":\"https://schema.org/InStock\"}}</script>"
+}

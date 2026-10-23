@@ -1,0 +1,10 @@
+{
+  "capturedFrom": {
+    "root": "https://www.pitsco.com/sitemap.xml",
+    "sitemapUrl": "https://www.pitsco.com/sitemap_products_1.xml?from=9389443940644&to=9502102651172",
+    "productUrl": "https://www.pitsco.com/products/luma"
+  },
+  "rootXml": "<sitemapindex><sitemap><loc>https://www.pitsco.com/sitemap_products_1.xml?from=9389443940644&amp;to=9502102651172</loc></sitemap></sitemapindex>",
+  "productXml": "<urlset><url><loc>https://www.pitsco.com/products/luma</loc></url></urlset>",
+  "productHtml": "<script type=\"application/ld+json\">{\"@context\":\"https://schema.org\",\"@type\":\"Product\",\"name\":\"LUMA®\",\"sku\":\"92476\",\"category\":\"Project Kits\",\"offers\":{\"@type\":\"Offer\",\"price\":135,\"priceCurrency\":\"USD\",\"availability\":\"https://schema.org/InStock\",\"inventoryLevel\":{\"@type\":\"QuantitativeValue\",\"value\":\"608\"}}}</script>"
+}

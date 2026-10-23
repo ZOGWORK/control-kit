@@ -1,0 +1,10 @@
+{
+  "capturedFrom": {
+    "root": "https://andymark.com/sitemap.xml",
+    "sitemapUrl": "https://andymark.com/sitemap_products_1.xml?from=7987688800428&to=8262932529324",
+    "productUrl": "https://andymark.com/products/andymark-gift-card"
+  },
+  "rootXml": "<sitemapindex><sitemap><loc>https://andymark.com/sitemap_products_1.xml?from=7987688800428&amp;to=8262932529324</loc></sitemap></sitemapindex>",
+  "productXml": "<urlset><url><loc>https://andymark.com/products/andymark-gift-card</loc></url></urlset>",
+  "productHtml": "<script type=\"application/ld+json\">{\"@context\":\"https://schema.org\",\"@type\":\"Product\",\"name\":\"AndyMark Gift Card\",\"sku\":\"GFT-10\",\"category\":\"\",\"offers\":{\"@type\":\"Offer\",\"price\":10,\"priceCurrency\":\"USD\",\"availability\":\"http://schema.org/InStock\"}}</script>"
+}

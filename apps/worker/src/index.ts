@@ -1,8 +1,9 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
 import { scanAssembly, SessionExpiredError } from './scan';
 import type { AssemblyContext, MatchDecision } from '@control-kit/shared';
+import { runVendor } from './vendor-ingest';
 
-export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string }
+export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string }
 type Tokens = { access_token: string; refresh_token: string };
 type Session = { tokens: Tokens; user: { id: string; name: string } };
 type OAuthState = { context?: Record<string, string>; redirectOnshapeUri?: string };
@@ -141,7 +142,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!raw) return null;
       try { return JSON.parse(raw) as MatchDecision; } catch { return null; }
     };
-    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision);
+    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 24));
   }
   if (url.pathname.startsWith('/api/onshape/')) {
     const current = await getSession(request, env);
@@ -173,5 +174,8 @@ export default {
     if (origin === env.WEB_ORIGIN) { result.headers.set('access-control-allow-origin', origin); result.headers.set('access-control-allow-credentials', 'true'); result.headers.set('vary', 'Origin'); }
     return result;
   },
-  scheduled() { /* Vendor ingestion begins in M4. */ },
+  scheduled(event: { cron: string }, env: Env, context: { waitUntil(promise: Promise<unknown>): void }) {
+    const vendor = ({ '0 */6 * * *': 'gobilda', '12 */6 * * *': 'servocity', '24 */6 * * *': 'andymark', '36 */6 * * *': 'rev', '48 */6 * * *': 'pitsco' } as const)[event.cron as '0 */6 * * *'];
+    if (vendor) context.waitUntil(runVendor(vendor, env.VENDOR_CATALOG));
+  },
 };

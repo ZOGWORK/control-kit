@@ -1,0 +1,10 @@
+{
+  "capturedFrom": {
+    "root": "https://www.servocity.com/xmlsitemap.php",
+    "sitemapUrl": "https://www.servocity.com/xmlsitemap.php?type=products&page=1",
+    "productUrl": "https://www.servocity.com/worm-gear-set-28-1-ratio-8mm-rex-bore-worm/"
+  },
+  "rootXml": "<sitemapindex><sitemap><loc>https://www.servocity.com/xmlsitemap.php?type=products&amp;page=1</loc></sitemap></sitemapindex>",
+  "productXml": "<urlset><url><loc>https://www.servocity.com/worm-gear-set-28-1-ratio-8mm-rex-bore-worm/</loc></url></urlset>",
+  "productHtml": "<script type=\"application/ld+json\">{\"@context\":\"https://schema.org\",\"@type\":\"Product\",\"name\":\"Worm Gear Set (28:1 Ratio, 8mm REX® Bore Worm)\",\"sku\":\"3204-0001-0002\",\"category\":\"\",\"offers\":{\"@type\":\"Offer\",\"price\":\"34.99\",\"priceCurrency\":\"USD\",\"availability\":\"https://schema.org/InStock\"}}</script>"
+}

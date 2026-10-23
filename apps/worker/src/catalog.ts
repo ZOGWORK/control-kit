@@ -1,5 +1,6 @@
 import { findBestMatch, normalizeName, normalizeSku, recalculatePurchasing, skuCandidates, type MatchDecision, type ScanResult, type VendorId, type VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
+import type { VendorSnapshot } from './vendor-ingest';
 
 const vendors: VendorId[] = ['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'];
 const memory = new Map<string, { value: string | null; expires: number }>();
@@ -48,18 +49,25 @@ function isVendorRecord(value: unknown): value is VendorRecord {
     && typeof record.category === 'string' && typeof record.updatedAt === 'string' && ['feed', 'sitemap', 'scrape'].includes(record.source ?? '');
 }
 
-export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null> = async () => null, signal?: AbortSignal) {
+export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null> = async () => null, signal?: AbortSignal, staleHours = 24) {
   const cache = new Map<string, Promise<string | null>>();
+  const versions = new Map(await Promise.all(vendors.map(async vendor => [vendor, await read(kv, `vendor:${vendor}:__lastgood__`, cache, signal)] as const)));
+  const recordKey = (vendor: VendorId, sku: string) => versions.get(vendor) ? `vendor-version:${vendor}:${versions.get(vendor)}:${sku}` : `vendor:${vendor}:${sku}`;
   const jobs = result.lines.map(async line => {
     if (signal?.aborted) throw signal.reason;
     const keys: string[] = [];
-    for (const sku of skuCandidates(line.name, line.partNumber)) for (const vendor of vendors) keys.push(`vendor:${vendor}:${normalizeSku(sku, vendor)}`);
+    for (const sku of skuCandidates(line.name, line.partNumber)) for (const vendor of vendors) keys.push(recordKey(vendor, normalizeSku(sku, vendor)));
     const tokens = [...new Set(normalizeName(line.name).split(' ').filter(token => token.length > 2))].slice(0, 4);
     for (const token of tokens) {
-      const value = await read(kv, `vendor-index:${token}`, cache, signal);
-      if (value) {
-        try { for (const id of JSON.parse(value) as string[]) if (/^(gobilda|servocity|andymark|rev|pitsco):[A-Z0-9]+$/.test(id)) keys.push(`vendor:${id}`); }
-        catch { /* A malformed index is a cache miss, not a failed scan. */ }
+      for (const vendor of vendors) {
+        const indexKey = versions.get(vendor) ? `vendor-index-version:${vendor}:${versions.get(vendor)}:${token}` : `vendor-index:${token}`;
+        const value = await read(kv, indexKey, cache, signal);
+        if (value) {
+          try { for (const id of JSON.parse(value) as string[]) {
+            const [candidateVendor, sku] = id.split(':');
+            if (candidateVendor === vendor && /^[A-Z0-9]+$/.test(sku)) keys.push(recordKey(vendor, sku));
+          } } catch { /* A malformed index is a cache miss, not a failed scan. */ }
+        }
       }
     }
     const uniqueKeys = [...new Set(keys)];
@@ -85,5 +93,19 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
   });
   // KV is not a network scrape, but keep in-flight gets bounded at 20 per batch and results deterministic.
   await Promise.all(jobs);
+  const used = [...new Set(result.lines.map(line => line.vendor?.vendorId).filter((id): id is VendorId => Boolean(id)))];
+  const snapshots = await Promise.all(used.map(async vendor => {
+    const value = await read(kv, `vendor:${vendor}:__snapshot__`, cache, signal);
+    if (!value) return null;
+    try { return JSON.parse(value) as VendorSnapshot; } catch { return null; }
+  }));
+  const matchingSnapshot = (vendor: VendorId, index: number) => snapshots[index]?.version === versions.get(vendor) ? snapshots[index] : null;
+  const timestamps = used.map((vendor, index) => matchingSnapshot(vendor, index)?.updatedAt ?? result.lines.find(line => line.vendor?.vendorId === vendor)?.vendor?.updatedAt ?? null).filter((value): value is string => Boolean(value));
+  result.vendorDataUpdatedAt = timestamps.length ? timestamps.sort()[0] : null;
+  result.stats.staleVendorData = used.some((vendor, index) => {
+    const snapshot = matchingSnapshot(vendor, index);
+    const updatedAt = snapshot?.updatedAt ?? result.lines.find(line => line.vendor?.vendorId === vendor)?.vendor?.updatedAt;
+    return Boolean(snapshots[index] && !snapshot) || snapshot?.status === 'failed' || !updatedAt || !Number.isFinite(Date.parse(updatedAt)) || Date.now() - Date.parse(updatedAt) > staleHours * 3600000;
+  });
   return recalculatePurchasing(result);
 }

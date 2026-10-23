@@ -32,7 +32,7 @@ export function massPath(line: BomLine, version: string) {
   return `/api/${version}/partstudios/d/${encodeURIComponent(line.documentId)}/${source}/e/${encodeURIComponent(line.elementId)}/massproperties${query}`;
 }
 
-export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>): Response {
+export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 24): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -97,7 +97,7 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         }
         result.missingMetadata = [...result.lines, ...result.suppressed].filter(line => line.missingMetadataReason !== null);
         emit({ type: 'progress', stage: 'Matching vendors…', current: 0, total: result.lines.length, instances: count });
-        await enrichScan(result, catalog, getDecision, request.signal);
+        await enrichScan(result, catalog, getDecision, request.signal, staleHours);
         emit({ type: 'progress', stage: 'Matching vendors…', current: result.lines.length, total: result.lines.length, instances: count });
         emit({ type: 'result', result });
       } catch (error) {
