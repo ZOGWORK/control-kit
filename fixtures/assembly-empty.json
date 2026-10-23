@@ -1,1 +1,8 @@
-{"rootAssembly":{"instances":[]},"subAssemblies":[],"parts":[]}
+{
+  "rootAssembly": {
+    "name": "Empty Assembly",
+    "instances": []
+  },
+  "subAssemblies": [],
+  "parts": []
+}

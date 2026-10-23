@@ -1,1 +1,116 @@
-{"rootAssembly":{"instances":[]},"subAssemblies":[],"parts":[]}
+{
+  "rootAssembly": {
+    "name": "Simple FTC Assembly",
+    "instances": [
+      {
+        "id": "screw-0",
+        "name": "M3 Screw <1>",
+        "type": "Part",
+        "documentId": "doc1",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-1",
+        "name": "M3 Screw <2>",
+        "type": "Part",
+        "documentId": "doc1",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-2",
+        "name": "M3 Screw <3>",
+        "type": "Part",
+        "documentId": "doc1",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "screw-3",
+        "name": "M3 Screw <4>",
+        "type": "Part",
+        "documentId": "doc1",
+        "elementId": "screws",
+        "partId": "screw-m3"
+      },
+      {
+        "id": "print-1",
+        "name": "Custom Printed Sensor Mount <1>",
+        "type": "Part",
+        "documentId": "doc1",
+        "elementId": "prints",
+        "partId": "sensor-mount"
+      },
+      {
+        "id": "suppressed-1",
+        "name": "Spare Gear <1>",
+        "type": "Part",
+        "documentId": "doc1",
+        "elementId": "gears",
+        "partId": "spare-gear",
+        "suppressed": true
+      },
+      {
+        "id": "module-left",
+        "name": "Left Module <1>",
+        "type": "Assembly",
+        "documentId": "doc1",
+        "elementId": "module"
+      },
+      {
+        "id": "module-right",
+        "name": "Right Module <1>",
+        "type": "Assembly",
+        "documentId": "doc1",
+        "elementId": "module"
+      }
+    ]
+  },
+  "subAssemblies": [
+    {
+      "documentId": "doc1",
+      "elementId": "module",
+      "instances": [
+        {
+          "id": "motor",
+          "name": "Motor <1>",
+          "type": "Part",
+          "documentId": "doc1",
+          "elementId": "motors",
+          "partId": "motor-5203"
+        },
+        {
+          "id": "wheel",
+          "name": "Wheel <1>",
+          "type": "Part",
+          "documentId": "doc1",
+          "elementId": "wheels",
+          "partId": "wheel-96"
+        },
+        {
+          "id": "bearing",
+          "name": "Bearing <1>",
+          "type": "Part",
+          "documentId": "doc1",
+          "elementId": "bearings",
+          "partId": "bearing-8"
+        }
+      ]
+    }
+  ],
+  "parts": [
+    {
+      "documentId": "doc1",
+      "elementId": "screws",
+      "partId": "screw-m3",
+      "name": "M3 Screw"
+    },
+    {
+      "documentId": "doc1",
+      "elementId": "prints",
+      "partId": "sensor-mount",
+      "name": "Custom Printed Sensor Mount"
+    }
+  ]
+}

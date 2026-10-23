@@ -4,6 +4,7 @@ compatibility_date = "2026-10-22"
 
 [vars]
 ONSHAPE_API_BASE = "https://cad.onshape.com"
+ONSHAPE_API_VERSION = "v9"
 ONSHAPE_OAUTH_BASE = "https://oauth.onshape.com"
 WEB_ORIGIN = "https://control-kit.pages.dev"
 ONSHAPE_OAUTH_REDIRECT_URI = "https://control-kit.control-kit-worker.workers.dev/oauth/redirect"

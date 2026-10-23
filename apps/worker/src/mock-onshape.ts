@@ -1,8 +1,12 @@
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+
+const fixtures = Object.fromEntries(['simple', 'robot', 'empty'].map((key, index) => [key, JSON.parse(readFileSync(new URL(`../../../fixtures/assembly-${['simple', 'ftc-robot', 'empty'][index]}.json`, import.meta.url), 'utf8'))]));
 
 export function createMockOnshape() {
   let once = false;
   let apiRequests = 0;
+  let rateLimitRemaining = 0;
   async function handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const json = (status: number, value: unknown) => Response.json(value, { status });
@@ -21,6 +25,22 @@ export function createMockOnshape() {
       return json(400, { error: 'invalid_grant' });
     }
     if (url.pathname === '/api/users/sessioninfo') { apiRequests++; return json(200, { id: 'mock-user', name: 'FTC Mentor' }); }
+    const assembly = url.pathname.match(/^\/api\/v\d+\/assemblies\/d\/(simple|robot|empty)\/[wvm]\/[^/]+\/e\/[^/]+$/);
+    if (assembly) {
+      apiRequests++;
+      if (rateLimitRemaining-- > 0) return json(429, { error: 'rate_limited' });
+      if (url.searchParams.get('excludeSuppressed') !== 'false') return json(400, { error: 'excludeSuppressed must be false' });
+      return json(200, fixtures[assembly[1]]);
+    }
+    const mass = url.pathname.match(/^\/api\/v\d+\/partstudios\/d\/[^/]+\/[wvm]\/[^/]+\/e\/([^/]+)\/massproperties$/);
+    if (mass) {
+      apiRequests++;
+      if (mass[1] === 'gears') return json(503, { error: 'fixture_metadata_failure' });
+      const ids: Record<string, string> = { screws: 'screw-m3', motors: 'motor-5203', wheels: 'wheel-96', bearings: 'bearing-8' };
+      if (mass[1] === 'prints') return json(200, { bodies: { 'sensor-mount': { mass: [0.012], material: 'PLA' }, 'intake-guide': { mass: [0.018], material: 'PETG' } } });
+      const id = ids[mass[1]];
+      return id ? json(200, { bodies: { [id]: { mass: [0.012], material: 'Steel' } } }) : json(404, { error: 'not_found' });
+    }
     if (url.pathname.startsWith('/api/')) {
       apiRequests++;
       if (url.searchParams.has('always401')) return json(401, { error: 'expired' });
@@ -36,7 +56,7 @@ export function createMockOnshape() {
     response.writeHead(result.status, Object.fromEntries(result.headers));
     response.end(Buffer.from(await result.arrayBuffer()));
   });
-  return { server, handle, get apiRequests() { return apiRequests; } };
+  return { server, handle, setRateLimit(count: number) { rateLimitRemaining = count; }, get apiRequests() { return apiRequests; } };
 }
 
 if (process.argv[1]?.endsWith('mock-onshape.ts')) {

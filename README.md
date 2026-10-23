@@ -24,7 +24,9 @@ Run `pnpm --filter @control-kit/worker mock` to start mock Onshape on `http://lo
 pnpm --filter @control-kit/worker exec wrangler dev --port 8787 --var WEB_ORIGIN:http://localhost:5173 --var ONSHAPE_API_BASE:http://localhost:8788 --var ONSHAPE_OAUTH_BASE:http://localhost:8788 --var ONSHAPE_OAUTH_REDIRECT_URI:http://localhost:8787/oauth/redirect
 ```
 
-Open `http://localhost:5173/?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1`. Tests use the same mock handler in process and make zero live Onshape calls.
+Open `http://localhost:5173/?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1` and click **Scan Assembly**. Substitute `robot` or `empty` for `simple` to test the other fixtures. Tests use the same mock handler in process and make zero live Onshape calls. M2 pins `ONSHAPE_API_VERSION=v9` for the documented assembly and Part Studio calls; real-response validation remains pending.
+
+The owner-only actions and missing inputs are listed in [MORNING.md](MORNING.md). No secret belongs in chat or Git.
 
 ## Owner's Onshape Developer Portal step
 
