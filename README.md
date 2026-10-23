@@ -18,7 +18,13 @@ For local development, run `pnpm --filter @control-kit/web dev` and `pnpm --filt
 
 ## M1 mock OAuth
 
-Run `pnpm --filter @control-kit/worker mock` to start mock Onshape on `http://localhost:8788`. In separate terminals, run Worker and web dev commands above. Use untracked `apps/worker/.dev.vars` for `ONSHAPE_OAUTH_CLIENT_ID=mock-id`, `ONSHAPE_OAUTH_CLIENT_SECRET=mock-secret`, `ONSHAPE_OAUTH_REDIRECT_URI=http://localhost:8787/oauth/redirect`, and a base64-encoded random 32-byte `SESSION_ENCRYPTION_KEY`. For the mock, set `ONSHAPE_API_BASE` and `ONSHAPE_OAUTH_BASE` to `http://localhost:8788` in local Wrangler configuration. Open `http://localhost:5173/?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1`. Tests use the same mock handler in process and make zero live Onshape calls.
+Run `pnpm --filter @control-kit/worker mock` to start mock Onshape on `http://localhost:8788`. Use untracked `apps/worker/.dev.vars` for `ONSHAPE_OAUTH_CLIENT_ID=mock-id`, `ONSHAPE_OAUTH_CLIENT_SECRET=mock-secret`, `ONSHAPE_OAUTH_REDIRECT_URI=http://localhost:8787/oauth/redirect`, and a base64-encoded random 32-byte `SESSION_ENCRYPTION_KEY`. In separate terminals, run the web dev command above and start the Worker with these local overrides (from the repository root):
+
+```sh
+pnpm --filter @control-kit/worker exec wrangler dev --port 8787 --var WEB_ORIGIN:http://localhost:5173 --var ONSHAPE_API_BASE:http://localhost:8788 --var ONSHAPE_OAUTH_BASE:http://localhost:8788 --var ONSHAPE_OAUTH_REDIRECT_URI:http://localhost:8787/oauth/redirect
+```
+
+Open `http://localhost:5173/?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1`. Tests use the same mock handler in process and make zero live Onshape calls.
 
 ## Owner's Onshape Developer Portal step
 

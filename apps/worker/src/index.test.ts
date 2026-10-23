@@ -55,6 +55,21 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     const start = await worker.fetch(new Request('http://localhost:8787/oauth/start?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1'), config);
     expect(start.status).toBe(503);
   });
+  it('permits only the configured web origin for CORS, including preflight and unauthorized replies', async () => {
+    const origin = env.WEB_ORIGIN;
+    const preflight = await worker.fetch(new Request('http://localhost:8787/api/session', { method: 'OPTIONS', headers: { origin, 'access-control-request-method': 'GET' } }), env);
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-origin')).toBe(origin);
+    expect(preflight.headers.get('access-control-allow-credentials')).toBe('true');
+    const session = await worker.fetch(new Request('http://localhost:8787/api/session', { headers: { origin } }), env);
+    expect(session.status).toBe(401);
+    expect(session.headers.get('access-control-allow-origin')).toBe(origin);
+    expect(session.headers.get('access-control-allow-credentials')).toBe('true');
+    const foreign = await worker.fetch(new Request('http://localhost:8787/api/session', { headers: { origin: 'https://foreign.example' } }), env);
+    expect(foreign.headers.get('access-control-allow-origin')).toBeNull();
+    const foreignPreflight = await worker.fetch(new Request('http://localhost:8787/api/session', { method: 'OPTIONS', headers: { origin: 'https://foreign.example' } }), env);
+    expect(foreignPreflight.headers.get('access-control-allow-origin')).toBeNull();
+  });
   it('clears a session after a failed refresh', async () => {
     const start = await call('/oauth/start?documentId=doc2&workspaceOrVersion=v&workspaceOrVersionId=version2&elementId=elem2');
     const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
