@@ -38,4 +38,26 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     expect((await call('/oauth/start')).status).toBe(400);
     expect((await call('/api/onshape/test')).status).toBe(401);
   });
+  it('shows setup pending without OAuth credentials', async () => {
+    const config = { ...env, ONSHAPE_OAUTH_CLIENT_ID: '', ONSHAPE_OAUTH_CLIENT_SECRET: '' };
+    const status = await worker.fetch(new Request('http://localhost:8787/api/session'), config);
+    expect(await status.json()).toEqual({ connected: false, setupPending: true });
+    const start = await worker.fetch(new Request('http://localhost:8787/oauth/start?documentId=doc1&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1'), config);
+    expect(start.status).toBe(503);
+  });
+  it('clears a session after a failed refresh', async () => {
+    const start = await call('/oauth/start?documentId=doc2&workspaceOrVersion=v&workspaceOrVersionId=version2&elementId=elem2');
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const callback = await call(`/oauth/redirect?code=mock-code&state=${state}`);
+    const cookie = callback.headers.get('set-cookie')!.split(';')[0];
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname === '/oauth/token' && request.method === 'POST') return Response.json({ error: 'invalid_grant' }, { status: 400 });
+      return mock.handle(request);
+    });
+    const response = await call('/api/onshape/test?always401=1', cookie);
+    expect(response.status).toBe(401);
+    expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+    expect((await call('/api/session', cookie)).status).toBe(401);
+  });
 });

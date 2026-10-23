@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 
-type Session = { connected: boolean; user?: { id: string; name: string } };
+type Session = { connected: boolean; setupPending?: boolean; user?: { id: string; name: string } };
 const context = new URLSearchParams(location.search);
 const required = ['documentId', 'workspaceOrVersion', 'workspaceOrVersionId', 'elementId'];
 const workerUrl = import.meta.env.VITE_WORKER_URL ?? '';
@@ -22,7 +22,8 @@ function App() {
     <h1>Control Kit</h1>
     {error && <p role="alert">{error}</p>}
     {!session && <p>Checking Onshape connection…</p>}
-    {session && !session.connected && <><p>Connect Onshape to prepare your assembly BOM.</p><a className="button" href={connect}>Connect Onshape</a></>}
+    {session?.setupPending && <p>Onshape connection setup is in progress. Return after the OAuth application is linked.</p>}
+    {session && !session.connected && !session.setupPending && <><p>Connect Onshape to prepare your assembly BOM.</p><a className="button" href={connect}>Connect Onshape</a></>}
     {session?.connected && <><p>Connected as {session.user?.name}.</p><p>Assembly {context.get('elementId')} is ready. Scanning arrives in M2.</p></>}
   </main>;
 }

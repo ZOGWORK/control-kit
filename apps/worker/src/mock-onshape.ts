@@ -13,14 +13,17 @@ export function createMockOnshape() {
       return Response.redirect(destination, 302);
     }
     if (url.pathname === '/oauth/token' && request.method === 'POST') {
-      const grant = new URLSearchParams(await request.text()).get('grant_type');
+      const params = new URLSearchParams(await request.text());
+      const grant = params.get('grant_type');
       if (grant === 'authorization_code') return json(200, { access_token: 'mock-access', refresh_token: 'mock-refresh', expires_in: 3600 });
+      if (grant === 'refresh_token' && params.get('refresh_token') === 'reject-refresh') return json(400, { error: 'invalid_grant' });
       if (grant === 'refresh_token') return json(200, { access_token: 'mock-refreshed', refresh_token: 'mock-refresh-2', expires_in: 3600 });
       return json(400, { error: 'invalid_grant' });
     }
     if (url.pathname === '/api/users/sessioninfo') { apiRequests++; return json(200, { id: 'mock-user', name: 'FTC Mentor' }); }
     if (url.pathname.startsWith('/api/')) {
       apiRequests++;
+      if (url.searchParams.has('always401')) return json(401, { error: 'expired' });
       if (url.searchParams.has('failOnce') && !once) { once = true; return json(401, { error: 'expired' }); }
       return json(200, { mock: true, path: url.pathname });
     }

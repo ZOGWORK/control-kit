@@ -45,6 +45,7 @@ async function api(env: Env, path: string, accessToken: string) { return fetch(`
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/oauth/start') {
+    if (!env.ONSHAPE_OAUTH_CLIENT_ID || !env.ONSHAPE_OAUTH_CLIENT_SECRET) return reply({ error: 'Control Kit OAuth setup is pending.' }, 503);
     const context = Object.fromEntries(['documentId', 'workspaceOrVersion', 'workspaceOrVersionId', 'elementId'].map(k => [k, url.searchParams.get(k)]));
     if (['documentId', 'workspaceOrVersionId', 'elementId'].some(k => !context[k] || !/^[\w-]{2,128}$/.test(context[k]!))) return reply({ error: 'Open Control Kit from an Assembly tab.' }, 400);
     if (!['w', 'v', 'm'].includes(context.workspaceOrVersion!)) return reply({ error: 'Invalid Onshape workspace or version context.' }, 400);
@@ -73,6 +74,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 302, headers: { location: destination.toString(), 'set-cookie': `${cookieName}=${id}; ${cookieFlags}` } });
   }
   if (url.pathname === '/api/session') {
+    if (!env.ONSHAPE_OAUTH_CLIENT_ID || !env.ONSHAPE_OAUTH_CLIENT_SECRET) return reply({ connected: false, setupPending: true });
     const current = await getSession(request, env);
     if (!current) return reply({ connected: false }, 401);
     await save(env, current.id, current.data);
