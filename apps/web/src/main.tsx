@@ -26,7 +26,7 @@ function App() {
   const [pendingSettings, setPendingSettings] = useState(false);
   const [pendingOverride, setPendingOverride] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [printFailures, setPrintFailures] = useState<{ name: string; reason: string }[]>([]);
+  const [printFailures, setPrintFailures] = useState<{ name: string; reason: string; url: string }[]>([]);
   useEffect(() => {
     fetch(`${workerUrl}/api/session`, { credentials: 'include' })
       .then(async response => response.ok ? await response.json() as Session : { connected: false })
@@ -71,7 +71,7 @@ function App() {
             | { type: 'error'; message: string };
           if (event.type === 'progress') setProgress({ ...event });
           if (event.type === 'rate-limit') setProgress(previous => previous && { ...previous, retry: `Onshape rate limit — retrying in ${Math.ceil(event.retryInMs / 1000)}s…` });
-          if (event.type === 'result') { setResult(event.result); setActiveTab('bom'); }
+          if (event.type === 'result') { setResult(event.result); setPrintFailures([]); setActiveTab('bom'); }
           if (event.type === 'session-expired') { setSession({ connected: false }); throw new Error('Your Onshape connection expired. Reconnect and retry.'); }
           if (event.type === 'error') throw new Error(event.message);
         }
@@ -112,26 +112,39 @@ function App() {
   async function override(line: BomLine, classification: ClassificationOverride | null) {
     if (!result || pendingOverride) return;
     const before = result;
+    const generation = scanGeneration.current;
     setPendingOverride(true);
     setResult(previous => {
       if (!previous) return previous;
       const lines = previous.lines.map(item => item.bomLineKey === line.bomLineKey ? classifyLine({ ...item }, settings.teamNumber, classification) : item);
-      return { ...previous, lines, stats: { ...previous.stats, printedLines: lines.filter(item => item.classification === 'printed').length } };
+      return classifyScan({ ...previous, lines, stats: { ...previous.stats } }, settings,
+        Object.fromEntries(lines.filter(item => item.manualClassification).map(item => [item.bomLineKey, item.manualClassification!])));
     });
     try {
       const response = await fetch(`${workerUrl}/api/classification/override`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ documentId: result.documentId, lineKey: line.bomLineKey, classification }) });
       if (!response.ok) throw Error();
-    } catch { setResult(before); setError('Could not save the type override. Try again.'); }
+    } catch {
+      if (scanGeneration.current === generation) setResult(current => {
+        if (!current || current.scanId !== before.scanId) return current;
+        const oldLine = before.lines.find(item => item.bomLineKey === line.bomLineKey);
+        const active = current.lines.find(item => item.bomLineKey === line.bomLineKey);
+        if (!oldLine || !active || active.manualClassification !== classification) return current;
+        const lines = current.lines.map(item => item.bomLineKey === line.bomLineKey ? oldLine : item);
+        return classifyScan({ ...current, lines, stats: { ...current.stats } }, settings,
+          Object.fromEntries(lines.filter(item => item.manualClassification).map(item => [item.bomLineKey, item.manualClassification!])));
+      });
+      setError('Could not save the type override. Try again.');
+    }
     finally { setPendingOverride(false); }
   }
   async function downloadPrints() {
-    if (!result || downloading) return;
+    if (!result?.scanId || downloading) return;
     setDownloading(true); setPrintFailures([]);
     try {
-      const response = await fetch(`${workerUrl}/api/prints/zip?documentId=${encodeURIComponent(result.documentId)}`, { credentials: 'include' });
+      const response = await fetch(`${workerUrl}/api/prints/zip?documentId=${encodeURIComponent(result.documentId)}&scanId=${encodeURIComponent(result.scanId)}`, { credentials: 'include' });
       if (!response.ok) throw Error(response.status === 409 ? 'Scan this assembly again before exporting STLs.' : 'STL export failed. Try again.');
-      const failures = JSON.parse(response.headers.get('x-control-kit-failures') ?? '[]') as { name: string; reason: string }[];
+      const failures = JSON.parse(decodeURIComponent(response.headers.get('x-control-kit-failures') ?? '%5B%5D')) as { name: string; reason: string; url: string }[];
       setPrintFailures(failures);
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
@@ -159,8 +172,8 @@ function App() {
       {progress && <section className="card" aria-live="polite"><div className="row"><strong>{progress.stage}</strong><button className="secondary" onClick={() => abort.current?.abort()}>Cancel</button></div>
         <progress value={progress.current} max={Math.max(progress.total, 1)} /><p>{progress.instances} instances found</p>{progress.retry && <p>{progress.retry}</p>}</section>}
       {result && !progress && <><section className="stats"><div><strong>{result.stats.uniqueLines}</strong><span>Unique lines</span></div><div><strong>{result.stats.totalInstances}</strong><span>Active instances</span></div><div><strong>{result.stats.totalCostUsd === null ? '—' : `$${result.stats.totalCostUsd.toFixed(2)}`}</strong><span>Known purchasing total</span></div><div><strong>{result.stats.printedLines}</strong><span>Printed lines</span></div><div><strong>{result.suppressed.reduce((n, line) => n + line.qty, 0)}</strong><span>Suppressed</span></div><div><strong>{result.missingMetadata.length}</strong><span>Missing metadata</span></div></section>
-        <div className="row"><button onClick={downloadPrints} disabled={downloading || result.stats.printedLines === 0}>{downloading ? 'Preparing STL zip…' : 'Download printed parts STL zip'}</button><span className="muted">Includes printed lines and a README with source links and failures.</span></div>
-        {printFailures.length > 0 && <div className="alert" role="status"><strong>STL export failed for some parts</strong><ul>{printFailures.map(item => <li key={`${item.name}:${item.reason}`}>{item.name}: {item.reason}</li>)}</ul><p>See README.txt in the zip for the full list.</p></div>}
+        <div className="row"><button onClick={downloadPrints} disabled={downloading || !result.scanId || result.stats.printedLines === 0}>{downloading ? 'Preparing STL zip…' : 'Download printed parts STL zip'}</button><span className="muted">Includes printed lines and a README with source links and failures.</span></div>
+        {printFailures.length > 0 && <div className="alert" role="status"><strong>STL export failed for some parts</strong><ul>{printFailures.map(item => <li key={`${item.name}:${item.reason}`}>{item.name}: {item.reason} <a href={item.url} target="_blank" rel="noreferrer">Open in Onshape</a></li>)}</ul><p>See README.txt in the zip for the full list.</p></div>}
         {result.vendorDataUpdatedAt && <p className="muted">Vendor data checked {new Date(result.vendorDataUpdatedAt).toLocaleString()}</p>}
         {result.stats.staleVendorData && <div className="alert" role="status">Some used vendor data is stale or its latest refresh failed. Check prices and stock before ordering.</div>}
         {result.stats.totalInstances === 0 && <p>This assembly has no parts yet.</p>}

@@ -51,5 +51,10 @@ describe('deterministic print classification', () => {
     classifyScan(result, { teamNumber: null }, { [result.lines[0].bomLineKey]: 'printed' });
     expect(result.lines[0].manualClassification).toBe('printed');
     expect(result.stats.printedLines).toBe(1);
+    result.missingMetadata = [result.lines[0]];
+    const changed = { ...result, lines: result.lines.map(item => ({ ...item })), missingMetadata: [...result.missingMetadata], stats: { ...result.stats } };
+    classifyScan(changed, { teamNumber: null }, { [result.lines[0].bomLineKey]: 'commercial' });
+    expect(changed.missingMetadata[0]).toBe(changed.lines[0]);
+    expect(changed.missingMetadata[0].classification).toBe('commercial');
   });
 });

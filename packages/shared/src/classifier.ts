@@ -33,5 +33,6 @@ export function classifyLine(line: BomLine, teamNumber: string | null, override:
 export function classifyScan(result: ScanResult, settings: UserSettings, overrides: ClassificationOverrides): ScanResult {
   for (const line of result.lines) classifyLine(line, settings.teamNumber, overrides[line.bomLineKey] ?? null);
   result.stats.printedLines = result.lines.filter(line => line.classification === 'printed').length;
+  result.missingMetadata = result.missingMetadata.map(item => result.lines.find(line => line.bomLineKey === item.bomLineKey) ?? item);
   return result;
 }

@@ -64,4 +64,17 @@ describe('STL zip from fixture B', () => {
     expect(zip.failures).toEqual(expect.arrayContaining([expect.objectContaining({ name: expect.stringContaining('5203 Motor'), reason: 'STL export timed out' })]));
     expect(Object.keys(unzipSync(zip.bytes)).length).toBeGreaterThan(1);
   });
+  it('passes a configured part to both direct and translation export paths', async () => {
+    const result = aggregateAssembly(fixture, context, 'FTC Competition Robot');
+    const guide = result.lines.find(line => /Intake Guide/i.test(line.name))!;
+    guide.classification = 'printed'; guide.configuration = 'size=large;angle=30';
+    const calls: { path: string; body?: string }[] = [];
+    const fetcher = async (path: string, init: RequestInit) => {
+      calls.push({ path, body: init.body as string | undefined });
+      return new Response('unsupported', { status: 404 });
+    };
+    await buildStlZip(result, 'v9', fetcher, new AbortController().signal);
+    expect(calls[0].path).toContain('configuration=size%3Dlarge%3Bangle%3D30');
+    expect(JSON.parse(calls[1].body!).configuration).toBe('size=large;angle=30');
+  });
 });

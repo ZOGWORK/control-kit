@@ -34,7 +34,7 @@ export async function buildStlZip(result: ScanResult, apiVersion: string, fetchO
   const root = `${result.assemblyName.replace(/[^a-zA-Z0-9-_ ]/g, '').trim().replace(/ +/g, '_').slice(0, 80) || 'Assembly'}_prints`;
   const files: Record<string, Uint8Array> = {};
   const successes: { path: string; url: string }[] = [];
-  const failures: { name: string; reason: string }[] = [];
+  const failures: { name: string; reason: string; url: string }[] = [];
   let index = 0;
   const pollMs = options.pollMs ?? 2000;
   const timeoutMs = options.timeoutMs ?? 60000;
@@ -47,14 +47,15 @@ export async function buildStlZip(result: ScanResult, apiVersion: string, fetchO
     try {
       const partId = encode(line.partId);
       // Onshape Parts/getPartSTL: https://onshape-public.github.io/docs/api-adv/parts/
-      const direct = await fetchOnshape(`/api/${apiVersion}/parts/${partSource}/partid/${partId}/stl?mode=binary&grouping=true&scale=1&units=mm`, { signal });
+      const configuration = line.configuration ? `&configuration=${encode(line.configuration)}` : '';
+      const direct = await fetchOnshape(`/api/${apiVersion}/parts/${partSource}/partid/${partId}/stl?mode=binary&grouping=true&scale=1&units=mm${configuration}`, { signal });
       if (direct.ok) {
         const bytes = new Uint8Array(await direct.arrayBuffer());
         if (bytes.length) return bytes;
       }
       // Onshape PartStudios/createPartStudioTranslation: https://onshape-public.github.io/docs/api-adv/partstudios/
       const start = await fetchOnshape(`/api/${apiVersion}/partstudios/${partSource}/translations`, { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ formatName: 'STL', storeInDocument: false, partIds: line.partId, translate: true }), signal });
+        body: JSON.stringify({ formatName: 'STL', storeInDocument: false, partIds: line.partId, translate: true, ...(line.configuration ? { configuration: line.configuration } : {}) }), signal });
       if (!start.ok) throw Error(`STL translation request failed (HTTP ${start.status})`);
       const started = await start.json() as { id?: string; translationId?: string };
       const translationId = started.id ?? started.translationId;
@@ -90,7 +91,7 @@ export async function buildStlZip(result: ScanResult, apiVersion: string, fetchO
         for (let suffix = 2; files[path]; suffix++) path = `${root}/${folder}/${filename(line).replace(/\.stl$/, `_${suffix}.stl`)}`;
         files[path] = bytes;
         successes.push({ path, url: line.partStudioUrl });
-      } catch (error) { failures.push({ name: line.name, reason: reason(error) }); }
+      } catch (error) { failures.push({ name: line.name, reason: reason(error), url: line.partStudioUrl }); }
     }
   }
   await Promise.all(Array.from({ length: Math.min(3, printed.length) }, () => worker()));
@@ -98,7 +99,7 @@ export async function buildStlZip(result: ScanResult, apiVersion: string, fetchO
   failures.sort((a, b) => a.name.localeCompare(b.name));
   const readme = [`Assembly: ${result.assemblyName}`, `Scan date: ${result.scannedAt}`, `Zip date: ${(options.now ?? new Date()).toISOString()}`, '',
     'STL files and source links:', ...successes.map(item => `${item.path}\n  ${item.url}`), '', 'FAILED parts:',
-    ...(failures.length ? failures.map(item => `${item.name}: ${item.reason}`) : ['None'])].join('\n');
+    ...(failures.length ? failures.map(item => `${item.name}: ${item.reason}\n  ${item.url}`) : ['None'])].join('\n');
   files[`${root}/README.txt`] = strToU8(readme);
   return { bytes: zipSync(files, { level: 0 }), filename: `${root}.zip`, failures };
 }

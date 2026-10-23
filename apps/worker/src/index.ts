@@ -1,6 +1,6 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
-import { scanAssembly, SessionExpiredError } from './scan';
-import { classifyScan, type AssemblyContext, type ClassificationOverrides, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from './scan';
+import { applyMatchDecision, classifyScan, type AssemblyContext, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { buildStlZip } from './stl-zip';
 
@@ -14,11 +14,12 @@ const cookieFlags = 'HttpOnly; Secure; SameSite=None; Path=/';
 const encode = new TextEncoder();
 const decode = new TextDecoder();
 const random = () => crypto.randomUUID();
-async function matchDecisionKey(userId: string, documentId: string, lineKey: string) {
+async function lineKeyDigest(lineKey: string) {
   const digest = await crypto.subtle.digest('SHA-256', encode.encode(lineKey));
-  const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-  return `match-decision:${userId}:${documentId}:${hash}`;
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
+async function matchDecisionKey(userId: string, documentId: string, lineKey: string) { return `match-decision:${userId}:${documentId}:${await lineKeyDigest(lineKey)}`; }
+async function classificationKey(userId: string, documentId: string, lineKey: string) { return `override:${userId}:${documentId}:${await lineKeyDigest(lineKey)}`; }
 const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 const b64 = (data: Uint8Array) => btoa(String.fromCharCode(...data));
 const bytes = (data: string) => Uint8Array.from(atob(data), x => x.charCodeAt(0));
@@ -137,11 +138,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
     const body = await request.json() as { documentId?: string; lineKey?: string; classification?: string | null };
     if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.lineKey || body.lineKey.length > 16384 || ![null, 'commercial', 'printed'].includes(body.classification ?? null)) return reply({ error: 'Invalid classification override.' }, 400);
-    const key = `overrides:${current.data.user.id}:${body.documentId}`;
-    const overrides = JSON.parse(await env.APP_STATE.get(key) ?? '{}') as ClassificationOverrides;
-    if (body.classification) overrides[body.lineKey] = body.classification as 'commercial' | 'printed';
-    else delete overrides[body.lineKey];
-    await env.APP_STATE.put(key, JSON.stringify(overrides));
+    const key = await classificationKey(current.data.user.id, body.documentId, body.lineKey);
+    if (body.classification) await env.APP_STATE.put(key, body.classification);
+    else await env.APP_STATE.delete(key);
     return reply({ saved: true });
   }
   if (url.pathname === '/api/scan' && request.method === 'GET') {
@@ -172,28 +171,46 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!raw) return null;
       try { return JSON.parse(raw) as MatchDecision; } catch { return null; }
     };
-    const [settingsRaw, overridesRaw] = await Promise.all([
-      env.APP_STATE.get(`settings:${current.data.user.id}`),
-      env.APP_STATE.get(`overrides:${current.data.user.id}:${context.documentId}`),
-    ]);
+    const settingsRaw = await env.APP_STATE.get(`settings:${current.data.user.id}`);
     const settings = settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null };
-    const overrides = overridesRaw ? JSON.parse(overridesRaw) as ClassificationOverrides : {};
-    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 24), settings, overrides,
-      async result => env.APP_STATE.put(`scan:${current.data.user.id}:${context.documentId}`, JSON.stringify(result), { expirationTtl: 3600 }));
+    const getOverride = async (lineKey: string, signal?: AbortSignal): Promise<ClassificationOverride | null> => {
+      if (signal?.aborted) throw signal.reason;
+      const value = await env.APP_STATE.get(await classificationKey(current.data.user.id, context.documentId, lineKey));
+      return value === 'commercial' || value === 'printed' ? value : null;
+    };
+    const scanId = random();
+    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 24), settings, getOverride,
+      async result => { result.scanId = scanId; await env.APP_STATE.put(`scan:${current.data.user.id}:${scanId}`, JSON.stringify(result), { expirationTtl: 3600 }); });
   }
   if (url.pathname === '/api/prints/zip' && request.method === 'GET') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
     const documentId = url.searchParams.get('documentId');
-    if (!documentId || !/^[\w-]{1,128}$/.test(documentId)) return reply({ error: 'Invalid document ID.' }, 400);
-    const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${documentId}`);
+    const scanId = url.searchParams.get('scanId');
+    if (!documentId || !/^[\w-]{1,128}$/.test(documentId) || !scanId || !/^[a-f0-9-]{36}$/.test(scanId)) return reply({ error: 'Invalid scan identity.' }, 400);
+    const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${scanId}`);
     if (!raw) return reply({ error: 'Scan this assembly before exporting STLs.' }, 409);
-    const result = JSON.parse(raw) as ScanResult;
-    const [settingsRaw, overridesRaw] = await Promise.all([
-      env.APP_STATE.get(`settings:${current.data.user.id}`), env.APP_STATE.get(`overrides:${current.data.user.id}:${documentId}`),
-    ]);
-    classifyScan(result, settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null }, overridesRaw ? JSON.parse(overridesRaw) as ClassificationOverrides : {});
+    let result = JSON.parse(raw) as ScanResult;
+    if (result.documentId !== documentId || result.scanId !== scanId) return reply({ error: 'Scan does not match this document.' }, 409);
+    const settingsRaw = await env.APP_STATE.get(`settings:${current.data.user.id}`);
+    for (let offset = 0; offset < result.lines.length; offset += 20) {
+      const pending = result.lines.slice(offset, offset + 20).filter(line => line.matchStatus === 'possible' && line.vendor);
+      const choices = await Promise.all(pending.map(async line => {
+        const value = await env.APP_STATE.get(await matchDecisionKey(current.data.user.id, documentId, line.bomLineKey));
+        if (!value) return null;
+        try { return JSON.parse(value) as MatchDecision; } catch { return null; }
+      }));
+      choices.forEach((choice, index) => {
+        const line = pending[index];
+        if (choice && line.vendor && choice.vendorId === line.vendor.vendorId && choice.normalizedSku === line.vendor.normalizedSku) result = applyMatchDecision(result, line.bomLineKey, choice.status);
+      });
+    }
+    const overrides = await loadClassificationOverrides(result.lines, async lineKey => {
+      const value = await env.APP_STATE.get(await classificationKey(current.data.user.id, documentId, lineKey));
+      return value === 'commercial' || value === 'printed' ? value : null;
+    }, request.signal);
+    classifyScan(result, settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null }, overrides);
     let refreshing: Promise<void> | undefined;
     const fetchStl = async (path: string, init: RequestInit) => {
       const send = async () => {
@@ -231,7 +248,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const zip = await buildStlZip(result, env.ONSHAPE_API_VERSION, fetchStl, request.signal);
     return new Response(zip.bytes.buffer.slice(zip.bytes.byteOffset, zip.bytes.byteOffset + zip.bytes.byteLength) as ArrayBuffer,
       { headers: { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${zip.filename}"`, 'cache-control': 'no-store',
-        'x-control-kit-failures': JSON.stringify(zip.failures.slice(0, 10)), 'access-control-expose-headers': 'x-control-kit-failures' } });
+        'x-control-kit-failures': encodeURIComponent(JSON.stringify(zip.failures.slice(0, 10))), 'access-control-expose-headers': 'x-control-kit-failures' } });
   }
   if (url.pathname.startsWith('/api/onshape/')) {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
