@@ -1,8 +1,8 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
 import { scanAssembly, SessionExpiredError } from './scan';
-import type { AssemblyContext } from '@control-kit/shared';
+import type { AssemblyContext, MatchDecision } from '@control-kit/shared';
 
-export interface Env { APP_STATE: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string }
+export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string }
 type Tokens = { access_token: string; refresh_token: string };
 type Session = { tokens: Tokens; user: { id: string; name: string } };
 type OAuthState = { context?: Record<string, string>; redirectOnshapeUri?: string };
@@ -12,6 +12,11 @@ const cookieFlags = 'HttpOnly; Secure; SameSite=None; Path=/';
 const encode = new TextEncoder();
 const decode = new TextDecoder();
 const random = () => crypto.randomUUID();
+async function matchDecisionKey(userId: string, documentId: string, lineKey: string) {
+  const digest = await crypto.subtle.digest('SHA-256', encode.encode(lineKey));
+  const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return `match-decision:${userId}:${documentId}:${hash}`;
+}
 const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 const b64 = (data: Uint8Array) => btoa(String.fromCharCode(...data));
 const bytes = (data: string) => Uint8Array.from(atob(data), x => x.charCodeAt(0));
@@ -98,6 +103,17 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (id) await env.APP_STATE.delete(`session:${id}`);
     return new Response(null, { status: 204, headers: { 'set-cookie': `${cookieName}=; ${cookieFlags}; Max-Age=0` } });
   }
+  if (url.pathname === '/api/matches/decision' && request.method === 'POST') {
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const body = await request.json() as { documentId?: string; lineKey?: string; decision?: string; vendorId?: string; normalizedSku?: string };
+    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.lineKey || body.lineKey.length > 16384 || !['confirmed', 'rejected'].includes(body.decision ?? '') || !['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'].includes(body.vendorId ?? '') || !body.normalizedSku || !/^[A-Z0-9]+$/.test(body.normalizedSku)) return reply({ error: 'Invalid match decision.' }, 400);
+    const key = await matchDecisionKey(current.data.user.id, body.documentId, body.lineKey);
+    const value: MatchDecision = { status: body.decision as MatchDecision['status'], vendorId: body.vendorId as MatchDecision['vendorId'], normalizedSku: body.normalizedSku };
+    await env.APP_STATE.put(key, JSON.stringify(value));
+    return reply({ saved: true });
+  }
   if (url.pathname === '/api/scan' && request.method === 'GET') {
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
@@ -118,7 +134,14 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (response.status === 401) { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
       return response;
     };
-    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get);
+    const getDecision = async (lineKey: string, signal?: AbortSignal): Promise<MatchDecision | null> => {
+      if (signal?.aborted) throw signal.reason;
+      const raw = await env.APP_STATE.get(await matchDecisionKey(current.data.user.id, context.documentId, lineKey));
+      if (signal?.aborted) throw signal.reason;
+      if (!raw) return null;
+      try { return JSON.parse(raw) as MatchDecision; } catch { return null; }
+    };
+    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision);
   }
   if (url.pathname.startsWith('/api/onshape/')) {
     const current = await getSession(request, env);

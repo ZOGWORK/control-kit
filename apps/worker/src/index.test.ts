@@ -3,6 +3,8 @@ import worker, { type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
 import { massPath } from './scan';
 import { aggregateAssembly } from '@control-kit/shared';
+import { clearCatalogMemoryCache } from './catalog';
+import { readFileSync } from 'node:fs';
 
 class MemoryKv implements Kv {
   values = new Map<string, string>();
@@ -11,7 +13,7 @@ class MemoryKv implements Kv {
   async delete(k: string) { this.values.delete(k); }
 }
 const mock = createMockOnshape();
-const env = { APP_STATE: new MemoryKv(), ONSHAPE_OAUTH_CLIENT_ID: 'test-id', ONSHAPE_OAUTH_CLIENT_SECRET: 'test-secret', ONSHAPE_OAUTH_REDIRECT_URI: 'http://localhost:8787/oauth/redirect', ONSHAPE_API_BASE: 'http://localhost:8788', ONSHAPE_API_VERSION: 'v9', ONSHAPE_OAUTH_BASE: 'http://localhost:8788', SESSION_ENCRYPTION_KEY: btoa('12345678901234567890123456789012'), WEB_ORIGIN: 'http://localhost:5173' } as Env & { APP_STATE: MemoryKv };
+const env = { APP_STATE: new MemoryKv(), VENDOR_CATALOG: new MemoryKv(), ONSHAPE_OAUTH_CLIENT_ID: 'test-id', ONSHAPE_OAUTH_CLIENT_SECRET: 'test-secret', ONSHAPE_OAUTH_REDIRECT_URI: 'http://localhost:8787/oauth/redirect', ONSHAPE_API_BASE: 'http://localhost:8788', ONSHAPE_API_VERSION: 'v9', ONSHAPE_OAUTH_BASE: 'http://localhost:8788', SESSION_ENCRYPTION_KEY: btoa('12345678901234567890123456789012'), WEB_ORIGIN: 'http://localhost:5173' } as Env & { APP_STATE: MemoryKv; VENDOR_CATALOG: MemoryKv };
 const call = (path: string, cookie?: string) => worker.fetch(new Request(`http://localhost:8787${path}`, cookie ? { headers: { cookie } } : undefined), env);
 beforeEach(() => vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => mock.handle(new Request(input, init))));
 afterAll(() => vi.unstubAllGlobals());
@@ -86,6 +88,41 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     expect(response.status).toBe(401);
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
     expect((await call('/api/session', cookie)).status).toBe(401);
+  });
+});
+
+describe('M3 match decisions against local catalog KV', () => {
+  it('persists a possible-match confirmation across a rescan and rejects cross-origin writes', async () => {
+    clearCatalogMemoryCache();
+    const seed = JSON.parse(readFileSync(new URL('../../../fixtures/vendors/seed.json', import.meta.url), 'utf8')) as Array<{ vendorId: string; normalizedSku: string; normalizedName: string }>;
+    const bearing = seed.find(record => record.vendorId === 'servocity')!;
+    env.VENDOR_CATALOG.values.set(`vendor:${bearing.vendorId}:${bearing.normalizedSku}`, JSON.stringify(bearing));
+    env.VENDOR_CATALOG.values.set('vendor-index:bearing', JSON.stringify([`${bearing.vendorId}:${bearing.normalizedSku}`]));
+    const start = await call('/oauth/start?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
+    const path = '/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1';
+    const first = (await (await call(path, cookie)).text()).trim().split('\n').map(line => JSON.parse(line)).find(event => event.type === 'result').result;
+    const line = first.lines.find((item: { partId: string }) => item.partId === 'bearing-8');
+    expect(line.matchStatus).toBe('possible');
+    expect(line.lineTotalUsd).toBeNull();
+    const body = JSON.stringify({ documentId: 'simple', lineKey: line.bomLineKey, decision: 'confirmed', vendorId: line.vendor.vendorId, normalizedSku: line.vendor.normalizedSku });
+    const foreign = await worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: 'https://foreign.example', 'content-type': 'application/json' }, body }), env);
+    expect(foreign.status).toBe(403);
+    const saved = await worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' }, body }), env);
+    expect(saved.status).toBe(200);
+    const secondBody = JSON.stringify({ documentId: 'simple', lineKey: 'second-line', decision: 'rejected', vendorId: line.vendor.vendorId, normalizedSku: line.vendor.normalizedSku });
+    const concurrent = await Promise.all([body, secondBody].map(value => worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' }, body: value }), env)));
+    expect(concurrent.map(response => response.status)).toEqual([200, 200]);
+    expect([...env.APP_STATE.values.keys()].filter(key => key.startsWith('match-decision:'))).toHaveLength(2);
+    expect([...env.APP_STATE.values.keys()].filter(key => key.startsWith('match-decision:')).every(key => key.length < 512)).toBe(true);
+    const longBody = JSON.stringify({ documentId: 'simple', lineKey: `configured:${'size=10mm;'.repeat(100)}`, decision: 'confirmed', vendorId: line.vendor.vendorId, normalizedSku: line.vendor.normalizedSku });
+    const longSave = await worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' }, body: longBody }), env);
+    expect(longSave.status).toBe(200);
+    expect([...env.APP_STATE.values.keys()].filter(key => key.startsWith('match-decision:')).every(key => key.length < 512)).toBe(true);
+    const second = (await (await call(path, cookie)).text()).trim().split('\n').map(line => JSON.parse(line)).find(event => event.type === 'result').result;
+    expect(second.lines.find((item: { partId: string }) => item.partId === 'bearing-8').matchStatus).toBe('confirmed');
+    env.VENDOR_CATALOG.values.clear(); clearCatalogMemoryCache();
   });
 });
 

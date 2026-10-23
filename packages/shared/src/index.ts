@@ -1,10 +1,41 @@
 export const productName = 'Control Kit';
+export { classifyMatchScore, findBestMatch, normalizeName, normalizeSku, skuCandidates } from './matching';
+export type { VendorId, VendorRecord, MatchResult } from './matching';
+import type { VendorRecord } from './matching';
 
 export type AssemblyContext = { documentId: string; workspaceOrVersion: 'w' | 'v' | 'm'; workspaceOrVersionId: string; elementId: string };
-export type AssemblyInstance = { id: string; name: string; type: string; documentId: string; elementId: string; partId?: string; configuration?: string; fullConfiguration?: string; documentMicroversion?: string; versionId?: string; workspaceId?: string; suppressed?: boolean; isSuppressed?: boolean };
+export type AssemblyInstance = { id: string; name: string; type: string; documentId: string; elementId: string; partId?: string; partNumber?: string; configuration?: string; fullConfiguration?: string; documentMicroversion?: string; versionId?: string; workspaceId?: string; suppressed?: boolean; isSuppressed?: boolean };
 export type AssemblyDefinition = { rootAssembly: { name?: string; instances?: AssemblyInstance[] }; subAssemblies?: Array<{ documentId: string; elementId: string; configuration?: string; documentMicroversion?: string; instances?: AssemblyInstance[] }>; parts?: Array<{ documentId: string; elementId: string; partId: string; name?: string }> };
-export type BomLine = { bomLineKey: string; name: string; description: string | null; documentId: string; elementId: string; partId: string | null; configuration: string | null; sourceType: 'w' | 'v' | 'm' | null; sourceId: string | null; qty: number; suppressed: boolean; instancePaths: string[]; massKg: number | null; material: string | null; missingMetadataReason: string | null; vendor: null; matchConfidence: number; classification: 'unknown'; classificationScore: number; classificationReasons: string[]; partStudioUrl: string; unresolvedSubassembly?: boolean };
+export type BomLine = { bomLineKey: string; name: string; description: string | null; documentId: string; elementId: string; partId: string | null; partNumber: string | null; configuration: string | null; sourceType: 'w' | 'v' | 'm' | null; sourceId: string | null; qty: number; packsToOrder: number | null; lineTotalUsd: number | null; suppressed: boolean; instancePaths: string[]; massKg: number | null; material: string | null; missingMetadataReason: string | null; vendor: VendorRecord | null; matchConfidence: number; matchStatus: 'unmatched' | 'possible' | 'confirmed' | 'exact' | 'rejected'; matchReasons: string[]; classification: 'commercial' | 'printed' | 'unknown'; classificationScore: number; classificationReasons: string[]; partStudioUrl: string; unresolvedSubassembly?: boolean };
 export type ScanResult = { assemblyName: string; documentId: string; elementId: string; scannedAt: string; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
+export type MatchDecision = { status: 'confirmed' | 'rejected'; vendorId: VendorRecord['vendorId']; normalizedSku: string };
+
+export function updatePurchasing(line: BomLine): BomLine {
+  const record = line.vendor;
+  if (!record || !['exact', 'confirmed'].includes(line.matchStatus) || !record.packSizeVerified || !Number.isInteger(record.packSize) || record.packSize! < 1 || record.priceUsd === null) {
+    line.packsToOrder = null; line.lineTotalUsd = null; return line;
+  }
+  line.packsToOrder = Math.ceil(line.qty / record.packSize!);
+  line.lineTotalUsd = Math.round(line.packsToOrder * record.priceUsd * 100) / 100;
+  return line;
+}
+
+export function recalculatePurchasing(result: ScanResult): ScanResult {
+  const priced = result.lines.map(line => updatePurchasing(line).lineTotalUsd).filter((price): price is number => price !== null);
+  result.stats.totalCostUsd = priced.length ? Math.round(priced.reduce((total, price) => total + price, 0) * 100) / 100 : null;
+  result.stats.outOfStockLines = result.lines.filter(line => line.vendor?.stock === 'out' && !['possible', 'rejected'].includes(line.matchStatus)).length;
+  return result;
+}
+
+export function applyMatchDecision(result: ScanResult, key: string, decision: 'confirmed' | 'rejected'): ScanResult {
+  const next: ScanResult = { ...result, stats: { ...result.stats }, lines: result.lines.map(line => ({ ...line })) };
+  const line = next.lines.find(item => item.bomLineKey === key);
+  if (!line || line.matchStatus !== 'possible') return next;
+  line.matchStatus = decision;
+  if (decision === 'rejected') line.vendor = null;
+  next.missingMetadata = next.missingMetadata.map(item => next.lines.find(active => active.bomLineKey === item.bomLineKey) ?? item);
+  return recalculatePurchasing(next);
+}
 
 function subassemblyKey(value: Pick<AssemblyInstance, 'documentId' | 'elementId' | 'configuration' | 'documentMicroversion'>) { return `${value.documentId}:${value.elementId}:${value.configuration ?? ''}:${value.documentMicroversion ?? ''}`; }
 
@@ -26,8 +57,8 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
     if (found) { found.qty++; found.instancePaths.push(path.join(' > ')); return; }
     const source = sourceType && sourceId ? `${sourceType}/${encodeURIComponent(sourceId)}` : '';
     const name = partNames.get(`${instance.documentId}:${instance.elementId}:${partId}`) ?? instance.name.replace(/\s*<\d+>$/, '');
-    bucket.set(key, { bomLineKey: key, name, description: null, documentId: instance.documentId, elementId: instance.elementId, partId, configuration, sourceType, sourceId, qty: 1, suppressed: isSuppressed,
-      instancePaths: [path.join(' > ')], massKg: null, material: null, missingMetadataReason: null, vendor: null, matchConfidence: 0, classification: 'unknown', classificationScore: 0,
+    bucket.set(key, { bomLineKey: key, name, description: null, documentId: instance.documentId, elementId: instance.elementId, partId, partNumber: instance.partNumber ?? null, configuration, sourceType, sourceId, qty: 1, packsToOrder: null, lineTotalUsd: null, suppressed: isSuppressed,
+      instancePaths: [path.join(' > ')], massKg: null, material: null, missingMetadataReason: null, vendor: null, matchConfidence: 0, matchStatus: 'unmatched', matchReasons: [], classification: 'unknown', classificationScore: 0,
       classificationReasons: [], unresolvedSubassembly, partStudioUrl: source ? `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}/${source}/e/${encodeURIComponent(instance.elementId)}` : `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}` });
   }
   function walk(instances: AssemblyInstance[], path: string[], inheritedSuppression: boolean, ancestry: Set<string>) {

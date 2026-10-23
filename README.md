@@ -26,6 +26,15 @@ pnpm --filter @control-kit/worker exec wrangler dev --port 8787 --var WEB_ORIGIN
 
 Open `http://localhost:5173/?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1` and click **Scan Assembly**. Substitute `robot` or `empty` for `simple` to test the other fixtures. Tests use the same mock handler in process and make zero live Onshape calls. M2 pins `ONSHAPE_API_VERSION=v9` for the documented assembly and Part Studio calls; real-response validation remains pending.
 
+For fixture-only vendor matching in local development, generate and load the seed into local Wrangler KV (never use `--remote` for this seed):
+
+```sh
+node --experimental-strip-types scripts/seed-dev-kv.ts
+pnpm --filter @control-kit/worker exec wrangler kv bulk put ../../.wrangler/seed-kv.json --binding VENDOR_CATALOG --local --config ../../wrangler.toml
+```
+
+The seed is synthetic and is not a production catalog. A matched record's price is a **pack price**: Control Kit shows Qty Needed and Packs to Order separately, calculates charges from packs, and leaves the line total blank unless the pack size is verified. Possible matches also stay out of totals until confirmed.
+
 The owner-only actions and missing inputs are listed in [MORNING.md](MORNING.md). No secret belongs in chat or Git.
 
 ## Owner's Onshape Developer Portal step
