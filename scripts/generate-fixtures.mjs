@@ -28,7 +28,7 @@ fixtureDocument = 'robot';
 const large = {
   rootAssembly: { name: 'FTC Competition Robot', instances: [
     ...Array.from({ length: 200 }, (_, i) => part(`screw-${i}`, `M3 Screw <${i + 1}>`, 'screws', 'screw-m3')),
-    ...Array.from({ length: 20 }, (_, i) => part(`motor-${i}`, `5203 Motor <${i + 1}>`, 'motors', 'motor-5203')),
+    ...Array.from({ length: 20 }, (_, i) => part(`motor-${i}`, `5203 Motor <${i + 1}>`, 'motors', 'motor-5203', { partNumber: 'GB-5203' })),
     ...Array.from({ length: 10 }, (_, i) => part(`print-${i}`, `Custom Printed Intake Guide <${i + 1}>`, 'prints', 'intake-guide')),
     ...Array.from({ length: 4 }, (_, i) => part(`spare-${i}`, `Spare Gear <${i + 1}>`, 'gears', 'spare-gear', { suppressed: true })),
     assembly('left-drive', 'Left Drivetrain <1>', 'drive-module'), assembly('right-drive', 'Right Drivetrain <1>', 'drive-module'),

@@ -1608,7 +1608,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-1",
@@ -1616,7 +1617,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-2",
@@ -1624,7 +1626,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-3",
@@ -1632,7 +1635,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-4",
@@ -1640,7 +1644,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-5",
@@ -1648,7 +1653,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-6",
@@ -1656,7 +1662,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-7",
@@ -1664,7 +1671,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-8",
@@ -1672,7 +1680,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-9",
@@ -1680,7 +1689,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-10",
@@ -1688,7 +1698,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-11",
@@ -1696,7 +1707,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-12",
@@ -1704,7 +1716,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-13",
@@ -1712,7 +1725,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-14",
@@ -1720,7 +1734,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-15",
@@ -1728,7 +1743,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-16",
@@ -1736,7 +1752,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-17",
@@ -1744,7 +1761,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-18",
@@ -1752,7 +1770,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "motor-19",
@@ -1760,7 +1779,8 @@
         "type": "Part",
         "documentId": "robot",
         "elementId": "motors",
-        "partId": "motor-5203"
+        "partId": "motor-5203",
+        "partNumber": "GB-5203"
       },
       {
         "id": "print-0",

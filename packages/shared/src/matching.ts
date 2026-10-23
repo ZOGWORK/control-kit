@@ -37,7 +37,8 @@ export function normalizeName(value: string): string {
 }
 
 export function skuCandidates(name: string, partNumber?: string | null): string[] {
-  const values = [partNumber ?? '', ...name.match(/\b(?=[a-z0-9_-]*\d{3,})[a-z0-9]+(?:[-_][a-z0-9]+)*\b/gi) ?? []];
+  const tokens = name.match(/\b[a-z0-9]+(?:[-_][a-z0-9]+)*\b/gi) ?? [];
+  const values = [partNumber ?? '', ...tokens.filter(token => /\d{3,}/.test(token) && /[a-z]/i.test(token) && !/^\d+(?:mm|cm|in|ft|kg|g|lb|oz)$/i.test(token))];
   return [...new Set(values.filter(Boolean).map(value => normalizeSku(value)))];
 }
 
@@ -55,8 +56,8 @@ function candidateScore(name: string, vendor: VendorRecord) {
   const numbers = (set: Set<string>) => new Set([...set].filter(token => /\d/.test(token)));
   const leftNumbers = numbers(left);
   const rightNumbers = numbers(right);
-  if ([...leftNumbers].some(token => rightNumbers.has(token))) { score += 0.15; reasons.push('number token matched (+0.15)'); }
-  else if (leftNumbers.size && rightNumbers.size) { score -= 0.25; reasons.push('number tokens differ (-0.25)'); }
+  if (leftNumbers.size && rightNumbers.size && ([...leftNumbers].some(token => !rightNumbers.has(token)) || [...rightNumbers].some(token => !leftNumbers.has(token)))) { score -= 0.25; reasons.push('number tokens differ (-0.25)'); }
+  else if ([...leftNumbers].some(token => rightNumbers.has(token))) { score += 0.15; reasons.push('number token matched (+0.15)'); }
   if ([...left].some(token => categories.has(token) && right.has(token))) { score += 0.10; reasons.push('category keyword matched (+0.10)'); }
   return { score: Math.max(0, Math.min(1, score)), reasons };
 }
@@ -70,8 +71,13 @@ export function findBestMatch(line: { name: string; partNumber?: string | null }
     return { vendor, confidence: 1, status: 'exact', reasons: ['exact normalized SKU'] };
   }
   const ranked = candidates.map(vendor => ({ vendor, ...candidateScore(line.name, vendor) }));
-  const highest = Math.max(...ranked.map(candidate => candidate.score));
-  const best = ranked.filter(candidate => highest - candidate.score <= 0.03)
+  const eligible = ranked.filter(candidate => candidate.score >= 0.5);
+  if (!eligible.length) {
+    const highest = Math.max(...ranked.map(candidate => candidate.score));
+    return { vendor: null, confidence: Number.isFinite(highest) ? highest : 0, status: 'unmatched', reasons: ranked.find(candidate => candidate.score === highest)?.reasons ?? ['no candidates'] };
+  }
+  const highest = Math.max(...eligible.map(candidate => candidate.score));
+  const best = eligible.filter(candidate => highest - candidate.score <= 0.03)
     .sort((a, b) => preferStockThenPrice(a.vendor, b.vendor) || b.score - a.score)[0];
   if (!best || best.score < 0.5) return { vendor: null, confidence: best?.score ?? 0, status: 'unmatched', reasons: best?.reasons ?? ['no candidates'] };
   return { vendor: best.vendor, confidence: best.score, status: classifyMatchScore(best.score), reasons: best.reasons };

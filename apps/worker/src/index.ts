@@ -12,6 +12,11 @@ const cookieFlags = 'HttpOnly; Secure; SameSite=None; Path=/';
 const encode = new TextEncoder();
 const decode = new TextDecoder();
 const random = () => crypto.randomUUID();
+async function matchDecisionKey(userId: string, documentId: string, lineKey: string) {
+  const digest = await crypto.subtle.digest('SHA-256', encode.encode(lineKey));
+  const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return `match-decision:${userId}:${documentId}:${hash}`;
+}
 const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 const b64 = (data: Uint8Array) => btoa(String.fromCharCode(...data));
 const bytes = (data: string) => Uint8Array.from(atob(data), x => x.charCodeAt(0));
@@ -103,8 +108,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
     const body = await request.json() as { documentId?: string; lineKey?: string; decision?: string; vendorId?: string; normalizedSku?: string };
-    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.lineKey || body.lineKey.length > 512 || !['confirmed', 'rejected'].includes(body.decision ?? '') || !['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'].includes(body.vendorId ?? '') || !body.normalizedSku || !/^[A-Z0-9]+$/.test(body.normalizedSku)) return reply({ error: 'Invalid match decision.' }, 400);
-    const key = `match-decision:${current.data.user.id}:${body.documentId}:${encodeURIComponent(body.lineKey)}`;
+    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.lineKey || body.lineKey.length > 16384 || !['confirmed', 'rejected'].includes(body.decision ?? '') || !['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'].includes(body.vendorId ?? '') || !body.normalizedSku || !/^[A-Z0-9]+$/.test(body.normalizedSku)) return reply({ error: 'Invalid match decision.' }, 400);
+    const key = await matchDecisionKey(current.data.user.id, body.documentId, body.lineKey);
     const value: MatchDecision = { status: body.decision as MatchDecision['status'], vendorId: body.vendorId as MatchDecision['vendorId'], normalizedSku: body.normalizedSku };
     await env.APP_STATE.put(key, JSON.stringify(value));
     return reply({ saved: true });
@@ -131,7 +136,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     };
     const getDecision = async (lineKey: string, signal?: AbortSignal): Promise<MatchDecision | null> => {
       if (signal?.aborted) throw signal.reason;
-      const raw = await env.APP_STATE.get(`match-decision:${current.data.user.id}:${context.documentId}:${encodeURIComponent(lineKey)}`);
+      const raw = await env.APP_STATE.get(await matchDecisionKey(current.data.user.id, context.documentId, lineKey));
       if (signal?.aborted) throw signal.reason;
       if (!raw) return null;
       try { return JSON.parse(raw) as MatchDecision; } catch { return null; }

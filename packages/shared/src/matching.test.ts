@@ -13,6 +13,7 @@ describe('SKU and name normalization', () => {
     expect(normalizeName('Wheel 96mm')).toBe('wheel 96mm');
   });
   it('extracts explicit part numbers and SKU-like name tokens', () => expect(skuCandidates('REV-31-1234 Bearing', 'AM-5203')).toEqual(['AM5203', 'REV311234']));
+  it('does not make a dimension an exact SKU', () => expect(skuCandidates('1000 mm rail and 1000mm rail')).toEqual([]));
 });
 
 describe('vendor matching', () => {
@@ -25,6 +26,9 @@ describe('vendor matching', () => {
     const match = findBestMatch({ name: '96mm wheel' }, [record('84mm wheel', 'other')]);
     expect(match.confidence).toBeLessThan(0.5);
     expect(match.reasons).toContain('number tokens differ (-0.25)');
+    const size = findBestMatch({ name: 'M3 10mm screw' }, [record('M3 20mm screw', 'SKU-A')]);
+    expect(size.status).not.toBe('confirmed');
+    expect(size.reasons).toContain('number tokens differ (-0.25)');
   });
   it('uses exact threshold edges', () => {
     expect(classifyMatchScore(0.49)).toBe('unmatched');
@@ -48,5 +52,12 @@ describe('vendor matching', () => {
     for (const candidates of [[low, middle, high], [high, low, middle], [middle, high, low]]) {
       expect(findBestMatch({ name: target }, candidates).vendor?.sku).toBe('MID');
     }
+  });
+  it('never lets a subthreshold in-stock item hide a possible match', () => {
+    const valid = record('Flanged steel radial bearing', 'VALID', 'rev', { stock: 'out' });
+    const weak = record('8mm', 'WEAK', 'rev', { stock: 'in' });
+    const result = findBestMatch({ name: '8mm flanged bearing' }, [weak, valid]);
+    expect(result.status).toBe('possible');
+    expect(result.vendor?.sku).toBe('VALID');
   });
 });
