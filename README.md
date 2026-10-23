@@ -35,6 +35,10 @@ pnpm --filter @control-kit/worker exec wrangler kv bulk put ../../.wrangler/seed
 
 The seed is synthetic and is not a production catalog. A matched record's price is a **pack price**: Control Kit shows Qty Needed and Packs to Order separately, calculates charges from packs, and leaves the line total blank unless the pack size is verified. Possible matches also stay out of totals until confirmed.
 
+## Vendor catalog refresh
+
+Five staggered Worker crons refresh public product sitemaps every six hours: goBILDA at :00, ServoCity at :12, AndyMark at :24, REV at :36, and Pitsco at :48. Each run fetches at most 40 products, at no more than two requests per second per vendor, and resumes from a KV cursor on the next run. This keeps external fetches within [Cloudflare's 50-subrequest free-plan limit](https://developers.cloudflare.com/changelog/post/2026-02-11-subrequests-limit/). A completed catalog is published by updating one last-good version pointer after all versioned records and indexes exist. Initial backfill can take many cron cycles, especially for ServoCity's large sitemap; until then, no partial version appears in scans. [Free Workers KV allows 1,000 writes per day](https://developers.cloudflare.com/kv/platform/limits/), so monitor quota and cursor progress during backfill. The separate snapshot status records success or failure on every run. A stale-data warning appears when a used vendor's last complete refresh is older than `VENDOR_STALE_HOURS` or its latest refresh failed. Check `vendor:{vendorId}:__snapshot__` and `vendor:{vendorId}:__cursor__` in `VENDOR_CATALOG` to verify cron progress.
+
 The owner-only actions and missing inputs are listed in [MORNING.md](MORNING.md). No secret belongs in chat or Git.
 
 ## Owner's Onshape Developer Portal step
@@ -58,4 +62,4 @@ git remote -v
 git push origin main
 ```
 
-PR #1 is a draft for M1 and is not merged. Before any PR merge, run Greptile and wait for 5/5 confidence as requested.
+M0–M3 are merged. Before any later PR merge, run Greptile on the current head and wait for 5/5 confidence with zero unresolved threads.
