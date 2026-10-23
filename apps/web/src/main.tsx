@@ -161,13 +161,16 @@ function App() {
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
-  function downloadExcel() {
+  async function downloadExcel() {
     if (!result || excelLock.current) return;
     excelLock.current = true;
     setExportingExcel(true);
     setExcelFailed(false);
     try {
-      const workbook = buildExcelWorkbook(result);
+      const logo = await fetch('/control-kit-logo.png', { signal: AbortSignal.timeout(3000) })
+        .then(async response => response.ok ? new Uint8Array(await response.arrayBuffer()) : undefined)
+        .catch(() => undefined);
+      const workbook = buildExcelWorkbook(result, new Date(), logo);
       saveFile(workbook.bytes, workbook.filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     } catch { setExcelFailed(true); }
     finally { setTimeout(() => { excelLock.current = false; setExportingExcel(false); }, 250); }
@@ -178,12 +181,12 @@ function App() {
     catch { setError('CSV export failed. Try again.'); }
   }
 
-  if (required.some(key => !context.get(key))) return <main><h1>Control Kit</h1><p>Open an Assembly tab in Onshape, then launch Control Kit from its right panel.</p></main>;
+  if (required.some(key => !context.get(key))) return <main><header><div className="brand"><img className="brand-mark" src="/control-kit-logo.png" alt=""/><h1>Control Kit</h1></div></header><p>Open an Assembly tab in Onshape, then launch Control Kit from its right panel.</p></main>;
   const connect = `${workerUrl}/oauth/start?${new URLSearchParams(required.map(key => [key, context.get(key)!]))}`;
   const rows = (activeTab === 'bom' ? result?.lines : activeTab === 'suppressed' ? result?.suppressed : result?.missingMetadata) ?? [];
   const visible = rows.filter(line => line.name.toLowerCase().includes(search.toLowerCase())).sort((a, b) => sort === 'qty' ? b.qty - a.qty : a.name.localeCompare(b.name));
   return <main>
-    <header><h1>Control Kit</h1><span className="eyebrow">FTC assembly BOM</span></header>
+    <header><div className="brand"><img className="brand-mark" src="/control-kit-logo.png" alt=""/><h1>Control Kit</h1></div><span className="eyebrow">FTC assembly BOM</span></header>
     {error && <div className="alert" role="alert">{error}</div>}
     {!session && <p>Checking Onshape connection…</p>}
     {session?.setupPending && <p>Onshape connection setup is in progress. Return after the OAuth application is linked.</p>}
