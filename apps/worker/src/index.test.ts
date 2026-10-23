@@ -34,8 +34,18 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     expect((await call('/api/onshape/test?failOnce=1', cookie)).status).toBe(200);
     expect(mock.apiRequests).toBe(3);
   });
-  it('rejects missing context and unauthenticated proxy requests', async () => {
-    expect((await call('/oauth/start')).status).toBe(400);
+  it('supports the Applications-page OAuth URL without Assembly context', async () => {
+    const target = 'https://cad.onshape.com/user/applications?grant=1';
+    const start = await call(`/oauth/start?redirectOnshapeUri=${encodeURIComponent(target)}`);
+    expect(start.status).toBe(302);
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const callback = await call(`/oauth/redirect?code=mock-code&state=${state}`);
+    expect(callback.headers.get('location')).toBe(target);
+  });
+  it('rejects malformed context, unsafe return URLs, and unauthenticated proxy requests', async () => {
+    expect((await call('/oauth/start?documentId=doc1')).status).toBe(400);
+    expect((await call('/oauth/start?redirectOnshapeUri=https%3A%2F%2Fcad.onshape.com.evil.test')).status).toBe(400);
+    expect((await call('/oauth/start?redirectOnshapeUri=javascript%3Aalert(1)')).status).toBe(400);
     expect((await call('/api/onshape/test')).status).toBe(401);
   });
   it('shows setup pending without OAuth credentials', async () => {
