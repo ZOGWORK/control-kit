@@ -54,7 +54,14 @@ If XLSX generation fails, the app offers **Download CSV instead** from the same 
 
 ## Printed parts and STL export
 
-The deterministic classifier scores each active BOM line using print keywords, custom-part terms, vendor matches, and the optional team number saved in Settings. Scores of 60 or more are Printed, 35–59 are Possibly printed, and lower scores are Commercial. An exact normalized vendor SKU always forces Commercial unless the user explicitly sets a manual type. Manual Commercial/Printed choices are stored per user and document and reapplied on every rescan.
+Each active line gets a **disposition**: Buy, 3D print, CNC machine, 2D cut (laser/waterjet/router), Other fabrication, or Needs review. It also gets a provenance, a source, a confidence, and the evidence behind them. They are decided in this order:
+1. A person's manual choice.
+2. An exact vendor SKU, which makes the part Buy.
+3. Explicit metadata: a process/manufacturing column in the Onshape BOM, a team tag in the part name such as `[3DP]`, `(CNC)`, `{laser}`, or `#COTS`, or a print material such as PLA, PETG, or TPU.
+4. Strong provenance: Onshape standard content, a linked library part with a part number, or a vendor match you confirmed.
+5. Otherwise Needs review, with a suggestion and a reason. Examples: a team-designed bracket suggests 3D print, and a custom plate suggests 2D cut.
+
+A suggestion never decides by itself. A purchased CAD part therefore never becomes a print because of its name, and a flat plate is never assumed printable. Manual choices are shared by everyone who scans the document and are reapplied on every rescan. Each one records who set it and keeps a short history. Only someone whose own recent scan read that document can change one. Choices saved per user before this change are still honored.
 
 **Download printed parts STL zip** exports the current scan's printed lines, with at most three part requests in flight and a 60-second timeout per part. It tries the Onshape single-part STL endpoint first and then its async translation endpoint. The zip groups files by mechanism and includes `README.txt` with source links and every failed part; one failure does not discard successful STLs. The mock server and fixture tests cover this flow without live Onshape calls. Live endpoint shape and permissions are not yet validated against Onshape; the export rework replaces STL with STEP.
 

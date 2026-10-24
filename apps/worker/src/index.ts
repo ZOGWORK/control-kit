@@ -1,6 +1,6 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
 import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from './scan';
-import { applyMatchDecision, classificationIdentity, classifyScan, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { applyMatchDecision, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
 import { buildStlZip } from './stl-zip';
@@ -21,7 +21,16 @@ async function lineKeyDigest(lineKey: string) {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 async function matchDecisionKey(userId: string, documentId: string, lineKey: string) { return `match-decision:${userId}:${documentId}:${await lineKeyDigest(lineKey)}`; }
-async function classificationKey(userId: string, documentId: string, identity: string) { return `override:${userId}:${documentId}:${await lineKeyDigest(identity)}`; }
+/** Pre-rework per-user manual types ('commercial' | 'printed'); read as a fallback, removed when the part is set again. */
+async function legacyClassificationKey(userId: string, documentId: string, identity: string) { return `override:${userId}:${documentId}:${await lineKeyDigest(identity)}`; }
+/** Manual dispositions are shared by everyone who scans the document, with who set them and a short history. */
+async function dispositionKey(documentId: string, identity: string) { return `disposition:${documentId}:${await lineKeyDigest(identity)}`; }
+type SavedDisposition = { disposition: ClassificationOverride | null; by: string; byId: string; at: string; history: Array<{ disposition: ClassificationOverride | null; by: string; at: string }> };
+async function readDisposition(env: Env, userId: string, documentId: string, identity: string): Promise<ClassificationOverride | null> {
+  const raw = await env.APP_STATE.get(await dispositionKey(documentId, identity));
+  if (raw) { try { return parseOverride((JSON.parse(raw) as SavedDisposition).disposition); } catch { return null; } }
+  return parseOverride(await env.APP_STATE.get(await legacyClassificationKey(userId, documentId, identity)));
+}
 const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 const b64 = (data: Uint8Array) => btoa(String.fromCharCode(...data));
 const bytes = (data: string) => Uint8Array.from(atob(data), x => x.charCodeAt(0));
@@ -147,12 +156,23 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
-    const body = await request.json() as { documentId?: string; identity?: string; classification?: string | null };
-    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.identity || body.identity.length > 16384 || ![null, 'commercial', 'printed'].includes(body.classification ?? null)) return reply({ error: 'Invalid classification override.' }, 400);
-    const key = await classificationKey(current.data.user.id, body.documentId, body.identity);
-    if (body.classification) await env.APP_STATE.put(key, body.classification);
-    else await env.APP_STATE.delete(key);
-    return reply({ saved: true });
+    const body = await request.json() as { documentId?: string; scanId?: string; identity?: string; classification?: string | null };
+    const choice = body.classification === null || body.classification === undefined ? null : parseOverride(body.classification);
+    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.identity || body.identity.length > 16384 || (body.classification != null && !choice)) return reply({ error: 'Invalid classification override.' }, 400);
+    // Shared choices may only be written by someone whose own recent scan read this document from Onshape.
+    if (!body.scanId || !/^[a-f0-9-]{36}$/.test(body.scanId)) return reply({ error: 'Scan this assembly before changing a part type.' }, 409);
+    const scanned = await env.APP_STATE.get(`scan:${current.data.user.id}:${body.scanId}`);
+    if (!scanned || (JSON.parse(scanned) as ScanResult).documentId !== body.documentId) return reply({ error: 'Scan this assembly before changing a part type.' }, 409);
+    const key = await dispositionKey(body.documentId, body.identity);
+    let previous: SavedDisposition | null = null;
+    try { const raw = await env.APP_STATE.get(key); previous = raw ? JSON.parse(raw) as SavedDisposition : null; } catch { previous = null; }
+    const now = new Date().toISOString();
+    const saved: SavedDisposition = { disposition: choice, by: current.data.user.name, byId: current.data.user.id, at: now,
+      history: [...(previous ? [{ disposition: previous.disposition, by: previous.by, at: previous.at }, ...previous.history] : [])].slice(0, 10) };
+    // Clearing keeps the record (disposition null) so the history and "who reset it" survive.
+    await env.APP_STATE.put(key, JSON.stringify(saved));
+    await env.APP_STATE.delete(await legacyClassificationKey(current.data.user.id, body.documentId, body.identity));
+    return reply({ saved: true, disposition: choice, by: saved.by, at: now });
   }
   if (url.pathname === '/api/scan' && request.method === 'GET') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
@@ -188,8 +208,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const settings = settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null };
     const getOverride = async (line: BomLine, signal?: AbortSignal): Promise<ClassificationOverride | null> => {
       if (signal?.aborted) throw signal.reason;
-      const value = await env.APP_STATE.get(await classificationKey(current.data.user.id, context.documentId, classificationIdentity(line)));
-      return value === 'commercial' || value === 'printed' ? value : null;
+      return readDisposition(env, current.data.user.id, context.documentId, classificationIdentity(line));
     };
     const scanId = random();
     return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 336), settings, getOverride,
@@ -223,8 +242,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       });
     }
     const overrides = await loadClassificationOverrides(result.lines, async line => {
-      const value = await env.APP_STATE.get(await classificationKey(current.data.user.id, documentId, classificationIdentity(line)));
-      return value === 'commercial' || value === 'printed' ? value : null;
+      return readDisposition(env, current.data.user.id, documentId, classificationIdentity(line));
     }, request.signal);
     classifyScan(result, settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null }, overrides);
     let refreshing: Promise<void> | undefined;
