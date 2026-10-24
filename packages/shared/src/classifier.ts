@@ -72,7 +72,9 @@ const vendorNumbers: Array<[RegExp, string]> = [
 /** Off-the-shelf hardware: fasteners, bearings, belts, retaining rings, and metric thread sizes like "M4 x 0.7". */
 const hardwareWords = /\b(?:screws?|bolts?|(?:lock)?nuts?|washers?|e-?clips?|snap\s*rings?|retaining\s*rings?|bearings?|bushings?|belts?|rivets?|shaft\s*collars?|set\s*screws?|shcs|bhcs|fhcs|standoffs?|motors?|servos?|gearbox(?:es)?)\b|\bM\d(?:\.\d)?\s*x\s*\d/i;
 /** Fasteners a team takes from stock rather than ordering per part. Standoffs, bearings, and belts are not here: those are counted parts. */
-const fastenerWords = /\b(?:screws?|bolts?|(?:lock|hex|nylock)?\s?nuts?|washers?|e-?clips?|snap\s*rings?|retaining\s*rings?|rivets?|set\s*screws?|shcs|bhcs|fhcs|shoulder\s*screws?)\b|^M\d(?:\.\d)?\s*x\s*\d/i;
+const fastenerWords = /\b(?:screws?|bolts?|(?:lock|hex|nylock)?\s?nuts?|washers?|e-?clips?|snap\s*rings?|retaining\s*rings?|rivets?|set\s*screws?|shcs|bhcs|fhcs|shoulder\s*screws?|(?:button|socket|flat|pan|cap)\s*head)\b|^M\d(?:\.\d)?\s*x\s*\d/i;
+/** Products that mention a fastener as a feature ("Set Screw Pinion Pulley", "Set-Screw Collar") are not fasteners. */
+const fastenedProductWords = /\b(?:pulleys?|collars?|hubs?|gears?|sprockets?|pinions?|bearings?|couplers?|mounts?|brackets?|wheels?|clamps?)\b/i;
 const customWords = /\b(?:custom|bracket|mount|spacer|adapter|holder|guide|cover)\b/i;
 /** Products a team buys whole even when the vendor's CAD models them as an assembly. */
 const productWords = /\b(?:bearings?|motors?|servos?|gearbox(?:es)?|wheels?|encoders?|sensors?|batter(?:y|ies)|cameras?|hubs?|actuators?)\b/i;
@@ -124,7 +126,7 @@ export function decideDisposition(line: BomLine, teamNumber: string | null, asse
   if (line.material && printMaterial.test(line.material)) return { ...base, disposition: 'print', source: 'explicit-metadata', confidence: 'high', evidence: [...base.evidence, `print material ${line.material}`] };
   if (line.matchStatus === 'confirmed') return { ...base, disposition: 'buy', source: 'provenance', confidence: 'high' };
   // "Nut Holder" or "Screw Mount" is a part to make, so custom-part wording keeps a name with fastener words in Review.
-  if (fastenerWords.test(line.name) && !printWords.test(text) && !customWords.test(line.name)) return { ...base, disposition: 'hardware', source: 'suggestion', confidence: 'medium', evidence: [...base.evidence, 'fastener wording in name'] };
+  if (fastenerWords.test(line.name) && !printWords.test(text) && !customWords.test(line.name) && !fastenedProductWords.test(line.name)) return { ...base, disposition: 'hardware', source: 'suggestion', confidence: 'medium', evidence: [...base.evidence, 'fastener wording in name'] };
   if (provenance === 'standard-content') return { ...base, disposition: 'buy', source: 'provenance', confidence: 'high' };
   if (provenance === 'linked-library' && line.partNumber) return { ...base, disposition: 'buy', source: 'provenance', confidence: 'medium', evidence: [...base.evidence, 'library parts with a part number are usually purchased; no catalog match yet'] };
   // Everything below is a suggestion for a person to confirm.

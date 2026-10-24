@@ -77,6 +77,10 @@ describe('manufacturing disposition', () => {
     for (const name of ['5103 Gearbox Base Mounting Screw M3 x 5mm length SHCS)_91290A110', 'M4 x 0.7mm Locknut', 'Roller E-Clip', 'Button Head Screw M4 x 12'])
       expect(suggested(name, { documentId: 'library' })).toMatchObject({ disposition: 'hardware', reviewReason: null });
     for (const name of ['Nut Holder', 'Screw Mount Bracket']) expect(suggested(name).disposition).toBe('review');
+    // From the live HORS scan: products that mention a set screw stay products; head styles are screws.
+    for (const name of ['3414 Series 5mm HTD Pitch Set Screw Pinion Timing Belt Pulley (8mm REX Bore, 24 Tooth) 3414-4008-0024', '2920 Series Steel Set-Screw Collar (8mm REX Bore)'])
+      expect(suggested(name, { documentId: 'library' }).disposition).not.toBe('hardware');
+    expect(suggested('[LS] Button Head M4x5').disposition).toBe('hardware');
     expect(suggested('8mm REX Ball Bearing', { documentId: 'library' })).toMatchObject({ suggestedDisposition: 'buy', reviewReason: 'Looks like standard hardware: confirm it is bought' });
     expect(suggested('80 Tooth x 9mm HTD5 Belt').suggestedDisposition).toBe('buy');
     // Print wording still wins over hardware wording, and a plain plate still goes to 2D-cut review.
