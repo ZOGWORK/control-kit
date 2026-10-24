@@ -1,6 +1,6 @@
 # Control Kit
 
-Control Kit is an Onshape assembly BOM tool for FTC teams, alongside the separate Control Point and Control Scout products. Its app and four-sheet Excel export use the same black-and-yellow brand palette, with a Control Kit logo embedded in the BOM sheet. This repository is the `ZOGWORK/control-kit` project.
+Control Kit is an Onshape assembly BOM tool for FTC teams, alongside the separate Control Point and Control Scout products. Its app and Excel export use the same black-and-yellow brand palette, with the Control Kit logo on the workbook's Overview sheet. This repository is the `ZOGWORK/control-kit` project.
 
 ## Fresh clone and build
 
@@ -53,7 +53,16 @@ The seed is synthetic and is not a production catalog. A matched record's price 
 
 ## Excel BOM export
 
-After a scan, **Download Excel BOM** creates a workbook locally in the browser without another API call. The BOM sheet shows Qty Needed, Packs to Order, Pack Price, and formula-driven Line Total; the Estimated Total formula sums those line totals. Unverified pack sizes and unconfirmed possible matches have blank line totals. Separate sheets list printed parts, suppressed parts, and missing metadata. Vendor data age and stale status appear in the header.
+After a scan, **Excel BOM** builds the workbook in the browser without another Onshape request. Its sheets follow the app:
+
+- **Overview**: logo, assembly and Onshape link, scanned revision, counts, the known subtotal (a live formula over the Buy list), vendor catalog status, and how to read the rest.
+- **Buy list**: one row per part to buy, grouped by vendor: Qty Needed, verified Pack Size, Packs to Order, Vendor, SKU, Pack Price, Line Total (`=Packs × Pack Price`), stock with its date, match, product link, Onshape link, and notes. Row 4 holds labels and values in separate cells; the subtotal is `IF(COUNT(...),SUM(...),"None priced")` in its own cell. Line Total is filled only for an exact or confirmed product with a verified pack size and price; possible and unmatched rows stay visible with blank money cells.
+- **Make**: parts to print, machine, cut, or fabricate, with material and the exact STEP file name the export gives each.
+- **Review**: parts without a decision, with the suggestion and any possible product to confirm.
+- **Links**: every part with a link to its vendor product page and to the part in Onshape.
+- **Exceptions**: out-of-stock and low-stock products, unresolved subassemblies, parts missing data, and suppressed parts.
+
+The CSV fallback lists every active part with the same purchasing rules.
 
 To regenerate the fixture workbook and mock STEP ZIP from the repository root:
 

@@ -1,34 +1,34 @@
 import { strToU8, zipSync } from 'fflate';
-import { dispositionLabel, printCategory, type BomLine, type ScanResult, type VendorRecord } from '../../shared/src/index';
+import { metadataIssueText, stepFileName, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorRecord } from '../../shared/src/index';
 
 type Cell = { col: number; type: 's' | 'n' | 'f'; value: string | number; style: number; cached?: number };
-type Sheet = { name: string; rows: Map<number, Cell[]>; widths: number[]; merges: string[]; links: { cell: string; url: string }[]; filter?: string; frozen?: number; landscape?: boolean; drawing?: boolean };
+type Sheet = { name: string; rows: Map<number, Cell[]>; widths: number[]; fixed: Record<number, number>; merges: string[]; links: { cell: string; url: string }[]; filter?: string; frozen?: number; landscape?: boolean; drawing?: boolean; tall?: number[] };
 export type ExcelExport = { bytes: Uint8Array; filename: string };
 export type CsvExport = { bytes: Uint8Array; filename: string };
-const HEADERS = ['#', 'Part Name', 'Qty Needed', 'Packs to Order', 'Vendor', 'SKU / Part #', 'Pack Price', 'Line Total', 'Stock', 'Stock Qty', 'Type', 'Alternatives (in-stock)', 'Notes'];
 const esc = (value: string | number) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 const col = (index: number) => { let out = ''; for (let n = index; n; n = Math.floor((n - 1) / 26)) out = String.fromCharCode(65 + (n - 1) % 26) + out; return out; };
 const cellRef = (column: number, row: number) => `${col(column)}${row}`;
-const sheet = (name: string, columns: number): Sheet => ({ name, rows: new Map(), widths: Array(columns).fill(10), merges: [], links: [] });
-function safeUrl(value?: string) { try { const url = new URL(value ?? ''); return url.protocol === 'https:' && !url.username && !url.password ? url.toString() : undefined; } catch { return undefined; } }
-function put(target: Sheet, row: number, column: number, value: string | number, style = 0, type: Cell['type'] = typeof value === 'number' ? 'n' : 's', link?: string, cached?: number) {
-  const cells = target.rows.get(row) ?? [];
+const sheet = (name: string, columns: number, fixed: Record<number, number> = {}): Sheet => ({ name, rows: new Map(), widths: Array(columns).fill(10), fixed: { 1: 6, ...fixed }, merges: [], links: [] });
+function safeUrl(value?: string | null) { try { const url = new URL(value ?? ''); return url.protocol === 'https:' && !url.username && !url.password ? url.toString() : undefined; } catch { return undefined; } }
+function put(target: Sheet, row: number, column: number, value: string | number, style = 0, type: Cell['type'] = typeof value === 'number' ? 'n' : 's', link?: string | null, cached?: number) {
+  const cells = (target.rows.get(row) ?? []).filter(cell => cell.col !== column);
   cells.push({ col: column, type, value, style, ...(cached === undefined ? {} : { cached }) });
   target.rows.set(row, cells);
   const url = safeUrl(link);
   if (url) target.links.push({ cell: cellRef(column, row), url });
-  const width = String(value).split('\n').reduce((longest, part) => Math.max(longest, part.length), 0) + 2;
-  target.widths[column - 1] = Math.max(target.widths[column - 1] ?? 10, Math.min(42, width));
+  const width = String(type === 'f' ? cached ?? '' : value).split('\n').reduce((longest, part) => Math.max(longest, part.length), 0) + 2;
+  target.widths[column - 1] = Math.max(target.widths[column - 1] ?? 10, Math.min(48, width));
 }
 function renderSheet(target: Sheet) {
   const last = Math.max(1, ...target.rows.keys());
-  const rows = [...target.rows.entries()].sort(([a], [b]) => a - b).map(([number, cells]) => `<row r="${number}"${target.drawing && number <= 3 ? ` ht="${number === 1 ? 38 : number === 2 ? 26 : 24}" customHeight="1"` : ''}>${cells.sort((a, b) => a.col - b.col).map(value => {
+  const height = (number: number) => target.drawing && number <= 3 ? ` ht="${number === 1 ? 38 : number === 2 ? 26 : 24}" customHeight="1"` : target.tall?.includes(number) ? ' ht="30" customHeight="1"' : '';
+  const rows = [...target.rows.entries()].sort(([a], [b]) => a - b).map(([number, cells]) => `<row r="${number}"${height(number)}>${cells.sort((a, b) => a.col - b.col).map(value => {
     const address = cellRef(value.col, number);
     if (value.type === 'f') return `<c r="${address}" s="${value.style}"><f>${esc(value.value)}</f>${value.cached === undefined ? '' : `<v>${value.cached}</v>`}</c>`;
     if (value.type === 'n') return `<c r="${address}" s="${value.style}"><v>${value.value}</v></c>`;
     return `<c r="${address}" s="${value.style}" t="inlineStr"><is><t xml:space="preserve">${esc(value.value)}</t></is></c>`;
   }).join('')}</row>`).join('');
-  const widths = target.widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${index === 11 ? 38 : Math.max(index === 1 ? 22 : 10, Math.min(42, width))}" customWidth="1"/>`).join('');
+  const widths = target.widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${target.fixed[index + 1] ?? Math.max(8, Math.min(48, width))}" customWidth="1"/>`).join('');
   const freeze = target.frozen ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${target.frozen}" topLeftCell="A${target.frozen + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` : '<sheetViews><sheetView workbookViewId="0"/></sheetViews>';
   const merges = target.merges.length ? `<mergeCells count="${target.merges.length}">${target.merges.map(range => `<mergeCell ref="${range}"/>`).join('')}</mergeCells>` : '';
   const links = target.links.length ? `<hyperlinks>${target.links.map((link, index) => `<hyperlink ref="${link.cell}" r:id="rId${index + 1}"/>`).join('')}</hyperlinks>` : '';
@@ -36,142 +36,301 @@ function renderSheet(target: Sheet) {
 }
 const fill = (hex: string) => `<fill><patternFill patternType="solid"><fgColor rgb="FF${hex}"/><bgColor indexed="64"/></patternFill></fill>`;
 const font = (size: number, color: string, bold = false, underline = false) => `<font>${bold ? '<b/>' : ''}${underline ? '<u/>' : ''}<sz val="${size}"/><name val="Calibri"/><color rgb="FF${color}"/></font>`;
-const xf = (fontId: number, fillId: number, currency = false, wrap = false) => `<xf numFmtId="${currency ? 164 : 0}" fontId="${fontId}" fillId="${fillId}" borderId="0" xfId="0" applyFont="1" applyFill="1"${currency ? ' applyNumberFormat="1"' : ''}${wrap ? ' applyAlignment="1"><alignment wrapText="1"/></xf>' : '/>'}`;
-// Style IDs: 0/1/2 body white/gray/soft yellow; 3/4/5 bold; 6 header; 7 title; 8 summary black;
-// 9–13 stock colors; 14–16 currency; 17–19 hyperlinks; 20–22 summary; 23 suppressed; 24 subheader.
-const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="$#,##0.00"/></numFmts><fonts count="8">${font(11, '09090B')}${font(11, '09090B', true)}${font(11, 'FFC700', true)}${font(16, 'FFC700', true)}${font(11, 'F4F4F5')}${font(11, '725800', false, true)}${font(11, '71717A')}${font(11, 'FFC700', true)}</fonts><fills count="11"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>${['FFFFFF', 'F4F4F5', '09090B', '1F7A3A', 'C0392B', 'FFC700', '71717A', '26262C', 'FFF8D6'].map(fill).join('')}</fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="25">${[
+const xf = (fontId: number, fillId: number, currency = false, wrap = false) => `<xf numFmtId="${currency ? 164 : 0}" fontId="${fontId}" fillId="${fillId}" borderId="0" xfId="0" applyFont="1" applyFill="1"${currency ? ' applyNumberFormat="1"' : ''} applyAlignment="1"><alignment vertical="center"${wrap ? ' wrapText="1"' : ''}/></xf>`;
+/** Named style IDs, in the order of the `cellXfs` list below. */
+const S = {
+  body: 0, bodyAlt: 1, bodySoft: 2, bold: 3, boldAlt: 4, header: 6, title: 7, band: 8,
+  inStock: 9, outStock: 10, lowStock: 11, unknownStock: 12, money: 14, moneyAlt: 15,
+  link: 17, linkAlt: 18, label: 20, value: 21, total: 22, muted: 23, section: 24, wrap: 25, wrapAlt: 26, note: 27,
+} as const;
+const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="$#,##0.00"/></numFmts><fonts count="8">${font(11, '09090B')}${font(11, '09090B', true)}${font(11, 'FFC700', true)}${font(16, 'FFC700', true)}${font(11, 'F4F4F5')}${font(11, '725800', false, true)}${font(11, '71717A')}${font(11, 'FFC700', true)}</fonts><fills count="11"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>${['FFFFFF', 'F4F4F5', '09090B', '1F7A3A', 'C0392B', 'FFC700', '71717A', '26262C', 'FFF8D6'].map(fill).join('')}</fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="28">${[
   xf(0, 2), xf(0, 3), xf(0, 10), xf(1, 2), xf(1, 3), xf(1, 10), xf(2, 4), xf(3, 4), xf(4, 4),
   xf(4, 5), xf(4, 6), xf(0, 7), xf(4, 8), xf(7, 9), xf(0, 2, true), xf(0, 3, true), xf(0, 10, true),
   xf(5, 2, false, true), xf(5, 3, false, true), xf(5, 10, false, true), xf(1, 2), xf(1, 10), xf(1, 10, true), xf(6, 3), xf(1, 7),
+  xf(0, 2, false, true), xf(0, 3, false, true), xf(6, 2, false, true),
 ].join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
 function rels(target: Sheet) { return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${target.links.map((link, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${esc(link.url)}" TargetMode="External"/>`).join('')}${target.drawing ? `<Relationship Id="rId${target.links.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>` : ''}</Relationships>`; }
 const LOGO_DRAWING = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>47625</xdr:rowOff></xdr:from><xdr:ext cx="952500" cy="952500"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="Control Kit logo" descr="Black and yellow Control Kit hexagon logo"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="952500" cy="952500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>`;
 
-const typeLabel = (line: BomLine) => dispositionLabel[line.disposition] ?? 'Needs review';
-function stockLabel(line: BomLine): { value: string; style: number } {
-  if (line.classification === 'printed') return { value: 'Print', style: 13 };
-  if (line.vendor?.stock === 'in') return { value: 'In Stock', style: 9 };
-  if (line.vendor?.stock === 'out') return { value: 'Out of Stock', style: 10 };
-  if (line.vendor?.stock === 'low') return { value: 'Low Stock', style: 11 };
-  return { value: 'Unknown', style: 12 };
+const vendorName: Record<VendorRecord['vendorId'], string> = { gobilda: 'goBILDA', servocity: 'ServoCity', andymark: 'AndyMark', rev: 'REV', pitsco: 'Pitsco' };
+const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', review: 'Needs review' };
+const matchText: Record<BomLine['matchStatus'], string> = { exact: 'Exact SKU', confirmed: 'Confirmed', possible: 'Possible, not confirmed', rejected: 'Rejected', unmatched: 'No match' };
+const order: Disposition[] = ['buy', 'print', 'cnc', 'cut-2d', 'fabricate', 'review'];
+const date = (iso: string | null | undefined) => iso && Number.isFinite(Date.parse(iso)) ? iso.slice(0, 10) : 'unknown';
+/** Only an exact or confirmed match identifies the product a team orders; anything else is a candidate. */
+const ordered = (line: BomLine) => Boolean(line.vendor && (line.matchStatus === 'exact' || line.matchStatus === 'confirmed'));
+const verifiedPack = (line: BomLine) => ordered(line) && line.vendor!.packSizeVerified && line.vendor!.packSize ? line.vendor!.packSize : null;
+const priced = (line: BomLine) => ordered(line) && line.lineTotalUsd !== null && line.packsToOrder !== null && line.vendor!.priceUsd !== null;
+const product = (vendor: VendorRecord) => `${vendorName[vendor.vendorId]} ${vendor.sku}`;
+function stock(line: BomLine): { value: string; style: number } {
+  const vendor = line.vendor;
+  if (!vendor || !ordered(line)) return { value: '', style: S.body };
+  const asOf = `, ${date(vendor.updatedAt)}`;
+  if (vendor.stock === 'in') return { value: `In stock${asOf}`, style: S.inStock };
+  if (vendor.stock === 'out') return { value: `Out of stock${asOf}`, style: S.outStock };
+  if (vendor.stock === 'low') return { value: `Low stock${asOf}`, style: S.lowStock };
+  return { value: 'Unknown', style: S.unknownStock };
 }
-function notes(line: BomLine, result: ScanResult) {
+function purchaseNotes(line: BomLine, result: ScanResult) {
   const values: string[] = [];
-  if (line.matchStatus === 'possible') values.push('Possible match — unconfirmed; excluded from totals');
-  if (result.stats.staleVendorData && line.vendor) values.push('Vendor data may be stale');
-  if (line.manualClassification) values.push('Type set manually');
+  if (line.vendor && line.matchStatus === 'possible') values.push(`Possible match ${product(line.vendor)}: confirm it in Control Kit before ordering`);
+  if (!line.vendor) values.push('No vendor product matched: add the vendor SKU to the part number in Onshape and rescan');
+  if (ordered(line) && !verifiedPack(line)) values.push('Pack size not verified, so no total');
+  if (ordered(line) && line.vendor!.priceUsd === null) values.push('No price, so no total');
+  if (result.stats.staleVendorData && ordered(line)) values.push('Vendor data may be out of date');
+  if (line.manualClassification) values.push('Set by your team');
   if (line.missingMetadataReason) values.push(line.missingMetadataReason);
-  return values.join('; ');
+  return values.join('. ');
 }
-function alternatives(line: BomLine): VendorRecord[] {
-  if (!line.vendor || !['out', 'low'].includes(line.vendor.stock)) return [];
-  return (line.alternatives ?? []).filter(item => item.vendorId === line.vendor?.vendorId && item.category.toLowerCase() === line.vendor?.category.toLowerCase()
-    && item.stock === 'in' && item.priceUsd !== null).slice(0, 3);
+/** Same states and words as the app: an old or failed-to-update catalog is never "Ready". */
+function catalogText(vendor: VendorHealth) {
+  if (vendor.state === 'published') return !vendor.complete ? 'Partial' : vendor.lastRunFailed ? 'Last update failed' : vendor.stale ? 'Out of date' : 'Ready';
+  return vendor.state === 'failing' ? 'Failing' : 'Loading';
 }
-function bom(result: ScanResult, now: Date, drawing = false): Sheet {
-  const target = sheet('BOM', 13);
-  target.drawing = drawing;
-  const documentUrl = `https://cad.onshape.com/documents/${encodeURIComponent(result.documentId)}`;
-  for (const row of [1, 2, 3]) for (let c = 1; c <= 13; c++) put(target, row, c, '', row === 1 ? 7 : 8);
-  target.rows.get(1)![2].value = 'CONTROL KIT  /  BILL OF MATERIALS';
-  target.rows.get(2)![2].value = `Assembly: ${result.assemblyName} · Open in Onshape`;
-  target.links.push({ cell: 'C2', url: documentUrl });
-  const vendorDates = result.lines.map(line => line.vendor?.updatedAt).filter((value): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value)));
-  target.rows.get(3)![2].value = `Generated: ${now.toLocaleString()} · Vendor data as of: ${result.vendorDataUpdatedAt ?? vendorDates.sort()[0] ?? 'Unknown'}${result.stats.staleVendorData ? ' — STALE' : ''}`;
-  target.merges.push('A1:B3', 'C1:M1', 'C2:M2', 'C3:M3', 'A5:M5');
-  put(target, 4, 1, 'Unique parts', 20); put(target, 4, 2, result.stats.uniqueLines, 21);
-  put(target, 4, 3, 'Total instances', 20); put(target, 4, 4, result.stats.totalInstances, 21);
-  put(target, 4, 5, 'Estimated total', 20);
-  put(target, 4, 7, 'Out of stock', 20); put(target, 4, 8, result.stats.outOfStockLines, 21);
-  put(target, 4, 9, '3D printed lines', 20); put(target, 4, 10, result.stats.printedLines, 21);
-  put(target, 5, 1, '', 0);
-  HEADERS.forEach((value, index) => put(target, 6, index + 1, value, 6));
-  const commercial = result.lines.filter(line => line.classification !== 'printed').sort((a, b) => (a.vendor?.vendorId ?? 'zz').localeCompare(b.vendor?.vendorId ?? 'zz') || a.name.localeCompare(b.name));
-  const printed = result.lines.filter(line => line.classification === 'printed').sort((a, b) => a.name.localeCompare(b.name));
-  let row = 7; let ordinal = 1; let total = 0;
-  const alternativeRows: Array<{ source: string; choice: VendorRecord }> = [];
-  const write = (line: BomLine, isPrinted: boolean) => {
-    const band = isPrinted ? row % 2 ? 2 : 0 : row % 2 ? 0 : 1;
-    const bold = isPrinted ? row % 2 ? 5 : 3 : row % 2 ? 3 : 4;
-    const currency = isPrinted ? row % 2 ? 16 : 14 : row % 2 ? 14 : 15;
-    const linkStyle = isPrinted ? row % 2 ? 19 : 17 : row % 2 ? 17 : 18;
-    put(target, row, 1, ordinal++, band);
-    put(target, row, 2, line.name, bold);
-    put(target, row, 3, line.qty, band);
-    if (!isPrinted && line.packsToOrder !== null) put(target, row, 4, line.packsToOrder, band);
-    put(target, row, 5, isPrinted ? '3D Printed' : line.vendor?.vendorId ?? '—', isPrinted || line.vendor ? linkStyle : band, 's', isPrinted ? line.partStudioUrl : line.vendor?.url);
-    put(target, row, 6, line.vendor?.sku ?? line.partNumber ?? '—', bold);
-    if (!isPrinted && line.vendor?.priceUsd !== null && line.vendor) put(target, row, 7, line.vendor.priceUsd, currency);
-    const chargeable = !isPrinted && line.vendor?.packSizeVerified && line.vendor.priceUsd !== null && line.packsToOrder !== null && ['exact', 'confirmed'].includes(line.matchStatus);
-    if (chargeable) {
-      const cache = Math.round(line.packsToOrder! * line.vendor!.priceUsd! * 100) / 100;
-      total += cache;
-      put(target, row, 8, `D${row}*G${row}`, currency, 'f', undefined, cache);
-    }
-    const stock = stockLabel(line); put(target, row, 9, stock.value, stock.style);
-    if (!isPrinted && line.vendor?.stockQty !== null && line.vendor) put(target, row, 10, line.vendor.stockQty!, band);
-    put(target, row, 11, typeLabel(line), band);
-    const choices = alternatives(line);
-    if (choices.length) put(target, row, 12, choices.map(item => `${item.name} — $${item.priceUsd!.toFixed(2)}`).join('\n'), linkStyle, 's', choices[0].url);
-    for (const choice of choices) alternativeRows.push({ source: line.name, choice });
-    put(target, row, 13, notes(line, result), band);
-    row++;
-  };
-  commercial.forEach(line => write(line, false));
-  const commercialEnd = row - 1;
-  if (printed.length) {
-    row++;
-    put(target, row, 1, '— 3D PRINTED PARTS —', 24);
-    for (let c = 2; c <= 13; c++) put(target, row, c, '', 24);
-    target.merges.push(`A${row}:M${row}`);
-    row++;
-    printed.forEach(line => write(line, true));
-  }
-  const bomEnd = row - 1;
-  if (alternativeRows.length) {
-    row += 2;
-    put(target, row, 1, '— IN-STOCK ALTERNATIVES —', 24);
-    for (let c = 2; c <= 13; c++) put(target, row, c, '', 24);
-    target.merges.push(`A${row}:M${row}`);
-    for (const alternative of alternativeRows) {
-      row++;
-      put(target, row, 2, alternative.source, row % 2 ? 0 : 1);
-      put(target, row, 5, alternative.choice.vendorId, row % 2 ? 0 : 1);
-      put(target, row, 6, alternative.choice.sku, row % 2 ? 3 : 4);
-      put(target, row, 12, `${alternative.choice.name} — $${alternative.choice.priceUsd!.toFixed(2)}`, row % 2 ? 17 : 18, 's', alternative.choice.url);
-    }
-  }
-  put(target, 4, 6, `SUM(H7:H${Math.max(7, bomEnd)})`, 22, 'f', undefined, Math.round(total * 100) / 100);
-  target.filter = `A6:M${Math.max(6, commercialEnd)}`;
-  target.frozen = 6;
-  target.landscape = true;
-  return target;
+function revisionText(result: ScanResult) {
+  const revision = result.diagnostics?.revision;
+  return revision ? `${revision.type === 'v' ? 'Version' : 'Microversion'} ${revision.id}` : 'Not recorded';
 }
-function simple(name: string, headings: string[], entries: Array<Array<{ value: string | number; link?: string }>>, empty: string): Sheet {
-  const target = sheet(name, headings.length);
-  headings.forEach((heading, index) => put(target, 1, index + 1, heading, 6));
-  if (!entries.length) put(target, 2, 1, empty);
-  entries.forEach((entry, index) => entry.forEach((item, c) => put(target, index + 2, c + 1, item.value,
-    name === 'Suppressed Parts' ? 23 : item.link ? 17 : index % 2 ? 1 : 0, typeof item.value === 'number' ? 'n' : 's', item.link)));
-  target.frozen = 1;
-  if (entries.length) target.filter = `A1:${cellRef(headings.length, entries.length + 1)}`;
+/** STEP file names exactly as the export names them: same lines, same order, same de-duplication. */
+function stepNames(result: ScanResult) {
+  const used = new Set<string>();
+  return new Map(result.lines.filter(wantsStep).map(line => [line.bomLineKey, stepFileName(line, used)]));
+}
+const byName = (a: BomLine, b: BomLine) => a.name.localeCompare(b.name);
+/** Live subtotal of filled Line Totals; with none filled it reads "None priced", never a $0.00 that looks complete. */
+const subtotal = (range: string) => `IF(COUNT(${range}),SUM(${range}),"None priced")`;
+const band = (index: number, even: number, odd: number) => index % 2 ? odd : even;
+
+/** Title band shared by every sheet: sheet title, assembly with its Onshape link, and when it was read. */
+function heading(target: Sheet, title: string, result: ScanResult, now: Date, from: number) {
+  const last = target.widths.length;
+  for (const row of [1, 2, 3]) for (let c = 1; c <= last; c++) put(target, row, c, '', row === 1 ? S.title : S.band);
+  put(target, 1, from, title, S.title);
+  put(target, 2, from, `${result.documentName ? `${result.documentName} / ` : ''}${result.assemblyName} · Open in Onshape`, S.band, 's', `https://cad.onshape.com/documents/${encodeURIComponent(result.documentId)}`);
+  put(target, 3, from, `Scanned ${date(result.scannedAt)} (${revisionText(result)}) · Generated ${now.toISOString().slice(0, 16).replace('T', ' ')} UTC`, S.band);
+  for (const row of [1, 2, 3]) target.merges.push(`${cellRef(from, row)}:${cellRef(last, row)}`);
+  target.widths = target.widths.map(() => 8);
+}
+/** Header cells, widened for the filter button Excel draws at their right edge. */
+function headers(target: Sheet, row: number, names: string[]) {
+  names.forEach((name, index) => { put(target, row, index + 1, name, S.header); target.widths[index] = Math.max(target.widths[index], name.length + 5); });
+}
+
+const BUY_HEADERS = ['#', 'Part', 'Qty Needed', 'Pack Size', 'Packs to Order', 'Vendor', 'SKU', 'Pack Price', 'Line Total', 'Stock', 'Match', 'Product', 'Onshape part', 'Notes'];
+/**
+ * One row per part the team buys, grouped by vendor. Line Total is a live `Packs × Pack Price` formula only where the match
+ * is exact or confirmed and the pack size and price are verified; every other row keeps its financial cells blank.
+ */
+function buySheet(result: ScanResult, now: Date) {
+  const target = sheet('Buy list', BUY_HEADERS.length, { 2: 44, 14: 52 });
+  heading(target, 'BUY LIST', result, now, 1);
+  const lines = result.lines.filter(line => line.disposition === 'buy')
+    .sort((a, b) => Number(ordered(b)) - Number(ordered(a)) || (a.vendor ? vendorName[a.vendor.vendorId] : '~').localeCompare(b.vendor ? vendorName[b.vendor.vendorId] : '~') || byName(a, b));
+  const first = 7;
+  const last = Math.max(first, first + lines.length - 1);
+  const pricedLines = lines.filter(priced);
+  const total = Math.round(pricedLines.reduce((sum, line) => sum + line.lineTotalUsd!, 0) * 100) / 100;
+  put(target, 4, 2, 'Lines', S.label); put(target, 4, 3, lines.length, S.value);
+  put(target, 4, 4, 'Priced', S.label); put(target, 4, 5, pricedLines.length, S.value);
+  put(target, 4, 6, 'Unpriced', S.label); put(target, 4, 7, lines.length - pricedLines.length, S.value);
+  put(target, 4, 8, 'Known subtotal', S.label); put(target, 4, 9, subtotal(`I${first}:I${last}`), S.total, 'f', undefined, pricedLines.length ? total : undefined);
+  put(target, 5, 1, 'Known subtotal adds only Line Totals that are filled in: an exact or confirmed product with a verified pack size and price. A blank Line Total is unknown, not zero. Packs to Order = Qty Needed ÷ Pack Size, rounded up.', S.note);
+  target.merges.push(`A5:${cellRef(BUY_HEADERS.length, 5)}`); target.tall = [5];
+  headers(target, 6, BUY_HEADERS);
+  lines.forEach((line, index) => {
+    const row = first + index;
+    const body = band(index, S.body, S.bodyAlt);
+    const vendor = ordered(line) ? line.vendor! : null;
+    put(target, row, 1, index + 1, body);
+    put(target, row, 2, line.name, band(index, S.bold, S.boldAlt));
+    put(target, row, 3, line.qty, body);
+    const pack = verifiedPack(line);
+    if (pack) put(target, row, 4, pack, body); else put(target, row, 4, '', body);
+    if (priced(line)) put(target, row, 5, line.packsToOrder!, body); else put(target, row, 5, '', body);
+    put(target, row, 6, vendor ? vendorName[vendor.vendorId] : '', body);
+    put(target, row, 7, vendor?.sku ?? '', band(index, S.bold, S.boldAlt));
+    if (vendor?.priceUsd !== null && vendor) put(target, row, 8, vendor.priceUsd, band(index, S.money, S.moneyAlt)); else put(target, row, 8, '', body);
+    if (priced(line)) put(target, row, 9, `E${row}*H${row}`, band(index, S.money, S.moneyAlt), 'f', undefined, line.lineTotalUsd!);
+    else put(target, row, 9, '', body);
+    const level = stock(line); put(target, row, 10, level.value, level.value ? level.style : body);
+    put(target, row, 11, matchText[line.matchStatus], body);
+    put(target, row, 12, vendor ? 'Product page' : '', band(index, S.link, S.linkAlt), 's', vendor?.url);
+    put(target, row, 13, 'Open in Onshape', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+    put(target, row, 14, purchaseNotes(line, result), band(index, S.wrap, S.wrapAlt));
+  });
+  if (!lines.length) put(target, first, 1, 'No parts are marked Buy yet. Decide parts in Control Kit, then download again.', S.muted);
+  target.filter = `A6:${cellRef(BUY_HEADERS.length, last)}`;
+  target.frozen = 6; target.landscape = true;
+  return { target, first, last, total, priced: pricedLines.length, lines: lines.length };
+}
+
+/** Parts the team makes, by process, with the STEP file name each one gets in the export ZIP. */
+function makeSheet(result: ScanResult, now: Date) {
+  const names = ['#', 'Part', 'Qty Needed', 'Process', 'Material', 'STEP file', 'Onshape part', 'Why'];
+  const target = sheet('Make', names.length, { 2: 44, 6: 44, 8: 52 });
+  heading(target, 'MAKE', result, now, 1);
+  put(target, 4, 1, 'STEP files come from Download STEP files in Control Kit; each file in the ZIP has the name shown here, in a folder for its process.', S.note);
+  target.merges.push(`A4:${cellRef(names.length, 4)}`); target.tall = [4];
+  headers(target, 6, names);
+  const files = stepNames(result);
+  const lines = result.lines.filter(line => ['print', 'cnc', 'cut-2d', 'fabricate'].includes(line.disposition))
+    .sort((a, b) => order.indexOf(a.disposition) - order.indexOf(b.disposition) || byName(a, b));
+  lines.forEach((line, index) => {
+    const row = 7 + index;
+    const body = band(index, S.body, S.bodyAlt);
+    put(target, row, 1, index + 1, body);
+    put(target, row, 2, line.name, band(index, S.bold, S.boldAlt));
+    put(target, row, 3, line.qty, body);
+    put(target, row, 4, shortLabel[line.disposition], body);
+    put(target, row, 5, line.material ?? '', body);
+    put(target, row, 6, files.get(line.bomLineKey) ?? '', body);
+    put(target, row, 7, 'Open in Onshape', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+    put(target, row, 8, line.dispositionEvidence.join('; '), band(index, S.wrap, S.wrapAlt));
+  });
+  if (!lines.length) put(target, 7, 1, 'No parts are marked to make yet.', S.muted);
+  target.filter = `A6:${cellRef(names.length, Math.max(7, 6 + lines.length))}`;
+  target.frozen = 6; target.landscape = true;
   return target;
 }
 
-const item = (value: string | number, link?: string) => ({ value, link });
-export function buildExcelWorkbook(result: ScanResult, now = new Date(), logo?: Uint8Array): ExcelExport {
-  const printed = result.lines.filter(line => line.classification === 'printed');
-  const sheets = [
-    bom(result, now, Boolean(logo)),
-    simple('3D Printed Parts', ['Part Name', 'Qty', 'Category (zip folder)', 'Classifier Score', 'Why Flagged', 'Print Files (Part Studio link)'],
-      printed.map(line => [item(line.name), item(line.qty), item(printCategory(line.name)), item(line.classificationScore), item(line.classificationReasons.join('; ')), item(line.partStudioUrl, line.partStudioUrl)]), 'No 3D printed parts detected.'),
-    simple('Suppressed Parts', ['Part Name', 'Qty', 'Instance Path(s)', 'Document'],
-      result.suppressed.map(line => [item(line.name), item(line.qty), item(line.instancePaths.join('; ')), item(line.partStudioUrl, line.partStudioUrl)]), 'No suppressed parts.'),
-    simple('Missing Metadata', ['Part Name', 'Qty', 'What Was Missing', 'Part Studio Link'],
-      result.missingMetadata.map(line => [item(line.name), item(line.qty), item(line.missingMetadataReason ?? 'Metadata unavailable'), item(line.partStudioUrl, line.partStudioUrl)]), 'All parts enriched successfully.'),
+/** Parts without a decision, with Control Kit's suggestion and any possible product to confirm. */
+function reviewSheet(result: ScanResult, now: Date) {
+  const names = ['#', 'Part', 'Qty Needed', 'Suggested', 'Possible product', 'Why it needs review', 'Onshape part'];
+  const target = sheet('Review', names.length, { 2: 44, 6: 64 });
+  heading(target, 'NEEDS REVIEW', result, now, 1);
+  put(target, 4, 1, 'Decide these parts in Control Kit. A possible product is a candidate only: it is not priced or ordered until someone confirms it.', S.note);
+  target.merges.push(`A4:${cellRef(names.length, 4)}`); target.tall = [4];
+  headers(target, 6, names);
+  const lines = result.lines.filter(line => line.disposition === 'review')
+    .sort((a, b) => Number(Boolean(b.vendor && b.matchStatus === 'possible')) - Number(Boolean(a.vendor && a.matchStatus === 'possible')) || Number(Boolean(b.suggestedDisposition)) - Number(Boolean(a.suggestedDisposition)) || b.qty - a.qty || byName(a, b));
+  lines.forEach((line, index) => {
+    const row = 7 + index;
+    const body = band(index, S.body, S.bodyAlt);
+    const candidate = line.vendor && line.matchStatus === 'possible' ? line.vendor : null;
+    put(target, row, 1, index + 1, body);
+    put(target, row, 2, line.name, band(index, S.bold, S.boldAlt));
+    put(target, row, 3, line.qty, body);
+    put(target, row, 4, line.suggestedDisposition ? shortLabel[line.suggestedDisposition] : '', body);
+    put(target, row, 5, candidate ? product(candidate) : '', candidate ? band(index, S.link, S.linkAlt) : body, 's', candidate?.url);
+    put(target, row, 6, line.reviewReason ?? line.dispositionEvidence.join('; '), band(index, S.wrap, S.wrapAlt));
+    put(target, row, 7, 'Open in Onshape', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+  });
+  if (!lines.length) put(target, 7, 1, 'Every part has a decision.', S.muted);
+  target.filter = `A6:${cellRef(names.length, Math.max(7, 6 + lines.length))}`;
+  target.frozen = 6; target.landscape = true;
+  return target;
+}
+
+/** Every part with a link to its exact vendor product page and to the part in Onshape. */
+function linksSheet(result: ScanResult, now: Date) {
+  const names = ['#', 'Part', 'Qty Needed', 'How obtained', 'Part number', 'Vendor product', 'Match', 'Onshape part'];
+  const target = sheet('Links', names.length, { 2: 48, 6: 30 });
+  heading(target, 'LINKS', result, now, 1);
+  put(target, 4, 1, 'Each part links to its vendor product page (exact or confirmed products, and possible ones marked as such) and to the part in Onshape.', S.note);
+  target.merges.push(`A4:${cellRef(names.length, 4)}`); target.tall = [4];
+  headers(target, 6, names);
+  const lines = [...result.lines].sort((a, b) => order.indexOf(a.disposition) - order.indexOf(b.disposition) || byName(a, b));
+  lines.forEach((line, index) => {
+    const row = 7 + index;
+    const body = band(index, S.body, S.bodyAlt);
+    const vendor = line.vendor && line.matchStatus !== 'rejected' ? line.vendor : null;
+    put(target, row, 1, index + 1, body);
+    put(target, row, 2, line.name, band(index, S.bold, S.boldAlt));
+    put(target, row, 3, line.qty, body);
+    put(target, row, 4, shortLabel[line.disposition], body);
+    put(target, row, 5, line.partNumber ?? '', body);
+    put(target, row, 6, vendor ? product(vendor) : '', vendor ? band(index, S.link, S.linkAlt) : body, 's', vendor?.url);
+    put(target, row, 7, vendor ? matchText[line.matchStatus] : '', body);
+    put(target, row, 8, 'Open in Onshape', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+  });
+  target.filter = `A6:${cellRef(names.length, Math.max(7, 6 + lines.length))}`;
+  target.frozen = 6;
+  return target;
+}
+
+/** Things that keep the lists from being complete: suppressed parts, missing data, unresolved subassemblies, stock problems. */
+function exceptionsSheet(result: ScanResult, now: Date) {
+  const names = ['#', 'Kind', 'Part', 'Qty', 'Detail', 'Onshape part'];
+  const target = sheet('Exceptions', names.length, { 3: 44, 5: 72 });
+  heading(target, 'EXCEPTIONS', result, now, 1);
+  headers(target, 6, names);
+  const rows: Array<{ kind: string; line: BomLine; detail: string }> = [
+    ...result.lines.filter(line => ordered(line) && line.disposition === 'buy' && ['out', 'low'].includes(line.vendor!.stock))
+      .map(line => ({ kind: line.vendor!.stock === 'out' ? 'Out of stock' : 'Low stock', line, detail: `${product(line.vendor!)} as of ${date(line.vendor!.updatedAt)}` })),
+    ...result.lines.filter(line => line.unresolvedSubassembly).map(line => ({ kind: 'Unresolved subassembly', line, detail: line.missingMetadataReason ?? 'Its parts could not be read' })),
+    ...result.missingMetadata.filter(line => !line.suppressed && !line.unresolvedSubassembly)
+      .map(line => ({ kind: 'Missing data', line, detail: line.metadataIssue ? metadataIssueText[line.metadataIssue.code] : line.missingMetadataReason ?? 'Metadata unavailable' })),
+    ...result.suppressed.map(line => ({ kind: 'Suppressed', line, detail: `Suppressed in Onshape, so not bought or made (${line.instancePaths.length} place${line.instancePaths.length === 1 ? '' : 's'} in the assembly)` })),
   ];
-  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets>${sheets.map((entry, index) => `<sheet name="${esc(entry.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join('')}</sheets><definedNames><definedName name="_xlnm.Print_Titles" localSheetId="0">'BOM'!$6:$6</definedName></definedNames><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`;
-  const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')}<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  rows.forEach(({ kind, line, detail }, index) => {
+    const row = 7 + index;
+    const body = band(index, S.body, S.bodyAlt);
+    put(target, row, 1, index + 1, body);
+    put(target, row, 2, kind, band(index, S.bold, S.boldAlt));
+    put(target, row, 3, line.name, body);
+    put(target, row, 4, line.qty, body);
+    put(target, row, 5, detail, band(index, S.wrap, S.wrapAlt));
+    put(target, row, 6, 'Open in Onshape', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+  });
+  if (!rows.length) put(target, 7, 1, 'Nothing to report.', S.muted);
+  target.filter = `A6:${cellRef(names.length, Math.max(7, 6 + rows.length))}`;
+  target.frozen = 6; target.landscape = true;
+  return target;
+}
+
+/** First sheet: the logo, what was scanned, the headline numbers (the subtotal live from the Buy list), catalogs, and how to read the rest. */
+function overviewSheet(result: ScanResult, now: Date, buy: ReturnType<typeof buySheet>, drawing: boolean) {
+  const target = sheet('Overview', 10, { 1: 12, 2: 10, 3: 16, 4: 10, 5: 16, 6: 10, 7: 16, 8: 10, 9: 18, 10: 14 });
+  target.drawing = drawing;
+  heading(target, 'CONTROL KIT  /  BILL OF MATERIALS', result, now, 3);
+  target.merges.push('A1:B3');
+  const count = (disposition: Disposition) => result.lines.filter(line => line.disposition === disposition).length;
+  const make = count('print') + count('cnc') + count('cut-2d') + count('fabricate');
+  put(target, 4, 1, 'Parts', S.label); put(target, 4, 2, result.lines.length, S.value);
+  put(target, 4, 3, 'Buy', S.label); put(target, 4, 4, count('buy'), S.value);
+  put(target, 4, 5, 'Make', S.label); put(target, 4, 6, make, S.value);
+  put(target, 4, 7, 'Needs review', S.label); put(target, 4, 8, count('review'), S.value);
+  put(target, 4, 9, 'Known subtotal', S.label); put(target, 4, 10, subtotal(`'Buy list'!I${buy.first}:I${buy.last}`), S.total, 'f', undefined, buy.priced ? buy.total : undefined);
+  put(target, 5, 1, `${buy.priced} of ${buy.lines} parts to buy are priced. ${result.stats.totalInstances} instances in the assembly${result.suppressed.length ? `, plus ${result.suppressed.reduce((sum, line) => sum + line.qty, 0)} suppressed` : ''}.`, S.note);
+  target.merges.push('A5:J5');
+
+  let row = 7;
+  put(target, row, 1, 'Vendor catalogs', S.section); for (let c = 2; c <= 10; c++) put(target, row, c, '', S.section); target.merges.push(`A${row}:J${row}`);
+  row++;
+  put(target, row, 1, 'Vendor', S.header); put(target, row, 3, 'Status', S.header); put(target, row, 5, 'Products', S.header); put(target, row, 7, 'Updated', S.header);
+  for (const c of [2, 4, 6, 8, 9, 10]) put(target, row, c, '', S.header);
+  const health: CatalogHealth | undefined = result.catalogHealth;
+  for (const [index, vendor] of (health?.vendors ?? []).entries()) {
+    row++;
+    const body = band(index, S.body, S.bodyAlt);
+    put(target, row, 1, vendorName[vendor.vendorId], band(index, S.bold, S.boldAlt));
+    put(target, row, 3, catalogText(vendor), body);
+    put(target, row, 5, vendor.recordCount, body);
+    put(target, row, 7, date(vendor.updatedAt), body);
+  }
+  if (!health) { row++; put(target, row, 1, `Catalog status was not recorded with this scan. Vendor data as of ${date(result.vendorDataUpdatedAt)}.`, S.muted); }
+
+  row += 2;
+  put(target, row, 1, 'How to read this workbook', S.section); for (let c = 2; c <= 10; c++) put(target, row, c, '', S.section); target.merges.push(`A${row}:J${row}`);
+  const notes = [
+    'Buy list: parts to order, grouped by vendor, with product links, packs, and live Line Total formulas.',
+    'Make: parts to 3D print, machine, cut, or fabricate, with the STEP file name each gets in the export ZIP.',
+    'Review: parts without a decision yet, with suggestions and possible products to confirm in Control Kit.',
+    'Links: every part, with its vendor product page and its Onshape part.',
+    'Exceptions: stock problems, unresolved subassemblies, parts missing data, and suppressed parts.',
+    'Qty Needed counts every active instance in the assembly. Packs to Order = Qty Needed ÷ Pack Size, rounded up. Line Total = Packs to Order × Pack Price.',
+    'A product is used only when its SKU matched exactly or someone confirmed it. Possible matches are listed but never priced. Known subtotal adds only filled Line Totals.',
+  ];
+  for (const note of notes) { row++; put(target, row, 1, note, S.wrap); target.merges.push(`A${row}:J${row}`); (target.tall ??= []).push(row); }
+  return target;
+}
+
+export function buildExcelWorkbook(result: ScanResult, now = new Date(), logo?: Uint8Array): ExcelExport {
+  const buy = buySheet(result, now);
+  const sheets = [overviewSheet(result, now, buy, Boolean(logo)), buy.target, makeSheet(result, now), reviewSheet(result, now), linksSheet(result, now), exceptionsSheet(result, now)];
+  const titles = sheets.map((entry, index) => entry.frozen ? `<definedName name="_xlnm.Print_Titles" localSheetId="${index}">'${entry.name}'!$${entry.frozen}:$${entry.frozen}</definedName>` : '').join('');
+  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets>${sheets.map((entry, index) => `<sheet name="${esc(entry.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join('')}</sheets><definedNames>${titles}</definedNames><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`;
+  const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
   const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${logo ? '<Default Extension="png" ContentType="image/png"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>' : ''}<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`;
   const files: Record<string, Uint8Array> = {
     '[Content_Types].xml': strToU8(contentTypes),
@@ -192,10 +351,12 @@ export function buildExcelWorkbook(result: ScanResult, now = new Date(), logo?: 
   return { bytes: zipSync(files, { level: 6 }), filename: buildFilename(result.assemblyName, now).filename };
 }
 
-/** Plain BOM fallback derived from the same sheet model as the XLSX export. */
+export const CSV_HEADERS = ['#', 'Part', 'Qty Needed', 'How obtained', 'Pack Size', 'Packs to Order', 'Vendor', 'SKU', 'Pack Price', 'Line Total', 'Stock', 'Match', 'Product URL', 'Onshape URL', 'Notes'];
+/**
+ * Plain fallback with the workbook's rules: every active part, one row each. Pack Size, Packs to Order, and Line Total are
+ * filled only for an exact or confirmed product with a verified pack size and price; a possible match is only named in Notes.
+ */
 export function buildBomCsv(result: ScanResult, now = new Date()): CsvExport {
-  const source = bom(result, now);
-  const last = Math.max(6, ...source.rows.keys());
   const quote = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
   const safeText = (value: string | number) => {
     const text = String(value);
@@ -204,18 +365,20 @@ export function buildBomCsv(result: ScanResult, now = new Date()): CsvExport {
     const leader = text[offset];
     return leader && '=+-@'.includes(leader) ? `'${text}` : text;
   };
-  const rows = Array.from({ length: last }, (_, index) => {
-    const columns = Array<string>(13).fill('');
-    for (const cell of source.rows.get(index + 1) ?? []) columns[cell.col - 1] = cell.type === 'f'
-      ? cell.cached?.toString() ?? '' : cell.type === 'n' ? String(cell.value) : quote(safeText(cell.value));
-    return columns.join(',');
-  });
+  const text = (value: string | null | undefined) => quote(safeText(value ?? ''));
+  const lines = [...result.lines].sort((a, b) => order.indexOf(a.disposition) - order.indexOf(b.disposition) || byName(a, b));
+  const rows = [CSV_HEADERS.map(quote).join(','), ...lines.map((line, index) => {
+    const vendor = ordered(line) ? line.vendor! : null;
+    return [String(index + 1), text(line.name), String(line.qty), text(shortLabel[line.disposition]), String(verifiedPack(line) ?? ''), priced(line) ? String(line.packsToOrder) : '',
+      text(vendor ? vendorName[vendor.vendorId] : ''), text(vendor?.sku), vendor?.priceUsd === null || !vendor ? '' : vendor.priceUsd.toFixed(2), priced(line) ? line.lineTotalUsd!.toFixed(2) : '',
+      text(stock(line).value), text(matchText[line.matchStatus]), text(vendor ? safeUrl(vendor.url) : ''), text(safeUrl(line.partStudioUrl)), text(purchaseNotes(line, result))].join(',');
+  })];
   const { filename } = buildFilename(result.assemblyName, now);
   return { bytes: strToU8(`\uFEFF${rows.join('\r\n')}\r\n`), filename: filename.replace(/\.xlsx$/, '.csv') };
 }
 
 function buildFilename(assemblyName: string, now: Date) {
-  const date = now.toISOString().slice(0, 10);
+  const day = now.toISOString().slice(0, 10);
   const assembly = assemblyName.replace(/[^a-zA-Z0-9-_ ]/g, '').trim().replace(/ +/g, '_').slice(0, 80) || 'Assembly';
-  return { filename: `${assembly}_BOM_${date}.xlsx` };
+  return { filename: `${assembly}_BOM_${day}.xlsx` };
 }
