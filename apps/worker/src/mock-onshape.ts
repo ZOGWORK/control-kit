@@ -1,7 +1,9 @@
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 
-const fixtures = Object.fromEntries(['simple', 'robot', 'empty'].map((key, index) => [key, JSON.parse(readFileSync(new URL(`../../../fixtures/assembly-${['simple', 'ftc-robot', 'empty'][index]}.json`, import.meta.url), 'utf8'))]));
+// Loaded on first use, so tools that import the mock only for its STEP helpers need no fixture files on disk.
+let loaded: Record<string, MockDefinition> | null = null;
+const fixture = (key: string) => (loaded ??= Object.fromEntries(['simple', 'robot', 'empty'].map((key, index) => [key, JSON.parse(readFileSync(new URL(`../../../fixtures/assembly-${['simple', 'ftc-robot', 'empty'][index]}.json`, import.meta.url), 'utf8'))])))[key];
 
 /** BOM properties the fixtures' parts carry in Onshape. Synthetic, shaped like BTBillOfMaterialsInfo. */
 const bomProperties: Record<string, { description?: string; vendor?: string; material?: { displayName: string } }> = {
@@ -32,8 +34,26 @@ export function mockBom(definition: MockDefinition) {
       itemSource: { documentId: instance.documentId, elementId: instance.elementId, partId: instance.partId, wvmType: 'w', wvmId: 'work1', fullConfiguration: 'default', configuration: 'default', isStandardContent: false } })) };
 }
 
+const stepNames: Record<string, string> = { 'intake-guide': 'Custom Printed Intake Guide', 'sensor-mount': 'Custom Printed Sensor Mount' };
+/** A minimal but well-formed ISO-10303-21 file in millimetres, naming its product like Onshape's STEP export. */
+export const mockStep = (name: string) => `ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('Control Kit mock Onshape'),'2;1');
+FILE_NAME('${name}.step','2026-10-23T12:00:00',(''),(''),'','','');
+FILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF'));
+ENDSEC;
+DATA;
+#1=PRODUCT('${name}','${name}','',(#2));
+#2=PRODUCT_CONTEXT('',#3,'mechanical');
+#3=APPLICATION_CONTEXT('managed model based 3d engineering');
+#4=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));
+ENDSEC;
+END-ISO-10303-21;
+`;
+
 export function createMockOnshape() {
   let bomFailure: number | null = null;
+  const translationPolls = new Map<string, number>();
   let once = false;
   let apiRequests = 0;
   let rateLimitRemaining = 0;
@@ -61,14 +81,14 @@ export function createMockOnshape() {
       apiRequests++;
       if (bomFailure) return json(bomFailure, { error: 'fixture_bom_failure' });
       if (url.searchParams.get('indented') !== 'false') return json(400, { error: 'expected a flattened BOM' });
-      return json(200, mockBom(fixtures[bom[1]]));
+      return json(200, mockBom(fixture(bom[1])));
     }
     const assembly = url.pathname.match(/^\/api\/v\d+\/assemblies\/d\/(simple|robot|empty)\/[wvm]\/[^/]+\/e\/[^/]+$/);
     if (assembly) {
       apiRequests++;
       if (rateLimitRemaining-- > 0) return json(429, { error: 'rate_limited' });
       if (url.searchParams.get('excludeSuppressed') !== 'false') return json(400, { error: 'excludeSuppressed must be false' });
-      return json(200, fixtures[assembly[1]]);
+      return json(200, fixture(assembly[1]));
     }
     const mass = url.pathname.match(/^\/api\/v\d+\/partstudios\/d\/[^/]+\/[wvm]\/[^/]+\/e\/([^/]+)\/massproperties$/);
     if (mass) {
@@ -79,18 +99,28 @@ export function createMockOnshape() {
       const id = ids[mass[1]];
       return id ? json(200, { bodies: { [id]: { mass: [0.012], material: 'Steel' } } }) : json(404, { error: 'not_found' });
     }
-    if (/^\/api\/v\d+\/parts\/d\/[^/]+\/[wvm]\/[^/]+\/e\/[^/]+\/partid\/[^/]+\/stl$/.test(url.pathname)) {
+    // STEP translation: start, then ACTIVE on the first poll and DONE on the next. 'motor-5203' fails deliberately and
+    // 'bad-file' finishes with an HTML page instead of a STEP file, so both failure paths are exercised.
+    const translate = url.pathname.match(/^\/api\/v\d+\/partstudios\/d\/([^/]+)\/[wv]\/[^/]+\/e\/[^/]+\/translations$/);
+    if (translate && request.method === 'POST') {
       apiRequests++;
-      return url.pathname.includes('/partid/intake-guide/') ? Response.redirect('http://localhost:8788/api/v9/stl-download/intake-guide', 307) : json(404, { error: 'no_direct_stl' });
+      const body = await request.json() as { formatName?: string; partIds?: string; storeInDocument?: boolean };
+      if (body.formatName !== 'STEP' || !body.partIds || body.storeInDocument !== false) return json(400, { error: 'expected one part, STEP, not stored' });
+      return json(200, { id: `tr-${body.partIds}`, requestState: 'ACTIVE', documentId: translate[1] });
     }
-    if (url.pathname === '/api/v9/stl-download/intake-guide') { apiRequests++; return new Response('solid intake-guide\nendsolid intake-guide\n', { headers: { 'content-type': 'application/sla' } }); }
-    if (/^\/api\/v\d+\/partstudios\/d\/[^/]+\/[wvm]\/[^/]+\/e\/[^/]+\/translations$/.test(url.pathname) && request.method === 'POST') {
+    const translation = url.pathname.match(/^\/api\/v\d+\/translations\/tr-([^/]+)$/);
+    if (translation) {
       apiRequests++;
-      return json(200, { id: 'mock-translation' });
+      const polls = (translationPolls.get(translation[1]) ?? 0) + 1;
+      translationPolls.set(translation[1], polls);
+      if (translation[1] === 'motor-5203') return json(200, { requestState: 'FAILED', failureReason: 'Deliberate fixture STEP failure' });
+      return json(200, polls < 2 ? { requestState: 'ACTIVE' } : { requestState: 'DONE', resultExternalDataIds: [`ext-${translation[1]}`] });
     }
-    if (/^\/api\/v\d+\/translations\/mock-translation$/.test(url.pathname)) {
+    const external = url.pathname.match(/^\/api\/v\d+\/documents\/d\/[^/]+\/externaldata\/ext-([^/]+)$/);
+    if (external) {
       apiRequests++;
-      return json(200, { requestState: 'FAILED', failureReason: 'Deliberate fixture STL failure' });
+      if (external[1] === 'bad-file') return new Response('<html><body>Error</body></html>', { headers: { 'content-type': 'text/html' } });
+      return new Response(mockStep(stepNames[external[1]] ?? external[1]), { headers: { 'content-type': 'application/octet-stream' } });
     }
     if (url.pathname.startsWith('/api/')) {
       apiRequests++;

@@ -125,6 +125,8 @@ export function mergeBom(result: ScanResult, bom: BillOfMaterials): BomReconcili
       line.partStudioUrl = `https://cad.onshape.com/documents/${encodeURIComponent(line.documentId)}/${line.sourceType}/${encodeURIComponent(line.sourceId!)}/e/${encodeURIComponent(line.elementId)}`;
       if (line.metadataIssue?.code === 'source-revision-unavailable') line.metadataIssue = null;
     }
+    // A BOM row read from a workspace or version also tells a file export where it can read the part.
+    if (!line.exportSource && (source.wvmType === 'w' || source.wvmType === 'v') && source.wvmId) line.exportSource = { type: source.wvmType, id: source.wvmId };
     // Onshape's BOM excludes suppressed instances, so only active lines are compared with its quantity.
     if (!line.suppressed && properties.quantity !== null && properties.quantity !== line.qty) quantityMismatches++;
   }

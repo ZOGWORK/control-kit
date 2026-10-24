@@ -3,7 +3,7 @@ import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from '
 import { applyMatchDecision, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
-import { buildStlZip } from './stl-zip';
+import { advanceExport, createExportJob, fileKey, jobKey, jobSummary, type ExportJob } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 
 export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string }
@@ -69,6 +69,32 @@ async function exchange(env: Env, grant: Record<string, string>): Promise<Tokens
   const tokens = await response.json() as Partial<Tokens>;
   if (!tokens.access_token || (!tokens.refresh_token && !grant.refresh_token)) throw new Error('Incomplete token response');
   return { access_token: tokens.access_token, refresh_token: tokens.refresh_token ?? grant.refresh_token } as Tokens;
+}
+/**
+ * Counted Onshape fetch for one session: refreshes the token once on 401 (shared across concurrent calls) and
+ * retries 429 up to four times with bounded backoff.
+ */
+function onshapeFetcher(env: Env, current: { id: string; data: Session }, ledger: RequestLedger) {
+  let refreshing: Promise<void> | undefined;
+  return async (path: string, init: RequestInit = {}) => {
+    const send = (retry: boolean) => countedFetch(ledger, `${env.ONSHAPE_API_BASE}${path}`, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), authorization: `Bearer ${current.data.tokens.access_token}` }, signal: AbortSignal.timeout(20000) }, retry);
+    for (let attempt = 0; attempt <= 4; attempt++) {
+      let response = await send(attempt > 0);
+      if (response.status === 401) {
+        refreshing ??= (async () => {
+          current.data.tokens = await exchange(env, { grant_type: 'refresh_token', refresh_token: current.data.tokens.refresh_token });
+          await save(env, current.id, current.data);
+        })();
+        try { await refreshing; } catch { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
+        response = await send(true);
+        if (response.status === 401) { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
+      }
+      if (response.status !== 429 || attempt === 4) return response;
+      const retryAfter = Number(response.headers.get('retry-after'));
+      await new Promise(resolve => setTimeout(resolve, Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 4000) : 500 * 2 ** attempt));
+    }
+    throw new Error('Onshape rate limit exhausted');
+  };
 }
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -217,75 +243,54 @@ async function route(request: Request, env: Env): Promise<Response> {
       // Scoped to the user: a cached BOM is only served to someone whose own Onshape access already read it.
       { get: key => env.APP_STATE.get(`${current.data.user.id}:${key}`), put: (key, value) => env.APP_STATE.put(`${current.data.user.id}:${key}`, value, { expirationTtl: 30 * 86400 }) });
   }
-  if (url.pathname === '/api/prints/zip' && request.method === 'GET') {
+  const exportsMatch = url.pathname.match(/^\/api\/exports(?:\/([a-f0-9-]{36}))?(?:\/files\/(\d{1,4}))?$/);
+  if (exportsMatch) {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
-    const documentId = url.searchParams.get('documentId');
-    const scanId = url.searchParams.get('scanId');
-    if (!documentId || !/^[\w-]{1,128}$/.test(documentId) || !scanId || !/^[a-f0-9-]{36}$/.test(scanId)) return reply({ error: 'Invalid scan identity.' }, 400);
-    const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${scanId}`);
-    if (!raw) return reply({ error: 'Scan this assembly before exporting STLs.' }, 409);
-    let result = JSON.parse(raw) as ScanResult;
-    if (result.documentId !== documentId || result.scanId !== scanId) return reply({ error: 'Scan does not match this document.' }, 409);
-    const settingsRaw = await env.APP_STATE.get(`settings:${current.data.user.id}`);
-    for (let offset = 0; offset < result.lines.length; offset += 20) {
-      const pending = result.lines.slice(offset, offset + 20).filter(line => line.matchStatus === 'possible' && line.vendor);
-      const choices = await Promise.all(pending.map(async line => {
-        const value = await env.APP_STATE.get(await matchDecisionKey(current.data.user.id, documentId, line.bomLineKey));
-        if (!value) return null;
-        try { return JSON.parse(value) as MatchDecision; } catch { return null; }
-      }));
-      choices.forEach((choice, index) => {
-        const line = pending[index];
-        if (choice && line.vendor && choice.vendorId === line.vendor.vendorId && choice.normalizedSku === line.vendor.normalizedSku) result = applyMatchDecision(result, line.bomLineKey, choice.status);
-      });
+    const userId = current.data.user.id;
+    const [, jobId, fileIndex] = exportsMatch;
+    // A finished file is served from KV: downloading it again costs no Onshape request.
+    if (jobId && fileIndex !== undefined && request.method === 'GET') {
+      const raw = await env.APP_STATE.get(jobKey(userId, jobId));
+      const part = raw ? (JSON.parse(raw) as ExportJob).parts[Number(fileIndex)] : undefined;
+      const file = part?.state === 'ready' ? await env.APP_STATE.get(fileKey(userId, jobId, Number(fileIndex))) : null;
+      if (!part || !file) return reply({ error: 'This file is not ready or has expired. Export again.' }, 404);
+      return new Response(file, { headers: { 'content-type': 'application/step', 'content-disposition': `attachment; filename="${part.fileName}"`, 'cache-control': 'no-store' } });
     }
-    const overrides = await loadClassificationOverrides(result.lines, async line => {
-      return readDisposition(env, current.data.user.id, documentId, classificationIdentity(line));
-    }, request.signal);
-    classifyScan(result, settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null }, overrides);
-    let refreshing: Promise<void> | undefined;
-    const ledger = new RequestLedger('export');
-    const fetchStl = async (path: string, init: RequestInit) => {
-      let attempts = 0;
-      const send = async () => {
-        let target = new URL(path, env.ONSHAPE_API_BASE);
-        for (let hops = 0; hops <= 2; hops++) {
-          const response = await countedFetch(ledger, target, { ...init, redirect: 'manual', headers: { ...Object.fromEntries(new Headers(init.headers)), authorization: `Bearer ${current.data.tokens.access_token}` } }, hops === 0 && attempts++ > 0);
-          if (init.method === 'POST' || ![307, 308].includes(response.status) || !response.headers.get('location')) return response;
-          const next = new URL(response.headers.get('location')!, target);
-          if (next.origin !== new URL(env.ONSHAPE_API_BASE).origin) return response;
-          target = next;
-        }
-        throw Error('Onshape STL redirect limit exceeded');
-      };
-      for (let attempt = 0; attempt <= 4; attempt++) {
-        let response = await send();
-        if (response.status === 401) {
-          refreshing ??= (async () => {
-            current.data.tokens = await exchange(env, { grant_type: 'refresh_token', refresh_token: current.data.tokens.refresh_token });
-            await save(env, current.id, current.data);
-          })();
-          try { await refreshing; } catch { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
-          response = await send();
-          if (response.status === 401) { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
-        }
-        if (response.status !== 429 || attempt === 4) return response;
-        const retryAfter = Number(response.headers.get('retry-after'));
-        const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 8000) : Math.round(2 ** attempt * 1000 * (0.8 + Math.random() * 0.4));
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, delay);
-          init.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(init.signal?.reason); }, { once: true });
-        });
+    let job: ExportJob;
+    if (!jobId && request.method === 'POST') {
+      const body = await request.json() as { documentId?: string; scanId?: string };
+      if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.scanId || !/^[a-f0-9-]{36}$/.test(body.scanId)) return reply({ error: 'Invalid scan identity.' }, 400);
+      const raw = await env.APP_STATE.get(`scan:${userId}:${body.scanId}`);
+      if (!raw) return reply({ error: 'Scan this assembly before exporting files.' }, 409);
+      let result = JSON.parse(raw) as ScanResult;
+      if (result.documentId !== body.documentId || result.scanId !== body.scanId) return reply({ error: 'Scan does not match this document.' }, 409);
+      // Use the decisions and dispositions as they are now, not as they were when the scan ran.
+      for (const line of result.lines.filter(item => item.matchStatus === 'possible' && item.vendor)) {
+        const value = await env.APP_STATE.get(await matchDecisionKey(userId, result.documentId, line.bomLineKey));
+        let choice: MatchDecision | null = null;
+        try { choice = value ? JSON.parse(value) as MatchDecision : null; } catch { choice = null; }
+        if (choice && line.vendor && choice.vendorId === line.vendor.vendorId && choice.normalizedSku === line.vendor.normalizedSku) result = applyMatchDecision(result, line.bomLineKey, choice.status);
       }
-      throw Error('Onshape rate limit exhausted');
-    };
-    const zip = await buildStlZip(result, env.ONSHAPE_API_VERSION, fetchStl, request.signal)
-      .finally(() => persistLedger(env.APP_STATE, ledger).catch(() => undefined));
-    return new Response(zip.bytes.buffer.slice(zip.bytes.byteOffset, zip.bytes.byteOffset + zip.bytes.byteLength) as ArrayBuffer,
-      { headers: { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${zip.filename}"`, 'cache-control': 'no-store',
-        'x-control-kit-failures': encodeURIComponent(JSON.stringify(zip.failures.slice(0, 10))), 'access-control-expose-headers': 'x-control-kit-failures' } });
+      const settingsRaw = await env.APP_STATE.get(`settings:${userId}`);
+      const overrides = await loadClassificationOverrides(result.lines, line => readDisposition(env, userId, result.documentId, classificationIdentity(line)), request.signal);
+      classifyScan(result, settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null }, overrides);
+      job = createExportJob(result, random());
+      if (!job.parts.length) return reply({ error: 'No part is set to 3D print, CNC, 2D cut, or other fabrication yet.' }, 409);
+    } else if (jobId && request.method === 'GET') {
+      const raw = await env.APP_STATE.get(jobKey(userId, jobId));
+      if (!raw) return reply({ error: 'This export has expired. Export again.' }, 404);
+      job = JSON.parse(raw) as ExportJob;
+    } else return reply({ error: 'Not found' }, 404);
+    const ledger = new RequestLedger('export');
+    try { await advanceExport(job, userId, env.APP_STATE, onshapeFetcher(env, current, ledger), env.ONSHAPE_API_VERSION); }
+    catch (error) {
+      if (error instanceof SessionExpiredError) return reply({ error: 'Reconnect Onshape.' }, 401);
+      throw error;
+    } finally { await persistLedger(env.APP_STATE, ledger).catch(() => undefined); }
+    await env.APP_STATE.put(jobKey(userId, job.jobId), JSON.stringify(job), { expirationTtl: 3600 });
+    return reply(jobSummary(job));
   }
   return reply({ error: 'Not found' }, 404);
 }

@@ -41,18 +41,18 @@ The seed is synthetic and is not a production catalog. A matched record's price 
 
 After a scan, **Download Excel BOM** creates a workbook locally in the browser without another API call. The BOM sheet shows Qty Needed, Packs to Order, Pack Price, and formula-driven Line Total; the Estimated Total formula sums those line totals. Unverified pack sizes and unconfirmed possible matches have blank line totals. Separate sheets list printed parts, suppressed parts, and missing metadata. Vendor data age and stale status appear in the header.
 
-To regenerate the fixture workbook and mock STL zip from the repository root:
+To regenerate the fixture workbook and mock STEP ZIP from the repository root:
 
 ```sh
 pnpm sample:excel
-pnpm sample:stl
+pnpm sample:step
 ```
 
-The checked-in samples are `samples/FTC_Competition_Robot_BOM_2026-10-23.xlsx` and `samples/FTC_Competition_Robot_prints.zip`. Both scripts use only fixtures and the same builders as the app. Alternative product links in the workbook are illustrative fixture data. The mock STL is illustrative geometry; its README records a deliberately failed part.
+The checked-in samples are `samples/FTC_Competition_Robot_BOM_2026-10-23.xlsx` and `samples/FTC_Competition_Robot_STEP.zip`. Both scripts use only fixtures and the same builders as the app; the STEP sample runs the real export job against mock Onshape. Alternative product links in the workbook are illustrative fixture data. The mock STEP file is a minimal valid ISO-10303-21 file, and the manifest records a deliberately failed part.
 
 If XLSX generation fails, the app offers **Download CSV instead** from the same BOM sheet data. The CSV has values and no styling or live formulas.
 
-## Printed parts and STL export
+## Dispositions and STEP export
 
 Each active line gets a **disposition**: Buy, 3D print, CNC machine, 2D cut (laser/waterjet/router), Other fabrication, or Needs review. It also gets a provenance, a source, a confidence, and the evidence behind them. They are decided in this order:
 1. A person's manual choice.
@@ -63,7 +63,12 @@ Each active line gets a **disposition**: Buy, 3D print, CNC machine, 2D cut (las
 
 A suggestion never decides by itself. A purchased CAD part therefore never becomes a print because of its name, and a flat plate is never assumed printable. Manual choices are shared by everyone who scans the document and are reapplied on every rescan. Each one records who set it and keeps a short history. Only someone whose own recent scan read that document can change one. Choices saved per user before this change are still honored.
 
-**Download printed parts STL zip** exports the current scan's printed lines, with at most three part requests in flight and a 60-second timeout per part. It tries the Onshape single-part STL endpoint first and then its async translation endpoint. The zip groups files by mechanism and includes `README.txt` with source links and every failed part; one failure does not discard successful STLs. The mock server and fixture tests cover this flow without live Onshape calls. Live endpoint shape and permissions are not yet validated against Onshape; the export rework replaces STL with STEP.
+**Download STEP files** exports every active part set to 3D print, CNC, 2D cut, or other fabrication. Name-only suggestions are not included until someone confirms them. The export runs as a job, so it fits the Worker's per-request limits:
+1. The Worker starts one Onshape STEP translation per part. It uses `createPartStudioTranslation` with `formatName: STEP`, the part's configuration, and `storeInDocument: false`, which needs only read access.
+2. The app polls while the Worker checks the translations a slice at a time. Each finished file is downloaded once and must be a complete ISO-10303-21 file. HTML, empty, or truncated responses fail that part, and a file over 20 MB fails with a pointer to Onshape. The units and the STEP product name are recorded, and the file is kept for one hour.
+3. The browser fetches the ready files and builds `{Assembly}_STEP.zip`, with one folder per process plus `MANIFEST.txt`. The manifest lists every file with quantity, process, units, and Onshape source link, and every failure with its reason and link.
+
+Failed parts are also shown in the app. If every part fails, no ZIP is produced and the app explains why. Each part costs one translation start, its status polls, and one download, all counted in the request ledger. A 2D-cut part gets a STEP solid; its DXF cut file must still be made from its flat face.
 
 ## Vendor catalog refresh
 
@@ -115,8 +120,8 @@ On free Onshape plans, documents must be public for some API operations and rate
 
 - OAuth application and encrypted Worker secrets: complete. The exact redirect and OAuth URLs remain below for reference.
 - Add an **Element right panel** extension for **Assembly** using the iframe Action URL below. Create the private store entry and subscribe for an in-document test.
-- Verify connect, iframe reload, a real FTC assembly scan, Excel export, and STL zip after the owner supplies a validation document. Check actual API permissions before requesting any additional scope.
-- Include a privacy note: the Worker stores encrypted Onshape tokens server-side under an opaque session cookie, caches a completed scan for one hour for STL export, and uses catalog data for vendor enrichment. V1 sends no data to Control Point.
+- Verify connect, iframe reload, a real FTC assembly scan, Excel export, and STEP export after the owner supplies a validation document. Check actual API permissions before requesting any additional scope.
+- Include a privacy note: the Worker stores encrypted Onshape tokens server-side under an opaque session cookie, caches a completed scan and STEP export files for one hour, caches the assembly definition and BOM per user for 30 days by revision, and uses catalog data for vendor enrichment. V1 sends no data to Control Point.
 - Confirm Pages/Worker HTTPS URLs, free-plan wording, support contact, and screenshots before public submission.
 
 ## Owner's Onshape Developer Portal step
@@ -125,7 +130,7 @@ On free Onshape plans, documents must be public for some API operations and rate
 2. Enter **Name** `Control Kit`; **Primary format** `org.zogwork.controlkit` (permanent identifier); **Summary** `Read FTC assemblies to prepare a bill of materials and print files`; **Type** `Integrated Cloud App`.
 3. Enter the **production Redirect URL** `https://control-kit.control-kit-worker.workers.dev/oauth/redirect`. Onshape requires HTTPS; its localhost exception is documented for installed desktop apps.
 4. Enter **OAuth URL** `https://control-kit.control-kit-worker.workers.dev/oauth/start`. Onshape's Applications page can open this without Assembly context; if it supplies `redirectOnshapeUri`, Control Kit returns to that Onshape page after authorization. The **iframe Action URL** is `https://control-kit.pages.dev/?documentId={$documentId}&workspaceOrVersion={$workspaceOrVersion}&workspaceOrVersionId={$workspaceOrVersionId}&elementId={$elementId}`. These replacement tokens are documented for the Element right panel; `workspaceId` is deprecated there.
-5. Choose **read profile** (`OAuth2ReadPII`) and **read documents** (`OAuth2Read`) permissions. Check whether STL translation needs `OAuth2Write` in current Onshape documentation before requesting it. Click **Create application**. Save the OAuth client ID and newly generated client secret directly to Cloudflare Worker secrets when resources exist; do not put them in Git or chat.
+5. Choose **read profile** (`OAuth2ReadPII`) and **read documents** (`OAuth2Read`) permissions. STEP translation (`createPartStudioTranslation`) needs only `OAuth2Read` per the current OpenAPI spec; recheck in current Onshape documentation before requesting it. Click **Create application**. Save the OAuth client ID and newly generated client secret directly to Cloudflare Worker secrets when resources exist; do not put them in Git or chat.
 6. Open the new app → **Extensions** → **Add extension**. Choose **Element right panel** location and **Assembly** context, then set the Action URL from step 4. Create a private store entry and subscribe for in-document testing when those controls are available.
 
 These clicks and fields follow [Onshape Developer settings](https://cad.onshape.com/help/Content/Plans/my_account_developer.htm), [extension parameters](https://onshape-public.github.io/docs/app-dev/extensions/), the [OAuth guide](https://onshape-public.github.io/docs/auth/oauth/), and [Onshape's sample app](https://github.com/onshape-public/app-gltf-viewer). The Pages and Worker URLs respond over HTTPS. Onshape's OAuth guide says embedded apps need third-party cookies enabled. Actual iframe/OAuth behavior and permission details still require live portal verification. No live Onshape request has been spent.

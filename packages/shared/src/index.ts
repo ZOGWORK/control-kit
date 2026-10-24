@@ -5,6 +5,8 @@ export type { ClassificationOverride, ClassificationOverrides, Confidence, Dispo
 export type { VendorId, VendorRecord, MatchResult } from './matching';
 export { buildControlPointPayload, MockControlPointAdapter } from './control-point';
 export type { ControlPointAdapter, ControlPointBomPayload } from './control-point';
+export { checkStep, exportManifest, stepDispositions, stepFileName, wantsStep } from './step';
+export type { ExportPart, StepCheck } from './step';
 export { bomColumns, bomIdentity, bomProperties, bomText, flagMissingSources, mergeBom } from './bom';
 export type { BillOfMaterials, BomHeader, BomItemSource, BomProperties, BomReconciliation, BomRow } from './bom';
 import type { VendorRecord } from './matching';
@@ -20,7 +22,9 @@ export type BomLine = { bomLineKey: string; name: string; description: string | 
   /** How the part will be obtained, what decided it, and why it still needs review. Set by `classifyLine`. */
   disposition: Disposition; dispositionSource: DispositionSource; dispositionConfidence: Confidence; dispositionEvidence: string[]; reviewReason: string | null; suggestedDisposition: Disposition | null; provenance: Provenance; unresolvedSubassembly?: boolean;
   /** Properties from Onshape's BOM for this part, when its row was found. */
-  bomProperties?: BomProperties | null; isStandardContent?: boolean };
+  bomProperties?: BomProperties | null; isStandardContent?: boolean;
+  /** Workspace or version a file export can read this part from; Onshape's translation endpoint takes no microversion. */
+  exportSource?: { type: 'w' | 'v'; id: string } | null };
 /** Why a line lacks data. Codes are stable for UI, export, and diagnostics; the user-facing text lives in `metadataIssueText`. */
 export type MetadataIssueCode = 'unresolved-subassembly' | 'unresolved-reference' | 'source-revision-unavailable' | 'not-in-bom' | 'bom-unavailable';
 export type MetadataIssue = { code: MetadataIssueCode; httpStatus: number | null };
@@ -108,6 +112,8 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
     const configuration = instance.fullConfiguration ?? instance.configuration ?? null;
     const partId = instance.partId ?? null;
     const sourceType = instance.documentMicroversion ? 'm' : instance.versionId ?? instance.documentVersion ? 'v' : instance.workspaceId ? 'w' : instance.documentId === context.documentId ? context.workspaceOrVersion : null;
+    const exportSource: BomLine['exportSource'] = instance.documentId === context.documentId && context.workspaceOrVersion !== 'm' ? { type: context.workspaceOrVersion, id: context.workspaceOrVersionId }
+      : instance.versionId ?? instance.documentVersion ? { type: 'v', id: (instance.versionId ?? instance.documentVersion)! } : instance.workspaceId ? { type: 'w', id: instance.workspaceId } : null;
     const sourceId = instance.documentMicroversion ?? instance.versionId ?? instance.documentVersion ?? instance.workspaceId ?? (instance.documentId === context.documentId ? context.workspaceOrVersionId : null);
     const key = `${instance.documentId}:${instance.elementId}:${partId ?? ''}:${configuration ?? ''}:${sourceType ?? ''}:${sourceId ?? ''}`;
     const bucket = isSuppressed ? suppressed : active;
@@ -117,7 +123,7 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
     const name = partNames.get(`${instance.documentId}:${instance.elementId}:${partId}`) ?? instance.name.replace(/\s*<\d+>$/, '');
     bucket.set(key, { bomLineKey: key, name, description: null, documentId: instance.documentId, elementId: instance.elementId, partId, partNumber: instance.partNumber ?? null, configuration, sourceType, sourceId, qty: 1, packsToOrder: null, lineTotalUsd: null, suppressed: isSuppressed,
       instancePaths: [path.join(' > ')], massKg: null, material: null, missingMetadataReason: null, vendor: null, alternatives: [], matchConfidence: 0, matchStatus: 'unmatched', matchReasons: [], classification: 'unknown', classificationScore: 0,
-      classificationReasons: [], manualClassification: null, disposition: 'review', dispositionSource: 'none', dispositionConfidence: 'low', dispositionEvidence: [], reviewReason: null, suggestedDisposition: null, provenance: 'unknown', unresolvedSubassembly, isStandardContent: instance.isStandardContent ?? false,
+      classificationReasons: [], manualClassification: null, disposition: 'review', dispositionSource: 'none', dispositionConfidence: 'low', dispositionEvidence: [], reviewReason: null, suggestedDisposition: null, provenance: 'unknown', unresolvedSubassembly, isStandardContent: instance.isStandardContent ?? false, exportSource,
       metadataIssue: unresolvedSubassembly ? { code: 'unresolved-subassembly', httpStatus: null } : unresolvedReference(instance) ? { code: 'unresolved-reference', httpStatus: null } : null, partStudioUrl: source ? `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}/${source}/e/${encodeURIComponent(instance.elementId)}` : `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}` });
   }
   function walk(instances: AssemblyInstance[], path: string[], inheritedSuppression: boolean, ancestry: Set<string>) {
