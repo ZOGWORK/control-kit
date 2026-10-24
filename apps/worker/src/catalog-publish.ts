@@ -77,7 +77,8 @@ export async function publishStaged(vendor: VendorId, kv: Kv, gen: string, optio
   // unfinished crawl in \`retiring\`. Nothing is dropped untracked.
   const crawl = await json<{ gen: string; batches: number }>(kv, crawlKey(vendor));
   const retiring = [...(live?.retiring ?? []), ...(live?.previous && live.previous.gen !== gen ? [live.previous] : []),
-    ...(crawl && crawl.gen !== live?.gen && crawl.gen !== gen ? [{ gen: crawl.gen, batches: crawl.batches, deleteAfter: Date.parse(now), deleted: 0 }] : [])];
+    ...(crawl && crawl.gen !== live?.gen && crawl.gen !== gen && crawl.gen !== live?.previous?.gen ? [{ gen: crawl.gen, batches: crawl.batches, deleteAfter: Date.parse(now), deleted: 0 }] : [])]
+    .filter((entry, position, list) => entry.gen !== gen && entry.gen !== live?.gen && list.findIndex(other => other.gen === entry.gen) === position);
   const pointer: CatalogPointer = { gen, complete: true, records: manifest.records, batches: manifest.batches, publishedAt: now, completedAt: now, skipped: manifest.skipped, source: manifest.source,
     previous: live ? { gen: live.gen, batches: live.batches ?? 0, deleteAfter: Date.parse(now) + (options.retireAfterMs ?? 24 * 3600000), deleted: 0 } : null,
     ...(retiring.length ? { retiring } : {}) };

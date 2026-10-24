@@ -231,6 +231,13 @@ class VendorFetchError extends Error {}
 
 /** Deletes a replaced generation after its grace period, at most `budget` keys per run. Never touches the live one. */
 type Retiring = NonNullable<CatalogPointer['previous']>;
+/** The live generation and the one kept for rollback are never queued for deletion or deleted through `retiring`. */
+const isProtected = (pointer: CatalogPointer, gen: string) => gen === pointer.gen || gen === pointer.previous?.gen;
+/** Queues a generation for deletion unless it is protected or already queued. */
+function queueRetirement(pointer: CatalogPointer, gen: string, batches: number) {
+  if (isProtected(pointer, gen) || pointer.retiring?.some(entry => entry.gen === gen)) return;
+  pointer.retiring = [...(pointer.retiring ?? []), { gen, batches, deleteAfter: Date.now(), deleted: 0 }];
+}
 /** Deletes one replaced generation once its grace period is over, at most `budget` keys; true when it is gone. */
 async function retireGeneration(vendor: VendorId, kv: Kv, pointer: CatalogPointer, entry: Retiring, budget: { left: number }) {
   // A manual rollback that points back at an old generation must not then delete it.
@@ -248,7 +255,8 @@ async function retirePrevious(vendor: VendorId, kv: Kv, pointer: CatalogPointer,
   const budget = { left: limit };
   if (pointer.previous && await retireGeneration(vendor, kv, pointer, pointer.previous, budget)) pointer.previous = null;
   const remaining: Retiring[] = [];
-  for (const entry of pointer.retiring ?? []) if (!await retireGeneration(vendor, kv, pointer, entry, budget)) remaining.push(entry);
+  // An entry for a generation that became protected again (rolled back, or now the rollback copy) is dropped, not deleted.
+  for (const entry of pointer.retiring ?? []) if (!isProtected(pointer, entry.gen) && !await retireGeneration(vendor, kv, pointer, entry, budget)) remaining.push(entry);
   pointer.retiring = remaining.length ? remaining : undefined;
   return limit - budget.left;
 }
@@ -260,8 +268,8 @@ async function abandonIfReplaced(vendor: VendorId, kv: Kv, startedOn: string | n
   const raw = await kv.get(pointerKey(vendor));
   const live = raw ? JSON.parse(raw) as CatalogPointer : null;
   if ((live?.gen ?? null) === startedOn) return false;
-  if (live && crawl.gen !== live.gen) {
-    live.retiring = [...(live.retiring ?? []), { gen: crawl.gen, batches: crawl.batches, deleteAfter: Date.now(), deleted: 0 }];
+  if (live && !isProtected(live, crawl.gen)) {
+    queueRetirement(live, crawl.gen, crawl.batches);
     await kv.put(pointerKey(vendor), JSON.stringify(live));
   }
   await kv.delete(crawlKey(vendor));
@@ -353,7 +361,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     const feedAge = pointer?.source === 'official-feed' ? Date.now() - Date.parse(pointer.completedAt ?? pointer.publishedAt) : Infinity;
     if (pointer && feedAge < (options.feedFreshHours ?? 336) * 3600000) {
       if (crawl) {
-        if (crawl.gen !== pointer.gen) pointer.retiring = [...(pointer.retiring ?? []), { gen: crawl.gen, batches: crawl.batches, deleteAfter: Date.now(), deleted: 0 }];
+        queueRetirement(pointer, crawl.gen, crawl.batches);
         crawl = null;
         await kv.delete(crawlKey(vendor));
       }

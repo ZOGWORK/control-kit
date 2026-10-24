@@ -106,6 +106,26 @@ describe('generation bookkeeping', () => {
     expect(second.previous?.gen).toBe('f1');
     expect(second.retiring?.map(entry => entry.gen)).toEqual(['older', 'refresh', 'crawl0']);
   });
+  it('keeps the rollback generation when the crawl that built it is abandoned', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const kv = new MemoryKv();
+    // A first crawl is live and partial, and its own crawl is still running when a feed is published.
+    await kv.put(pointerKey('gobilda'), JSON.stringify({ gen: 'crawl0', complete: false, records: 1, batches: 1, publishedAt: at, completedAt: null, previous: null }));
+    await kv.put('cat:gobilda:gen:crawl0:batch:0', '[]');
+    await kv.put('cat:gobilda:gen:crawl0:index', '[]');
+    await kv.put(crawlKey('gobilda'), JSON.stringify({ gen: 'crawl0', batches: 1 }));
+    await stageCatalog('gobilda', records(10), kv, { source: 'official-feed', gen: 'feed1', now: new Date(at) });
+    const pointer = await publishStaged('gobilda', kv, 'feed1', { now: later(at) });
+    expect(pointer.previous?.gen).toBe('crawl0');
+    expect(pointer.retiring).toBeUndefined();
+    // The next cron run sees the fresh feed, drops the crawl, and must leave the rollback copy in place.
+    await runVendor('gobilda', kv, async () => new Response(''), { minRequestMs: 0, feedFreshHours: 1000000 });
+    const after = JSON.parse(kv.values.get(pointerKey('gobilda'))!) as CatalogPointer;
+    expect(after.previous?.gen).toBe('crawl0');
+    expect(after.retiring).toBeUndefined();
+    expect(kv.values.has('cat:gobilda:gen:crawl0:batch:0')).toBe(true);
+    vi.restoreAllMocks();
+  });
   it('stops a crawl that was running when a feed went live, so it can never replace the feed', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
