@@ -82,10 +82,15 @@ export async function persistLedger(kv: Kv, ledger: RequestLedger, now = new Dat
   // A failed read rejects (callers log it) so the day's history is never overwritten with one operation's counts.
   const raw = await kv.get(key);
   if (raw) {
-    try { day = { ...day, ...JSON.parse(raw) as DailyLedger }; } catch { /* Only a malformed aggregate restarts the day. */ }
+    try {
+      const stored = JSON.parse(raw) as Partial<DailyLedger>;
+      day = { ...day, ...stored } as DailyLedger;
+      // Days recorded before billable counting existed: their 2xx/3xx statuses are exactly the billable requests.
+      if (typeof stored.billable !== 'number') day.billable = Object.entries(stored.byStatus ?? {}).reduce((sum, [status, count]) => /^[23]\d\d$/.test(status) ? sum + count : sum, 0);
+    } catch { /* Only a malformed aggregate restarts the day. */ }
   }
   day.total += summary.total;
-  day.billable = (day.billable ?? 0) + summary.billable;
+  day.billable += summary.billable;
   day.retries += summary.retries;
   day.operations++;
   add(day.byPurpose, { [ledger.purpose]: summary.total } as Partial<Record<RequestPurpose, number>>);

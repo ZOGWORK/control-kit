@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bomColumns, bomText, mergeBom, type BillOfMaterials } from './bom';
+import { bomColumns, bomText, flagMissingSources, mergeBom, type BillOfMaterials } from './bom';
 import { aggregateAssembly, type AssemblyInstance } from './index';
 
 const context = { documentId: 'doc', workspaceOrVersion: 'w' as const, workspaceOrVersionId: 'work', elementId: 'asm' };
@@ -42,6 +42,22 @@ describe('Onshape BOM merge', () => {
     expect(result.lines.map(line => [line.configuration, line.partNumber])).toEqual([['len=10', 'SP-10'], ['len=20', 'SP-20'], [null, null]]);
     expect(result.lines[2].metadataIssue).toEqual({ code: 'not-in-bom', httpStatus: null });
     expect(report).toMatchObject({ matchedLines: 2, linesWithoutRow: 1 });
+  });
+  it('never lends BOM data from one explicit configuration to another', () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [part('a', 'spacer', { configuration: 'len=10' }), part('s', 'spacer', { configuration: 'len=20', suppressed: true })] } }, context, 'Robot');
+    mergeBom(result, { headers, rows: [{ headerIdToValue: { a: 'SP-10', c: 1 }, itemSource: { documentId: 'doc', elementId: 'studio', partId: 'spacer', configuration: 'len=10' } }] });
+    expect(result.lines[0].partNumber).toBe('SP-10');
+    expect(result.suppressed[0].partNumber).toBeNull();
+    // A row without any configuration still serves a configured line, and vice versa.
+    const loose = aggregateAssembly({ rootAssembly: { instances: [part('b', 'bolt', { configuration: 'default' })] } }, context, 'Robot');
+    mergeBom(loose, { headers, rows: [{ headerIdToValue: { a: 'B-1' }, itemSource: { documentId: 'doc', elementId: 'studio', partId: 'bolt' } }] });
+    expect(loose.lines[0].partNumber).toBe('B-1');
+  });
+  it('flags a linked part that still has no source revision after the merge', () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [part('lib', 'hub', { documentId: 'library' }), part('own', 'plate')] } }, context, 'Robot');
+    mergeBom(result, { headers, rows: [{ headerIdToValue: { a: 'H-1' }, itemSource: { documentId: 'library', elementId: 'studio', partId: 'hub' } }] });
+    flagMissingSources(result.lines);
+    expect(result.lines.map(line => [line.partId, line.metadataIssue?.code ?? null])).toEqual([['hub', 'source-revision-unavailable'], ['plate', 'not-in-bom']]);
   });
   it('reports a sanitized column sample without part data', () => {
     const result = aggregateAssembly({ rootAssembly: { instances: [part('m1', 'motor')] } }, context, 'Robot');

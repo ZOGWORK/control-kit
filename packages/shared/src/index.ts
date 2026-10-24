@@ -5,7 +5,7 @@ export type { ClassificationOverride, ClassificationOverrides, UserSettings } fr
 export type { VendorId, VendorRecord, MatchResult } from './matching';
 export { buildControlPointPayload, MockControlPointAdapter } from './control-point';
 export type { ControlPointAdapter, ControlPointBomPayload } from './control-point';
-export { bomColumns, bomIdentity, bomProperties, bomText, mergeBom } from './bom';
+export { bomColumns, bomIdentity, bomProperties, bomText, flagMissingSources, mergeBom } from './bom';
 export type { BillOfMaterials, BomHeader, BomItemSource, BomProperties, BomReconciliation, BomRow } from './bom';
 import type { VendorRecord } from './matching';
 import type { BomProperties, BomReconciliation } from './bom';

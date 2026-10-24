@@ -58,6 +58,11 @@ const normalizedConfiguration = (value: string | null | undefined) => (!value ||
 export const bomIdentity = (value: { documentId?: string | null; elementId?: string | null; partId?: string | null; configuration?: string | null }) =>
   `${value.documentId ?? ''}:${value.elementId ?? ''}:${value.partId ?? ''}:${normalizedConfiguration(value.configuration)}`;
 
+/** A line still without a source revision has no working Onshape link or file export, so it gets a reason. */
+export function flagMissingSources(lines: BomLine[]) {
+  for (const line of lines) if (!line.metadataIssue && !line.unresolvedSubassembly && (!line.sourceType || !line.sourceId)) line.metadataIssue = { code: 'source-revision-unavailable', httpStatus: null };
+}
+
 export type BomReconciliation = { status: 'merged' | 'unavailable'; httpStatus: number | null; rows: number; matchedLines: number; linesWithoutRow: number; rowsWithoutLine: number; quantityMismatches: number;
   /** Header ids and property names of the BOM, plus value types per column: enough to check field mapping on a live scan, without any part data. */
   columns: Array<{ id: string; propertyName: string | null; name: string | null; sampleType: string | null }> };
@@ -80,8 +85,17 @@ export function mergeBom(result: ScanResult, bom: BillOfMaterials): BomReconcili
     const part = bomIdentity({ ...source, configuration: null });
     byPart.set(part, [...(byPart.get(part) ?? []), row]);
   }
-  // A part with a single BOM row is unambiguous even if the two responses spell its configuration differently.
-  const find = (line: BomLine) => byIdentity.get(bomIdentity(line)) ?? (byPart.get(bomIdentity({ ...line, configuration: null }))?.length === 1 ? byPart.get(bomIdentity({ ...line, configuration: null }))![0] : undefined);
+  // A part's single BOM row stands in only when one side gives no configuration. Two explicit, different
+  // configurations are different parts (an active len=10 must not lend its data to a suppressed len=20).
+  const find = (line: BomLine) => {
+    const exact = byIdentity.get(bomIdentity(line));
+    if (exact) return exact;
+    const candidates = byPart.get(bomIdentity({ ...line, configuration: null })) ?? [];
+    if (candidates.length !== 1) return undefined;
+    const source = candidates[0].itemSource!;
+    const rowConfiguration = source.fullConfiguration ?? source.configuration ?? null;
+    return bomIdentity({ configuration: line.configuration }) === bomIdentity({}) || bomIdentity({ configuration: rowConfiguration }) === bomIdentity({}) ? candidates[0] : undefined;
+  };
   const used = new Set<BomRow>();
   let matchedLines = 0; let linesWithoutRow = 0; let quantityMismatches = 0;
   for (const line of [...result.lines, ...result.suppressed]) {

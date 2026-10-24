@@ -54,6 +54,14 @@ describe('Onshape request ledger', () => {
     expect(JSON.parse(kv.values.get('onshape-ledger:2026-10-24')!)).toEqual({ date: '2026-10-24', total: 5, billable: 3, retries: 1, operations: 3, byPurpose: { scan: 2, 'oauth-profile': 1, export: 2 },
       byKind: { 'assembly-definition': 1, 'mass-properties': 1, 'session-info': 1, 'part-stl': 2 }, byStatus: { 200: 3, 404: 1, 429: 1 }, errors: {} });
   });
+  it('derives the billable count of a day recorded before billable counting existed', async () => {
+    const kv = new MemoryKv();
+    kv.values.set('onshape-ledger:2026-10-24', JSON.stringify({ date: '2026-10-24', total: 7, retries: 1, operations: 2, byPurpose: { scan: 7 }, byKind: {}, byStatus: { 200: 4, 302: 1, 404: 1, 429: 1 }, errors: {} }));
+    const ledger = new RequestLedger('scan');
+    ledger.record({ kind: 'assembly-bom', status: 200, retry: false });
+    await persistLedger(kv, ledger, new Date('2026-10-24T12:00:00Z'));
+    expect(JSON.parse(kv.values.get('onshape-ledger:2026-10-24')!)).toMatchObject({ total: 8, billable: 6 });
+  });
   it('never overwrites a day when its aggregate cannot be read, but restarts a malformed one', async () => {
     const kv = new MemoryKv();
     kv.values.set('onshape-ledger:2026-10-24', JSON.stringify({ date: '2026-10-24', total: 40, retries: 2, operations: 3, byPurpose: { scan: 40 }, byKind: {}, byStatus: {}, errors: {} }));

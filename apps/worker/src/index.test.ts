@@ -340,6 +340,32 @@ describe('M2 scan stream against mock Onshape', () => {
     expect(mock.apiRequests - before).toBe(3);
     expect(retried.result.diagnostics.bom.status).toBe('merged');
   });
+  it('completes the scan from the definition when the BOM request fails on the network', async () => {
+    const cookie = await connectedCookie();
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.endsWith('/bom')) throw new TypeError('fetch failed');
+      return mock.handle(request);
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { events, result } = await scan(cookie, 'simple');
+    expect(events.some(event => event.type === 'error')).toBe(false);
+    expect(result.stats.totalInstances).toBe(11);
+    expect(result.diagnostics.bom).toMatchObject({ status: 'unavailable', httpStatus: null });
+    expect(result.lines[0].metadataIssue).toEqual({ code: 'bom-unavailable', httpStatus: null });
+    vi.restoreAllMocks();
+  });
+  it('stops with the allowance message when the BOM request returns HTTP 402', async () => {
+    const cookie = await connectedCookie();
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.endsWith('/bom')) return Response.json({ error: 'payment_required' }, { status: 402 });
+      return mock.handle(request);
+    });
+    const { events } = await scan(cookie, 'simple');
+    expect(events.find(event => event.type === 'error')?.message).toContain('annual API allowance');
+    expect(events.some(event => event.type === 'result')).toBe(false);
+  });
   it('explains an exhausted annual Onshape allowance (HTTP 402)', async () => {
     const cookie = await connectedCookie();
     vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {

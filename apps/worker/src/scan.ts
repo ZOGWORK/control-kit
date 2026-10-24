@@ -1,4 +1,4 @@
-import { aggregateAssembly, classifyScan, mergeBom, metadataIssueText, summarizeMetadataIssues, type AssemblyContext, type AssemblyDefinition, type BillOfMaterials, type BomLine, type BomReconciliation, type ClassificationOverride, type ClassificationOverrides, type MatchDecision, type OnshapeRequestSummary, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { aggregateAssembly, classifyScan, flagMissingSources, mergeBom, metadataIssueText, summarizeMetadataIssues, type AssemblyContext, type AssemblyDefinition, type BillOfMaterials, type BomLine, type BomReconciliation, type ClassificationOverride, type ClassificationOverrides, type MatchDecision, type OnshapeRequestSummary, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { enrichScan } from './catalog';
 import type { Kv } from './index';
 
@@ -102,8 +102,19 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
           emit({ type: 'progress', stage: 'Reading assembly…', current: 1, total: 3, instances: 0 });
           const definition = await required<AssemblyDefinition>(assemblyPath(context, revision, version));
           emit({ type: 'progress', stage: "Reading Onshape's bill of materials…", current: 2, total: 3, instances: 0 });
-          const response = await get(bomPath(context, revision, version));
-          source = { definition, bom: response.ok ? await response.json() as BillOfMaterials : null, bomStatus: response.ok ? null : response.status };
+          // The definition alone is a usable inventory, so an ordinary BOM failure degrades the scan instead of ending it.
+          // Session expiry, cancellation, and an exhausted allowance still stop it: retrying cannot help with those.
+          let bom: BillOfMaterials | null = null;
+          let bomStatus: number | null = null;
+          try {
+            const response = await get(bomPath(context, revision, version));
+            if (response.status === 402) { emit({ type: 'error', message: accessMessage(402) }); throw new ScanStop(); }
+            if (response.ok) bom = await response.json() as BillOfMaterials; else bomStatus = response.status;
+          } catch (error) {
+            if (error instanceof ScanStop || error instanceof SessionExpiredError || request.signal.aborted) throw error;
+            console.error('BOM read failed', error instanceof Error ? error.name : 'unknown');
+          }
+          source = { definition, bom, bomStatus };
           // Only a complete read is cached: a missing BOM must be retried on the next scan.
           if (sourceCache && source.bom) {
             const value = JSON.stringify(source);
@@ -122,6 +133,7 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
           reconciliation = { status: 'unavailable', httpStatus: source.bomStatus, rows: 0, matchedLines: 0, linesWithoutRow: 0, rowsWithoutLine: 0, quantityMismatches: 0, columns: [] };
         }
         const all = [...result.lines, ...result.suppressed];
+        flagMissingSources(all);
         for (const line of all) line.missingMetadataReason = line.metadataIssue ? metadataIssueText[line.metadataIssue.code] : null;
         result.missingMetadata = all.filter(line => line.metadataIssue);
         const count = result.stats.totalInstances;
