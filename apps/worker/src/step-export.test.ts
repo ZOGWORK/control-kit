@@ -60,6 +60,14 @@ describe('STEP export job scheduling', () => {
     expect(work.parts.every(part => part.state === 'pending')).toBe(true);
     await expect(budgeted(async () => new Response(), { remaining: 0 })('/x')).rejects.toThrow(BudgetExhaustedError);
   });
+  it('keeps parts pending when Onshape keeps rate-limiting, and ends the poll early', async () => {
+    const work = job(3);
+    let sent = 0;
+    const budget: RequestBudget = { remaining: 12 };
+    await advanceExport(work, 'u', kv(), budgeted(async () => { sent++; return new Response(null, { status: 429 }); }, budget), 'v9', budget);
+    expect(sent).toBe(1);
+    expect(work.parts.every(part => part.state === 'pending' && part.error === null)).toBe(true);
+  });
   it('finishes a part once its translation is done and checks the file', async () => {
     const work = job(2);
     const { fetcher } = onshape(new Set(['p0']));

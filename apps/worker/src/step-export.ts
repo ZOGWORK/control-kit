@@ -38,8 +38,12 @@ export function createExportJob(result: ScanResult, jobId: string, now = new Dat
 
 const failure = (status: number) => status === 402 ? "Onshape's annual API allowance is used up" : status === 403 || status === 404 ? 'No access to this part in Onshape' : `Onshape returned HTTP ${status}`;
 
+/** Thrown when Onshape is still rate-limiting after the fetcher's retries: stop this poll, keep every part's state. */
+class RateLimitedError extends Error {}
 /** Thrown by a budgeted fetcher once the request budget is spent; the work it would have done waits for the next poll. */
 export class BudgetExhaustedError extends Error {}
+/** Requests per poll: small enough that each poll returns in seconds and the app shows steady progress. */
+export const pollBudget = 12;
 /** Outbound Onshape requests one poll may still send. Shared with the fetcher, so its 429 retries count too. */
 export type RequestBudget = { remaining: number };
 /** Wraps a fetcher so every request it sends, including retries made through it, spends the shared budget. */
@@ -55,7 +59,7 @@ export const budgeted = (fetchOnshape: FetchOnshape, budget: RequestBudget): Fet
  * parallel; running parts are then polled from a cursor that rotates between calls, so no part waits behind the
  * same thirty every time. Returns the job, mutated in place; the caller persists it.
  */
-export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetchOnshape: FetchOnshape, apiVersion: string, budget: RequestBudget = { remaining: 30 }, now = () => Date.now()) {
+export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetchOnshape: FetchOnshape, apiVersion: string, budget: RequestBudget = { remaining: pollBudget }, now = () => Date.now()) {
   const encode = encodeURIComponent;
   const pending = job.parts.flatMap((part, index) => part.state === 'pending' ? [index] : []);
   const running = job.parts.flatMap((part, index) => part.state === 'translating' ? [index] : []);
@@ -71,6 +75,7 @@ export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetc
         const response = await fetchOnshape(`/api/${apiVersion}/partstudios/d/${encode(part.documentId)}/${type}/${encode(id)}/e/${encode(part.elementId)}/translations`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ formatName: 'STEP', partIds: part.partId, ...(part.configuration && part.configuration !== 'default' ? { configuration: part.configuration } : {}), storeInDocument: false, notifyUser: false, flattenAssemblies: false }) });
+        if (response.status === 429) throw new RateLimitedError();
         if (!response.ok) { Object.assign(part, { state: 'failed', error: failure(response.status) }); continue; }
         const started = await response.json() as { id?: string; requestState?: string; failureReason?: string };
         if (!started.id || started.requestState === 'FAILED') { Object.assign(part, { state: 'failed', error: started.failureReason ?? 'Onshape did not start the STEP translation' }); continue; }
@@ -80,6 +85,7 @@ export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetc
       polled++;
       if (now() - (part.startedAt ?? 0) > translationTimeoutMs) { Object.assign(part, { state: 'failed', error: 'STEP translation did not finish within 5 minutes' }); continue; }
       const status = await fetchOnshape(`/api/${apiVersion}/translations/${encode(part.translationId!)}`);
+      if (status.status === 429) throw new RateLimitedError();
       if (!status.ok) { Object.assign(part, { state: 'failed', error: failure(status.status) }); continue; }
       const value = await status.json() as { requestState?: string; failureReason?: string; resultExternalDataIds?: string[]; resultDocumentId?: string; documentId?: string };
       if (value.requestState === 'FAILED') { Object.assign(part, { state: 'failed', error: value.failureReason?.slice(0, 200) ?? 'Onshape could not translate this part' }); continue; }
@@ -87,6 +93,7 @@ export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetc
       const externalId = value.resultExternalDataIds?.[0];
       if (!externalId) { Object.assign(part, { state: 'failed', error: 'Onshape finished without a STEP file' }); continue; }
       const file = await fetchOnshape(`/api/${apiVersion}/documents/d/${encode(value.resultDocumentId ?? value.documentId ?? part.documentId)}/externaldata/${encode(externalId)}`);
+      if (file.status === 429) throw new RateLimitedError();
       if (!file.ok) { Object.assign(part, { state: 'failed', error: `STEP download failed: ${failure(file.status)}` }); continue; }
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (bytes.byteLength > maxFileBytes) { Object.assign(part, { state: 'failed', error: 'STEP file is larger than 20 MB; export it from Onshape directly' }); continue; }
@@ -95,8 +102,8 @@ export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetc
       await kv.put(fileKey(userId, job.jobId, index), new TextDecoder().decode(bytes), { expirationTtl: 3600 });
       Object.assign(part, { state: 'ready', error: null, units: check.units, nameMatches: check.nameMatches, bytes: bytes.byteLength });
     } catch (error) {
-      // An exhausted budget leaves this part as it was for the next poll.
-      if (error instanceof BudgetExhaustedError) break;
+      // An exhausted budget or a persistent rate limit leaves this part as it was for the next poll.
+      if (error instanceof BudgetExhaustedError || error instanceof RateLimitedError) break;
       // Session expiry and cancellation belong to the whole request; anything else fails only this part.
       if (error instanceof SessionExpiredError || (error instanceof Error && error.name === 'AbortError')) throw error;
       Object.assign(part, { state: 'failed', error: 'Could not reach Onshape for this part' });

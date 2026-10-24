@@ -3,7 +3,7 @@ import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from '
 import { applyMatchDecision, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
-import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, type ExportJob, type RequestBudget } from './step-export';
+import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 
 export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string }
@@ -287,7 +287,8 @@ async function route(request: Request, env: Env): Promise<Response> {
       job = JSON.parse(raw) as ExportJob;
     } else return reply({ error: 'Not found' }, 404);
     const ledger = new RequestLedger('export');
-    const budget: RequestBudget = { remaining: 30 };
+    // Creating a job does no Onshape work, so the app shows progress from its first poll instead of waiting on a long start.
+    const budget: RequestBudget = { remaining: request.method === 'POST' ? 0 : pollBudget };
     try { await advanceExport(job, userId, env.APP_STATE, onshapeFetcher(env, current, ledger, budget), env.ONSHAPE_API_VERSION, budget); }
     catch (error) {
       if (error instanceof SessionExpiredError) return reply({ error: 'Reconnect Onshape.' }, 401);
