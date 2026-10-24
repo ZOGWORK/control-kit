@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateAssembly, classifyScan, recalculatePurchasing, type AssemblyInstance, type BomLine, type ScanResult, type VendorRecord } from '@control-kit/shared';
-import { buyList, catalogsReady, filterParts, reviewQueue, summarize } from './model';
+import { buyList, catalogState, catalogStateText, catalogsComplete, filterParts, reviewQueue, staleCatalogs, summarize } from './model';
 
 const vendor = (sku: string, packSize: number | null, priceUsd: number | null): VendorRecord => ({ vendorId: 'gobilda', sku, normalizedSku: sku.replace(/\D/g, ''), name: 'Screw', normalizedName: 'screw', url: 'https://www.gobilda.com/x/',
   priceUsd, packSize, packSizeVerified: packSize !== null, stock: 'in', stockQty: null, category: 'hardware', updatedAt: '2026-10-24T00:00:00Z', source: 'sitemap' });
@@ -50,10 +50,16 @@ describe('Control Kit view model', () => {
     expect(filterParts(result, 'suppressed', '', 'name').map(line => line.partId)).toEqual(['x']);
     expect(filterParts(result, 'all', '', 'qty')[0].partId).toBe('s');
   });
-  it('treats catalogs as ready only when all five are published and complete', () => {
+  it('treats catalogs as complete only when all five are published, and flags old or failed ones', () => {
     const vendors = (['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'] as const).map(vendorId => ({ vendorId, state: 'published' as const, complete: true, recordCount: 1, updatedAt: null, lastRunAt: null, stale: false, lastRunFailed: false, error: null, skipped: {}, progress: null }));
-    expect(catalogsReady({ checkedAt: '', vendors })).toBe(true);
-    expect(catalogsReady({ checkedAt: '', vendors: vendors.map((vendor, index) => index ? vendor : { ...vendor, complete: false }) })).toBe(false);
-    expect(catalogsReady(undefined)).toBe(false);
+    expect(catalogsComplete({ checkedAt: '', vendors })).toBe(true);
+    expect(catalogsComplete({ checkedAt: '', vendors: vendors.map((vendor, index) => index ? vendor : { ...vendor, complete: false }) })).toBe(false);
+    expect(catalogsComplete(undefined)).toBe(false);
+    // Old or failed-to-update catalogs still cover every product, but never read as Ready.
+    const aged = vendors.map((vendor, index) => index === 0 ? { ...vendor, stale: true } : index === 1 ? { ...vendor, lastRunFailed: true } : vendor);
+    expect(catalogsComplete({ checkedAt: '', vendors: aged })).toBe(true);
+    expect(aged.map(catalogState)).toEqual(['stale', 'stale', 'published', 'published', 'published']);
+    expect(aged.slice(0, 2).map(catalogStateText)).toEqual(['Out of date', 'Last update failed']);
+    expect(staleCatalogs({ checkedAt: '', vendors: aged }).map(vendor => vendor.vendorId)).toEqual(['gobilda', 'servocity']);
   });
 });

@@ -50,7 +50,7 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
       {line.dispositionEvidence.length > 0 && <ul className="evidence">{line.dispositionEvidence.map(item => <li key={item}>{item}</li>)}</ul>}
       {line.suppressed ? <p className="muted small">Suppressed parts are not bought or made. Unsuppress it in Onshape and rescan to include it.</p> : <>
         <div className="inline-actions" role="group" aria-label="Choose how this part is obtained">
-          {dispositions.filter(value => value !== 'review').map(value => <Button key={value} size="sm" variant={line.disposition === value && line.manualClassification ? 'primary' : 'secondary'}
+          {dispositions.map(value => <Button key={value} size="sm" variant={line.disposition === value && line.manualClassification ? 'primary' : 'secondary'}
             aria-pressed={line.manualClassification === value} disabled={locked} onClick={() => void kit.setDisposition(line, value)}>{dispositionLabel[value].replace(' (laser/waterjet/router)', '')}</Button>)}
         </div>
         {line.manualClassification && <Button size="sm" variant="ghost" disabled={locked} onClick={() => void kit.setDisposition(line, null)}>Use the automatic choice</Button>}

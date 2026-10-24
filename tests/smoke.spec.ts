@@ -81,6 +81,28 @@ test('an unpublished vendor catalog is called out even when no line matched', as
   await expect(page.locator('.step').filter({ hasText: 'vendor catalogs are still loading' })).toContainText('REV (partial)');
 });
 
+test('an out-of-date catalog never reads as ready', async ({ page }) => {
+  const now = new Date().toISOString();
+  const vendors = ['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'].map(vendorId => ({ vendorId, state: 'published', complete: true, skipped: {}, recordCount: 10, updatedAt: now, lastRunAt: now,
+    stale: vendorId === 'gobilda', lastRunFailed: vendorId === 'rev', error: null, progress: null }));
+  await connected(page, { ...result, catalogHealth: { checkedAt: now, vendors } } as ScanResult);
+  await expect(page.locator('.step').filter({ hasText: 'prices may be out of date' })).toContainText('goBILDA (out of date), REV (last update failed)');
+  await expect(page.locator('.vendor.stale')).toHaveCount(2);
+  await expect(page.locator('.vendor.stale').first()).not.toContainText('Ready');
+});
+
+test('sign-out keeps the work when the server fails, then ends the session', async ({ page }) => {
+  await connected(page);
+  let fail = true;
+  await page.route('**/api/logout', route => route.fulfill({ status: fail ? 500 : 204 }));
+  await page.locator('.sidebar').getByRole('button', { name: /Sign out/ }).click();
+  await expect(page.getByText('Could not sign out. Try again.')).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Simple FTC Assembly' })).toBeVisible();
+  fail = false;
+  await page.locator('.sidebar').getByRole('button', { name: /Sign out/ }).click();
+  await expect(page.getByRole('button', { name: 'Connect Onshape' })).toBeVisible();
+});
+
 test('review explains each part, saves a one-click choice, and accepts all suggestions', async ({ page }) => {
   const saved: Array<{ identity: string; classification: string | null }> = [];
   await page.route('**/api/classification/override', async route => { saved.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"saved":true}' }); });

@@ -2,7 +2,7 @@ import { ExternalLink, FileSpreadsheet } from 'lucide-react';
 import { Alert } from '../components/arc/alert/alert';
 import { EmptyState } from '../components/arc/empty-state/empty-state';
 import type { ControlKit } from './useControlKit';
-import { buyList, catalogsReady, money, summarize, type View } from './model';
+import { buyList, catalogsComplete, money, summarize, type View } from './model';
 import { Button, LineCost } from './bits';
 
 /**
@@ -56,7 +56,7 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
     </section>)}
 
     {needsSku.length > 0 && <section className="panel" aria-labelledby="needs-sku">
-      <div className="panel-head"><div><h2 id="needs-sku">No vendor match yet</h2><p>{catalogsReady(result.catalogHealth) ? 'These parts are marked Buy but no catalog product matched. Add the vendor SKU to the part number in Onshape and rescan.' : 'Some vendor catalogs are still loading. Rescan later, or add the vendor SKU to the part number in Onshape.'}</p></div></div>
+      <div className="panel-head"><div><h2 id="needs-sku">No vendor match yet</h2><p>{catalogsComplete(result.catalogHealth) ? 'These parts are marked Buy but no catalog product matched. Add the vendor SKU to the part number in Onshape and rescan.' : 'Some vendor catalogs are still loading. Rescan later, or add the vendor SKU to the part number in Onshape.'}</p></div></div>
       <div className="rows">{needsSku.map(line => <button key={line.bomLineKey} type="button" className="row" onClick={() => open(line.bomLineKey)}>
         <span className="row-main"><span className="row-title"><span>{line.name}</span></span>
           <span className="row-meta"><span><span className="num">{line.qty}</span> needed</span>{line.partNumber ? <span className="num">{line.partNumber}</span> : <span>no part number</span>}{line.matchStatus === 'possible' && <span>possible match to confirm</span>}</span></span>

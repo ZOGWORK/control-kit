@@ -83,11 +83,23 @@ export function filterParts(result: ScanResult, filter: PartFilter, query: strin
   return [...matches].sort((a, b) => sort === 'qty' ? b.qty - a.qty || a.name.localeCompare(b.name) : a.name.localeCompare(b.name));
 }
 
-export type CatalogState = 'published' | 'partial' | 'building' | 'failing';
-export const catalogState = (vendor: VendorHealth): CatalogState => vendor.state === 'published' ? (vendor.complete ? 'published' : 'partial') : vendor.state === 'failing' ? 'failing' : 'building';
-export const catalogStateLabel: Record<CatalogState, string> = { published: 'Ready', partial: 'Partial', building: 'Loading', failing: 'Failing' };
-/** True when every vendor catalog is published and complete, so a blank Vendor column means "not sold there". */
-export const catalogsReady = (health: CatalogHealth | undefined) => Boolean(health?.vendors.every(vendor => catalogState(vendor) === 'published'));
+/**
+ * `stale` is a complete catalog whose data is old or whose last update failed: it still covers every product,
+ * but its prices and stock may have changed since.
+ */
+export type CatalogState = 'published' | 'stale' | 'partial' | 'building' | 'failing';
+export const catalogState = (vendor: VendorHealth): CatalogState => vendor.state === 'published'
+  ? (!vendor.complete ? 'partial' : vendor.stale || vendor.lastRunFailed ? 'stale' : 'published')
+  : vendor.state === 'failing' ? 'failing' : 'building';
+export const catalogStateText = (vendor: VendorHealth) => {
+  const state = catalogState(vendor);
+  if (state === 'stale') return vendor.lastRunFailed ? 'Last update failed' : 'Out of date';
+  return { published: 'Ready', partial: 'Partial', building: 'Loading', failing: 'Failing' }[state];
+};
+/** True when every vendor catalog is complete, so a blank Vendor column means "not sold there". Old data still counts. */
+export const catalogsComplete = (health: CatalogHealth | undefined) => Boolean(health?.vendors.length && health.vendors.every(vendor => ['published', 'stale'].includes(catalogState(vendor))));
+/** Complete catalogs whose prices and stock may be out of date. */
+export const staleCatalogs = (health: CatalogHealth | undefined) => health?.vendors.filter(vendor => catalogState(vendor) === 'stale') ?? [];
 
 /** "4 minutes ago", for scan and catalog times. Never used in the first render, which has no clock yet. */
 export function ago(iso: string, now: number) {

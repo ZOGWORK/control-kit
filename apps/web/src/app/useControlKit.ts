@@ -42,6 +42,9 @@ export function useControlKit(context: URLSearchParams) {
   const [step, setStep] = useState<ExportState | null>(null);
   const abort = useRef<AbortController | null>(null);
   const scanGeneration = useRef(0);
+  /** The STEP export in progress, if any. Sign-out ends it; a rescan leaves it to finish for the scan it started from. */
+  const stepRun = useRef<number | null>(null);
+  const stepRuns = useRef(0);
   const sessionCheck = useRef(0);
   const query = new URLSearchParams(contextKeys.map(key => [key, context.get(key) ?? '']));
   const connectUrl = `${workerUrl}/oauth/start?${query}`;
@@ -70,10 +73,12 @@ export function useControlKit(context: URLSearchParams) {
 
   async function scan() {
     if (abort.current) return;
-    scanGeneration.current++;
+    const generation = ++scanGeneration.current;
     const controller = new AbortController();
     abort.current = controller;
-    setError(''); setExcel('idle'); setStep(null);
+    setError(''); setExcel('idle');
+    // A running STEP export keeps its own progress; only a finished one's results are cleared.
+    setStep(current => current?.running ? current : null);
     setProgress({ stage: 'Starting scan…', current: 0, total: 3, instances: 0 });
     try {
       const response = await api(`/api/scan?${query}`, { signal: controller.signal });
@@ -92,14 +97,15 @@ export function useControlKit(context: URLSearchParams) {
           const event = JSON.parse(line) as ScanEvent;
           if (event.type === 'progress') setProgress({ ...event });
           if (event.type === 'rate-limit') setProgress(previous => previous && { ...previous, retry: `Onshape is rate-limiting; retrying in ${Math.ceil(event.retryInMs / 1000)}s` });
-          if (event.type === 'result') setResult(event.result);
+          // A result that arrives after sign-out or a newer scan is dropped.
+          if (event.type === 'result' && generation === scanGeneration.current) setResult(event.result);
           if (event.type === 'session-expired') { setSession({ connected: false }); throw new Error('Your Onshape connection expired. Reconnect and scan again.'); }
           if (event.type === 'error') throw new Error(event.message);
         }
       }
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'The scan failed. Try again.');
-    } finally { abort.current = null; setProgress(null); }
+      if (!controller.signal.aborted && generation === scanGeneration.current) setError(cause instanceof Error ? cause.message : 'The scan failed. Try again.');
+    } finally { if (abort.current === controller) { abort.current = null; setProgress(null); } }
   }
   const cancelScan = () => abort.current?.abort();
 
@@ -150,18 +156,23 @@ export function useControlKit(context: URLSearchParams) {
     finally { setPending(null); }
   }
 
-  /** Accepts the suggestion on each line, one save at a time so progress shows and a failure affects only its part. */
+  /**
+   * Accepts the suggestion on each line, one save at a time so progress shows and a failure affects only its part.
+   * A rescan or sign-out stops the batch: the lines it holds belong to the previous scan.
+   */
   async function acceptSuggestions(lines: BomLine[]) {
     if (!result || pending) return;
+    const generation = scanGeneration.current;
     const todo = lines.filter(line => line.suggestedDisposition);
     setPending('bulk');
     let failed = 0;
     try {
       for (const [index, line] of todo.entries()) {
+        if (generation !== scanGeneration.current) return;
         setBulk({ done: index, total: todo.length });
         if (!await saveChoice(line, line.suggestedDisposition)) failed++;
       }
-      if (failed) setError(`${failed} of ${todo.length} choices could not be saved. Try those parts again.`);
+      if (failed && generation === scanGeneration.current) setError(`${failed} of ${todo.length} choices could not be saved. Try those parts again.`);
     } finally { setBulk(null); setPending(null); }
   }
 
@@ -180,9 +191,17 @@ export function useControlKit(context: URLSearchParams) {
     finally { setSavingSettings(false); }
   }
 
+  /** Ends the Onshape session on the server first; the app keeps its state if that fails, so the person can retry. */
   async function signOut() {
-    await api('/api/logout', { method: 'POST' }).catch(() => undefined);
-    setResult(null);
+    try {
+      const response = await api('/api/logout', { method: 'POST' });
+      if (!response.ok) throw Error();
+    } catch { setError('Could not sign out. Try again.'); return; }
+    // Stop work that belongs to this session and drop any results it would still deliver.
+    scanGeneration.current++;
+    abort.current?.abort(); abort.current = null; setProgress(null);
+    stepRun.current = null;
+    setStep(null); setResult(null); setError('');
     setSession({ connected: false });
   }
 
@@ -209,12 +228,17 @@ export function useControlKit(context: URLSearchParams) {
    * finished file and build the ZIP here, so no single request outlives Worker limits.
    */
   async function downloadStep() {
-    if (!result?.scanId || step?.running) return;
+    if (!result?.scanId || stepRun.current !== null) return;
+    const run = ++stepRuns.current;
+    stepRun.current = run;
+    // False once sign-out has ended this export; it then stops without touching state.
+    const active = () => stepRun.current === run;
     setStep({ running: true, ready: 0, failed: 0, total: 0, failures: [], zipMade: null });
     try {
       type Job = { jobId: string; done: boolean; rateLimited?: boolean; error?: string; assemblyName: string; documentName?: string; revision?: { type: string; id: string } | null; scannedAt: string; parts: ExportPart[] };
       const read = async (response: Response) => { const body = await response.json() as Job; if (!response.ok) throw Error(body.error ?? 'STEP export failed. Try again.'); return body; };
       let job = await read(await postJson('/api/exports', { documentId: result.documentId, scanId: result.scanId }));
+      if (!active()) return;
       // The Worker fails each translation after 5 minutes, so a large export always ends. The app only gives up
       // when nothing has changed for 3 minutes, or after 30 minutes overall.
       const started = Date.now();
@@ -228,7 +252,9 @@ export function useControlKit(context: URLSearchParams) {
         setStep(current => current && { ...current, ready: job.parts.filter(part => part.state === 'ready').length, failed: job.parts.filter(part => part.state === 'failed').length, total: job.parts.length });
         if (Date.now() - lastChange > 3 * 60000 || Date.now() - started > 30 * 60000) { stalled = true; break; }
         await new Promise(resolve => setTimeout(resolve, 2000));
+        if (!active()) return;
         job = await read(await api(`/api/exports/${job.jobId}`));
+        if (!active()) return;
       }
       // A stalled export still delivers the files that finished; the rest are reported as unfinished.
       if (stalled) job = { ...job, parts: job.parts.map(part => part.state === 'ready' || part.state === 'failed' ? part : { ...part, state: 'failed', error: 'Export stopped before this part finished. Export again to retry it.' }) };
@@ -238,19 +264,24 @@ export function useControlKit(context: URLSearchParams) {
         if (part.state !== 'ready') continue;
         try { const response = await api(`/api/exports/${job.jobId}/files/${index}`); if (response.ok) files[index] = await response.text(); }
         catch { /* Reported below as "File was not downloaded". */ }
+        if (!active()) return;
       }
       const failures = job.parts.filter((part, index) => part.state === 'failed' || (part.state === 'ready' && files[index] === undefined))
         .map(part => ({ name: part.name, reason: part.error ?? 'File was not downloaded', url: part.sourceUrl }));
       const ready = job.parts.length - failures.length;
       // Failures are recorded before the ZIP is built, so an export where every part failed still lists each one.
-      setStep({ running: false, ready, failed: failures.length, total: job.parts.length, failures, zipMade: ready > 0 });
+      // The export counts as running, and the ZIP as not yet made, until the browser has been handed the file.
+      setStep({ running: true, ready, failed: failures.length, total: job.parts.length, failures, zipMade: null });
       const { buildStepZip } = await exporters();
+      if (!active()) return;
       const zip = buildStepZip({ ...job, files });
       saveFile(zip.bytes, zip.filename, 'application/zip');
+      setStep(current => current && { ...current, running: false, zipMade: ready > 0 });
     } catch (cause) {
-      setStep(current => current && { ...current, running: false, zipMade: current.zipMade ?? false });
+      if (!active()) return;
+      setStep(current => current && { ...current, running: false, zipMade: false });
       setError(cause instanceof Error ? cause.message : 'STEP export failed. Try again.');
-    }
+    } finally { if (active()) stepRun.current = null; }
   }
 
   return { session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,

@@ -185,7 +185,7 @@ button.row:hover { background: var(--ck-raised); }
 .vendor { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--ck-line); font-size: 12.5px; }
 .vendor .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ck-text-muted); }
 .vendor.published .dot { background: var(--ck-success); }
-.vendor.partial .dot { background: var(--ck-volt); }
+.vendor.partial .dot, .vendor.stale .dot { background: var(--ck-volt); }
 .vendor.failing .dot { background: var(--ck-danger); }
 
 /* Toolbar above lists. */
