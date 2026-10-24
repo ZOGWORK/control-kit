@@ -5,7 +5,6 @@ import { aggregateAssembly, classificationIdentity, type VendorId } from '@contr
 import { clearCatalogMemoryCache } from './catalog';
 import { batchKey, indexKey, pointerKey } from './vendor-ingest';
 import { readFileSync } from 'node:fs';
-import { strFromU8, unzipSync } from 'fflate';
 
 class MemoryKv implements Kv {
   values = new Map<string, string>();
@@ -238,29 +237,74 @@ describe('M5 settings and classification overrides against mock Onshape', () => 
     const second = await scan();
     expect(second.lines.find((item: { bomLineKey: string }) => item.bomLineKey === line.bomLineKey)).toMatchObject({ manualClassification: 'print', disposition: 'print' });
   });
-  it('keeps Unicode failed part names in a downloadable zip', async () => {
+  const exportJob = async (cookie: string, documentId: string, scanId: string) => {
+    const post = (path: string, body: unknown) => worker.fetch(new Request(`http://localhost:8787${path}`, { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' }, body: JSON.stringify(body) }), env);
+    const started = await post('/api/exports', { documentId, scanId });
+    let job = await started.json() as { jobId: string; done: boolean; error?: string; parts: Array<{ name: string; state: string; error: string | null; fileName: string; units: string | null; nameMatches: boolean | null }> };
+    if (!started.ok) return { status: started.status, job };
+    for (let round = 0; round < 10 && !job.done; round++) job = await (await call(`/api/exports/${job.jobId}`, cookie)).json() as typeof job;
+    return { status: 200, job };
+  };
+  it('exports confirmed prints as checked STEP files and reports each failure with its reason', async () => {
+    const start = await call('/oauth/start?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
+    const scan = await call('/api/scan?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    const result = (await scan.text()).trim().split('\n').map(row => JSON.parse(row)).find(event => event.type === 'result').result;
+    const motor = result.lines.find((line: { partId: string }) => line.partId === 'motor-5203');
+    const override = await worker.fetch(new Request('http://localhost:8787/api/classification/override', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' },
+      body: JSON.stringify({ documentId: 'robot', scanId: result.scanId, identity: classificationIdentity(motor), classification: 'print' }) }), env);
+    expect(override.status).toBe(200);
+    const before = mock.apiRequests;
+    const { status, job } = await exportJob(cookie, 'robot', result.scanId);
+    expect(status).toBe(200);
+    expect(job.done).toBe(true);
+    // The guide is a print by its PETG material; the motor only by the manual choice, and Onshape fails it on purpose.
+    const guide = job.parts.find(part => part.name === 'Custom Printed Intake Guide')!;
+    expect(guide).toMatchObject({ state: 'ready', units: 'mm', nameMatches: true, fileName: 'Custom_Printed_Intake_Guide__intakeguid.step' });
+    expect(job.parts.find(part => part.name === '5203 Motor')).toMatchObject({ state: 'failed', error: 'Deliberate fixture STEP failure' });
+    // Guide: start, two polls, download. Motor: start, one poll.
+    expect(mock.apiRequests - before).toBe(6);
+    const index = job.parts.indexOf(job.parts.find(part => part.name === 'Custom Printed Intake Guide')!);
+    const file = await call(`/api/exports/${job.jobId}/files/${index}`, cookie);
+    expect(file.status).toBe(200);
+    expect(file.headers.get('content-disposition')).toContain('Custom_Printed_Intake_Guide__intakeguid.step');
+    expect((await file.text()).startsWith('ISO-10303-21;')).toBe(true);
+    expect(mock.apiRequests - before).toBe(6);
+    const failedFile = await call(`/api/exports/${job.jobId}/files/${job.parts.findIndex(part => part.state === 'failed')}`, cookie);
+    expect(failedFile.status).toBe(404);
+    const foreign = await worker.fetch(new Request(`http://localhost:8787/api/exports/${job.jobId}`, { headers: { cookie, origin: 'https://foreign.example' } }), env);
+    expect(foreign.status).toBe(403);
+    const day = JSON.parse(env.APP_STATE.values.get(`onshape-ledger:${new Date().toISOString().slice(0, 10)}`)!);
+    expect(day.byKind['translation-start']).toBeGreaterThanOrEqual(2);
+  });
+  it('rejects a non-STEP download instead of zipping it, and refuses an export with nothing to make', async () => {
     const start = await call('/oauth/start?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
     const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
     const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
     const scan = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
     const result = (await scan.text()).trim().split('\n').map(row => JSON.parse(row)).find(event => event.type === 'result').result;
-    // A print material is explicit metadata, so this line is a confirmed print without a manual choice.
-    result.lines = [{ ...result.lines[0], name: '日本語 Printed Mount', partId: null, vendor: null, material: 'PLA' }];
+    // A scan holding only a standard-content screw (Buy) has nothing to make, so no export starts.
+    const original = result.lines;
+    result.lines = [{ ...original[0], bomLineKey: 'screw-only', name: 'Socket head screw', partId: 'screw-only', isStandardContent: true, material: null }];
     await env.APP_STATE.put(`scan:mock-user:${result.scanId}`, JSON.stringify(result));
-    const zip = await call(`/api/prints/zip?documentId=simple&scanId=${result.scanId}`, cookie);
-    expect(zip.status).toBe(200);
-    const failures = JSON.parse(decodeURIComponent(zip.headers.get('x-control-kit-failures')!));
-    expect(failures[0].name).toBe('日本語 Printed Mount');
-    expect(strFromU8(unzipSync(new Uint8Array(await zip.arrayBuffer()))['Simple_FTC_Assembly_prints/README.txt'])).toContain('日本語 Printed Mount');
+    const empty = await exportJob(cookie, 'simple', result.scanId);
+    expect(empty.status).toBe(409);
+    expect(empty.job.error).toContain('No part is set to 3D print');
+    const line = { ...result.lines[0], bomLineKey: 'bad-file-line', name: '日本語 Printed Mount', partId: 'bad-file', material: 'PLA' };
+    result.lines = [line];
+    await env.APP_STATE.put(`scan:mock-user:${result.scanId}`, JSON.stringify(result));
+    const { job } = await exportJob(cookie, 'simple', result.scanId);
+    expect(job.parts).toEqual([expect.objectContaining({ name: '日本語 Printed Mount', state: 'failed', error: 'Onshape returned something other than a STEP file' })]);
   });
-  it('reapplies a saved match rejection before selecting printed parts for export', async () => {
+  it('reapplies a saved match rejection and current dispositions before choosing parts to export', async () => {
     const start = await call('/oauth/start?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
     const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
     const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
     const scan = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
     const result = (await scan.text()).trim().split('\n').map(row => JSON.parse(row)).find(event => event.type === 'result').result;
     const line = result.lines[0];
-    line.bomLineKey = 'custom-bracket-export'; line.name = 'Custom bracket'; line.matchStatus = 'possible'; line.matchConfidence = 0.75;
+    line.bomLineKey = 'custom-bracket-export'; line.name = 'Custom bracket'; line.partId = 'sensor-mount'; line.matchStatus = 'possible'; line.matchConfidence = 0.75;
     line.vendor = { vendorId: 'rev', name: 'Bracket', normalizedName: 'bracket', sku: 'REV-1', normalizedSku: '1', url: 'https://www.revrobotics.com/bracket/', priceUsd: null,
       stock: 'unknown', stockQty: null, packSize: null, packSizeVerified: false, category: 'bracket', updatedAt: '', source: 'feed' };
     result.lines = [line];
@@ -271,29 +315,8 @@ describe('M5 settings and classification overrides against mock Onshape', () => 
     const print = await worker.fetch(new Request('http://localhost:8787/api/classification/override', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' },
       body: JSON.stringify({ documentId: 'simple', scanId: result.scanId, identity: classificationIdentity(line), classification: 'print' }) }), env);
     expect(print.status).toBe(200);
-    const zip = await call(`/api/prints/zip?documentId=simple&scanId=${result.scanId}`, cookie);
-    expect(zip.status).toBe(200);
-    expect(strFromU8(unzipSync(new Uint8Array(await zip.arrayBuffer()))['Simple_FTC_Assembly_prints/README.txt'])).toContain('Custom bracket:');
-  });
-  it('exports fixture B STLs through the authenticated route and lists a failed part', async () => {
-    const start = await call('/oauth/start?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
-    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
-    const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
-    const scan = await call('/api/scan?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
-    const result = (await scan.text()).trim().split('\n').map(row => JSON.parse(row)).find(event => event.type === 'result').result;
-    const motor = result.lines.find((line: { partId: string }) => line.partId === 'motor-5203');
-    const override = await worker.fetch(new Request('http://localhost:8787/api/classification/override', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' },
-      body: JSON.stringify({ documentId: 'robot', scanId: result.scanId, identity: classificationIdentity(motor), classification: 'printed' }) }), env);
-    expect(override.status).toBe(200);
-    const zip = await call(`/api/prints/zip?documentId=robot&scanId=${result.scanId}`, cookie);
-    expect(zip.status).toBe(200);
-    expect(zip.headers.get('content-type')).toBe('application/zip');
-    const files = unzipSync(new Uint8Array(await zip.arrayBuffer()));
-    expect(Object.keys(files).some(name => name.includes('/intake/custom_printed_intake_guide__'))).toBe(true);
-    expect(strFromU8(files['FTC_Competition_Robot_prints/README.txt'])).toContain('5203 Motor: Deliberate fixture STL failure');
-    expect(JSON.parse(decodeURIComponent(zip.headers.get('x-control-kit-failures')!))).toEqual(expect.arrayContaining([expect.objectContaining({ name: '5203 Motor', url: expect.stringContaining('onshape.com') })]));
-    const foreign = await worker.fetch(new Request(`http://localhost:8787/api/prints/zip?documentId=robot&scanId=${result.scanId}`, { headers: { cookie, origin: 'https://foreign.example' } }), env);
-    expect(foreign.status).toBe(403);
+    const { job } = await exportJob(cookie, 'simple', result.scanId);
+    expect(job.parts).toEqual([expect.objectContaining({ name: 'Custom bracket', state: 'ready' })]);
   });
 });
 

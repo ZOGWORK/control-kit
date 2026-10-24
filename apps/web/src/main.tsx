@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, dispositionLabel, dispositions, type BomLine, type CatalogHealth, type ClassificationOverride, type ScanResult, type UserSettings, type VendorHealth } from '@control-kit/shared';
-import { buildBomCsv, buildExcelWorkbook } from '@control-kit/excel';
+import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, dispositionLabel, dispositions, wantsStep, type BomLine, type CatalogHealth, type ClassificationOverride, type ExportPart, type ScanResult, type UserSettings, type VendorHealth } from '@control-kit/shared';
+import { buildBomCsv, buildExcelWorkbook, buildStepZip } from '@control-kit/excel';
 import './style.css';
 
 type Session = { connected: boolean; setupPending?: boolean; user?: { id: string; name: string } };
@@ -28,6 +28,8 @@ function App() {
   const [pendingOverride, setPendingOverride] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [printFailures, setPrintFailures] = useState<{ name: string; reason: string; url: string }[]>([]);
+  const [exportProgress, setExportProgress] = useState<{ ready: number; failed: number; total: number } | null>(null);
+  const [failuresInZip, setFailuresInZip] = useState(false);
   const [excelFailed, setExcelFailed] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
   const excelLock = useRef(false);
@@ -152,21 +154,51 @@ function App() {
     }
     finally { setPendingOverride(false); }
   }
-  async function downloadPrints() {
+  /**
+   * STEP export runs as a job in the Worker: start it, poll until every part is ready or failed, then fetch each
+   * finished file and build the ZIP here, so no single request outlives Worker limits. Failures are shown in the app.
+   */
+  async function downloadStep() {
     if (!result?.scanId || downloading) return;
-    setDownloading(true); setPrintFailures([]);
+    setDownloading(true); setPrintFailures([]); setExportProgress(null);
     try {
-      const response = await fetch(`${workerUrl}/api/prints/zip?documentId=${encodeURIComponent(result.documentId)}&scanId=${encodeURIComponent(result.scanId)}`, { credentials: 'include' });
-      if (!response.ok) throw Error(response.status === 409 ? 'Scan this assembly again before exporting STLs.' : 'STL export failed. Try again.');
-      const failures = JSON.parse(decodeURIComponent(response.headers.get('x-control-kit-failures') ?? '%5B%5D')) as { name: string; reason: string; url: string }[];
+      type Job = { jobId: string; done: boolean; error?: string; assemblyName: string; documentName?: string; revision?: { type: string; id: string } | null; scannedAt: string; parts: ExportPart[] };
+      const read = async (response: Response) => { const body = await response.json() as Job; if (!response.ok) throw Error(body.error ?? 'STEP export failed. Try again.'); return body; };
+      let job = await read(await fetch(`${workerUrl}/api/exports`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ documentId: result.documentId, scanId: result.scanId }) }));
+      // The Worker fails each translation after 5 minutes, so a large export always ends. The app only gives up when
+      // nothing has changed for 3 minutes, or after 30 minutes overall.
+      const started = Date.now();
+      let lastChange = Date.now();
+      let previous = '';
+      while (!job.done) {
+        const ready = job.parts.filter(part => part.state === 'ready').length;
+        const failed = job.parts.filter(part => part.state === 'failed').length;
+        const signature = job.parts.map(part => part.state).join();
+        if (signature !== previous) { previous = signature; lastChange = Date.now(); }
+        setExportProgress({ ready, failed, total: job.parts.length });
+        if (Date.now() - lastChange > 3 * 60000 || Date.now() - started > 30 * 60000) throw Error('STEP export stopped making progress. Try again.');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        job = await read(await fetch(`${workerUrl}/api/exports/${job.jobId}`, { credentials: 'include' }));
+      }
+      // One failed download fails only that part; the others are still zipped.
+      const files: Record<number, string> = {};
+      for (const [index, part] of job.parts.entries()) {
+        if (part.state !== 'ready') continue;
+        try {
+          const response = await fetch(`${workerUrl}/api/exports/${job.jobId}/files/${index}`, { credentials: 'include' });
+          if (response.ok) files[index] = await response.text();
+        } catch { /* Reported below as "File was not downloaded". */ }
+      }
+      const failures = job.parts.filter((part, index) => part.state === 'failed' || (part.state === 'ready' && files[index] === undefined))
+        .map(part => ({ name: part.name, reason: part.error ?? 'File was not downloaded', url: part.sourceUrl }));
+      // Shown before the ZIP is built, so an export where every part failed still lists each reason and link.
       setPrintFailures(failures);
-      const url = URL.createObjectURL(await response.blob());
-      const anchor = document.createElement('a');
-      anchor.href = url; anchor.download = `${result.assemblyName.replace(/[^a-zA-Z0-9-_ ]/g, '').trim().replace(/ +/g, '_') || 'Assembly'}_prints.zip`;
-      anchor.click();
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'STL export failed. Try again.'); }
-    finally { setDownloading(false); }
+      setFailuresInZip(failures.length < job.parts.length);
+      const zip = buildStepZip({ ...job, files });
+      saveFile(zip.bytes, zip.filename, 'application/zip');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'STEP export failed. Try again.');
+    } finally { setDownloading(false); setExportProgress(null); }
   }
 
   function saveFile(bytes: Uint8Array, filename: string, mime: string) {
@@ -214,9 +246,9 @@ function App() {
       {progress && <section className="card" aria-live="polite"><div className="row"><strong>{progress.stage}</strong><button className="secondary" onClick={() => abort.current?.abort()}>Cancel</button></div>
         <progress value={progress.current} max={Math.max(progress.total, 1)} /><p>{progress.instances} instances found</p>{progress.retry && <p>{progress.retry}</p>}</section>}
       {result && !progress && <><section className="stats"><div><strong>{result.stats.uniqueLines}</strong><span>Unique lines</span></div><div><strong>{result.stats.totalInstances}</strong><span>Active instances</span></div><div><strong>{result.stats.totalCostUsd === null ? '—' : `$${result.stats.totalCostUsd.toFixed(2)}`}</strong><span>Known purchasing total</span></div><div><strong>{result.stats.printedLines}</strong><span>Printed lines</span></div><div><strong>{result.suppressed.reduce((n, line) => n + line.qty, 0)}</strong><span>Suppressed</span></div><div><strong>{result.missingMetadata.length}</strong><span>Missing metadata</span></div></section>
-        <div className="row"><button onClick={downloadExcel} disabled={exportingExcel}>{exportingExcel ? 'Preparing Excel…' : 'Download Excel BOM'}</button><button onClick={downloadPrints} disabled={downloading || !result.scanId || result.stats.printedLines === 0}>{downloading ? 'Preparing STL zip…' : 'Download printed parts STL zip'}</button><span className="muted">STL zip includes printed lines and a README with source links and failures.</span></div>
+        <div className="row"><button onClick={downloadExcel} disabled={exportingExcel}>{exportingExcel ? 'Preparing Excel…' : 'Download Excel BOM'}</button><button onClick={downloadStep} disabled={downloading || !result.scanId || !result.lines.some(wantsStep)}>{downloading ? (exportProgress ? `Exporting STEP files… ${exportProgress.ready + exportProgress.failed} of ${exportProgress.total}` : 'Starting STEP export…') : 'Download STEP files'}</button><span className="muted">STEP files for parts set to 3D print, CNC, 2D cut, or other fabrication, with a manifest of sources and failures.</span></div>
         {excelFailed && <div className="alert" role="status">Excel export failed. <button onClick={downloadCsv}>Download CSV instead</button></div>}
-        {printFailures.length > 0 && <div className="alert" role="status"><strong>STL export failed for some parts</strong><ul>{printFailures.map(item => <li key={`${item.name}:${item.reason}`}>{item.name}: {item.reason} <a href={item.url} target="_blank" rel="noreferrer">Open in Onshape</a></li>)}</ul><p>See README.txt in the zip for the full list.</p></div>}
+        {printFailures.length > 0 && <div className="alert" role="status"><strong>STEP export failed for some parts</strong><ul>{printFailures.map(item => <li key={`${item.name}:${item.reason}`}>{item.name}: {item.reason} <a href={item.url} target="_blank" rel="noreferrer">Open in Onshape</a></li>)}</ul>{failuresInZip ? <p>These parts are also listed in MANIFEST.txt in the ZIP.</p> : <p>No ZIP was made because no part exported.</p>}</div>}
         {result.vendorDataUpdatedAt && <p className="muted">Vendor data checked {new Date(result.vendorDataUpdatedAt).toLocaleString()}</p>}
         {result.catalogHealth && <CatalogWarning health={result.catalogHealth} />}
         {result.stats.staleVendorData && <div className="alert" role="status">Some used vendor data is stale or its latest refresh failed. Check prices and stock before ordering.</div>}

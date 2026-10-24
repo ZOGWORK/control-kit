@@ -90,3 +90,39 @@ test('an unpublished vendor catalog shows a warning even when no line matched', 
   await page.getByRole('button', { name: 'Scan Again' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Partial catalogs' })).toContainText('REV (10 products so far)');
 });
+
+test('STEP export polls the job, zips ready files with a manifest, and shows failures', async ({ page }) => {
+  const printed = { ...result, scanId: '00000000-0000-4000-8000-000000000001', lines: result.lines.map((line, index) => index === 0 ? { ...line, disposition: 'print' } : { ...line, disposition: 'buy' }) };
+  const step = "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n#1=PRODUCT('Guide','Guide','',(#2));\nENDSEC;\nEND-ISO-10303-21;\n";
+  const parts = (state: string) => [
+    { lineKey: 'a', name: 'Guide', qty: 2, disposition: 'print', partId: 'p1', configuration: null, sourceUrl: 'https://cad.onshape.com/documents/a', fileName: 'Guide__p1.step', state, error: null, units: 'mm', nameMatches: true, bytes: 80 },
+    { lineKey: 'b', name: 'Motor', qty: 1, disposition: 'print', partId: 'p2', configuration: null, sourceUrl: 'https://cad.onshape.com/documents/b', fileName: 'Motor__p2.step', state: 'failed', error: 'Deliberate failure', units: null, nameMatches: null, bytes: null },
+  ];
+  const job = (done: boolean, state: string) => ({ jobId: '11111111-1111-4111-8111-111111111111', done, assemblyName: 'Simple FTC Assembly', scannedAt: '2026-10-24T00:00:00Z', revision: { type: 'm', id: 'mv' }, parts: parts(state) });
+  let polls = 0;
+  await page.route('**/api/session', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ connected: true, user: { id: 'fixture', name: 'Test User' } }) }));
+  await page.route('**/api/settings', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ teamNumber: null }) }));
+  await page.route('**/api/scan?**', route => route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: `${JSON.stringify({ type: 'result', result: printed })}\n` }));
+  await page.route('**/api/exports', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(job(false, 'translating')) }));
+  await page.route('**/api/exports/11111111-1111-4111-8111-111111111111', route => { polls++; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(job(true, 'ready')) }); });
+  await page.route('**/api/exports/11111111-1111-4111-8111-111111111111/files/0', route => route.fulfill({ status: 200, contentType: 'application/step', body: step }));
+  await page.goto('/?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
+  await page.getByRole('button', { name: 'Scan Assembly' }).click();
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download STEP files' }).click();
+  const zip = await download;
+  expect(polls).toBeGreaterThanOrEqual(1);
+  expect(zip.suggestedFilename()).toBe('Simple_FTC_Assembly_STEP.zip');
+  const files = unzipSync(new Uint8Array(readFileSync(await zip.path())));
+  expect(Object.keys(files).sort()).toEqual(['Simple_FTC_Assembly_STEP/3D_print/Guide__p1.step', 'Simple_FTC_Assembly_STEP/MANIFEST.txt']);
+  await expect(page.getByRole('status').filter({ hasText: 'STEP export failed for some parts' })).toContainText('Motor: Deliberate failure');
+  // When every part fails there is no ZIP, only an explanation.
+  await page.unroute('**/api/exports/11111111-1111-4111-8111-111111111111');
+  await page.route('**/api/exports/11111111-1111-4111-8111-111111111111', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...job(true, 'failed'), parts: parts('failed').map(item => ({ ...item, state: 'failed', error: 'Deliberate failure' })) }) }));
+  await page.getByRole('button', { name: 'Download STEP files' }).click();
+  await expect(page.getByRole('alert')).toContainText('No STEP file could be exported (2 parts failed).');
+  // The reasons and links stay visible even though no ZIP was made.
+  const notice = page.getByRole('status').filter({ hasText: 'STEP export failed for some parts' });
+  await expect(notice).toContainText('Guide: Deliberate failure');
+  await expect(notice).toContainText('No ZIP was made');
+});
