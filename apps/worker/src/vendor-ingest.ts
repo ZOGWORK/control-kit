@@ -144,12 +144,11 @@ type FeedProduct = { title?: string; handle?: string; product_type?: string; var
  * `empty` marks the page past the last product, which ends the crawl.
  */
 export function parseShopifyFeed(vendor: VendorId, body: string, updatedAt: string): { records: VendorRecord[]; skippedProducts: number; empty: boolean } {
-  let products: FeedProduct[];
   let parsed: { products?: unknown };
   try { parsed = JSON.parse(body) as { products?: unknown }; } catch { throw new VendorFetchError('Vendor product feed was not JSON'); }
   // Only an explicit empty list ends a crawl; any other body (an error object, `{}`) must not cut a catalog short.
   if (!Array.isArray(parsed.products)) throw new VendorFetchError('Vendor product feed had no product list');
-  products = parsed.products as FeedProduct[];
+  const products = parsed.products as FeedProduct[];
   const origin = vendorSources[vendor].origin;
   let skippedProducts = 0;
   const records = products.flatMap(product => {
