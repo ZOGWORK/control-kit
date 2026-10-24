@@ -3,7 +3,37 @@ import { readFileSync } from 'node:fs';
 
 const fixtures = Object.fromEntries(['simple', 'robot', 'empty'].map((key, index) => [key, JSON.parse(readFileSync(new URL(`../../../fixtures/assembly-${['simple', 'ftc-robot', 'empty'][index]}.json`, import.meta.url), 'utf8'))]));
 
+/** BOM properties the fixtures' parts carry in Onshape. Synthetic, shaped like BTBillOfMaterialsInfo. */
+const bomProperties: Record<string, { description?: string; vendor?: string; material?: { displayName: string } }> = {
+  'motor-5203': { description: 'Yellow Jacket planetary gear motor', vendor: 'goBILDA' },
+  'sensor-mount': { material: { displayName: 'PLA' } },
+  'intake-guide': { material: { displayName: 'PETG' } },
+};
+type MockInstance = { name: string; type: string; documentId: string; elementId: string; partId?: string; partNumber?: string; suppressed?: boolean };
+type MockDefinition = { rootAssembly: { name?: string; instances: MockInstance[] }; subAssemblies?: Array<{ elementId: string; instances: MockInstance[] }> };
+/** Builds the flattened BOM Onshape would return for a fixture definition: active parts only, counted per part. */
+export function mockBom(definition: MockDefinition) {
+  const rows = new Map<string, { name: string; quantity: number; instance: MockInstance }>();
+  const walk = (instances: MockInstance[]) => {
+    for (const instance of instances) {
+      if (instance.suppressed) continue;
+      if (instance.type.toLowerCase() === 'assembly') { walk(definition.subAssemblies?.find(sub => sub.elementId === instance.elementId)?.instances ?? []); continue; }
+      const key = `${instance.documentId}:${instance.elementId}:${instance.partId}`;
+      const row = rows.get(key) ?? { name: instance.name.replace(/\s*<\d+>$/, ''), quantity: 0, instance };
+      row.quantity++;
+      rows.set(key, row);
+    }
+  };
+  walk(definition.rootAssembly.instances);
+  const headers = [['h-name', 'name', 'Name'], ['h-qty', 'quantity', 'Quantity'], ['h-pn', 'partNumber', 'Part number'], ['h-desc', 'description', 'Description'], ['h-vendor', 'vendor', 'Vendor'], ['h-mat', 'material', 'Material']]
+    .map(([id, propertyName, name]) => ({ id, propertyName, name, visible: true }));
+  return { name: 'Bill of materials', headers, bomSource: { document: { name: `${definition.rootAssembly.name ?? 'Robot'} document` }, element: { name: definition.rootAssembly.name ?? 'Assembly' } },
+    rows: [...rows.values()].map(({ name, quantity, instance }) => ({ headerIdToValue: { 'h-name': name, 'h-qty': quantity, 'h-pn': instance.partNumber ?? '', 'h-desc': bomProperties[instance.partId ?? '']?.description ?? '', 'h-vendor': bomProperties[instance.partId ?? '']?.vendor ?? '', 'h-mat': bomProperties[instance.partId ?? '']?.material ?? null },
+      itemSource: { documentId: instance.documentId, elementId: instance.elementId, partId: instance.partId, wvmType: 'w', wvmId: 'work1', fullConfiguration: 'default', configuration: 'default', isStandardContent: false } })) };
+}
+
 export function createMockOnshape() {
+  let bomFailure: number | null = null;
   let once = false;
   let apiRequests = 0;
   let rateLimitRemaining = 0;
@@ -25,6 +55,14 @@ export function createMockOnshape() {
       return json(400, { error: 'invalid_grant' });
     }
     if (url.pathname === '/api/users/sessioninfo') { apiRequests++; return json(200, { id: 'mock-user', name: 'FTC Mentor' }); }
+    if (/^\/api\/v\d+\/documents\/d\/(simple|robot|empty)\/w\/[^/]+\/currentmicroversion$/.test(url.pathname)) { apiRequests++; return json(200, { microversion: 'mv-1' }); }
+    const bom = url.pathname.match(/^\/api\/v\d+\/assemblies\/d\/(simple|robot|empty)\/[wvm]\/[^/]+\/e\/[^/]+\/bom$/);
+    if (bom) {
+      apiRequests++;
+      if (bomFailure) return json(bomFailure, { error: 'fixture_bom_failure' });
+      if (url.searchParams.get('indented') !== 'false') return json(400, { error: 'expected a flattened BOM' });
+      return json(200, mockBom(fixtures[bom[1]]));
+    }
     const assembly = url.pathname.match(/^\/api\/v\d+\/assemblies\/d\/(simple|robot|empty)\/[wvm]\/[^/]+\/e\/[^/]+$/);
     if (assembly) {
       apiRequests++;
@@ -69,7 +107,7 @@ export function createMockOnshape() {
     response.writeHead(result.status, Object.fromEntries(result.headers));
     response.end(Buffer.from(await result.arrayBuffer()));
   });
-  return { server, handle, setRateLimit(count: number) { rateLimitRemaining = count; }, get apiRequests() { return apiRequests; } };
+  return { server, handle, setRateLimit(count: number) { rateLimitRemaining = count; }, setBomFailure(status: number | null) { bomFailure = status; }, get apiRequests() { return apiRequests; } };
 }
 
 if (process.argv[1]?.endsWith('mock-onshape.ts')) {

@@ -5,26 +5,37 @@ export type { ClassificationOverride, ClassificationOverrides, UserSettings } fr
 export type { VendorId, VendorRecord, MatchResult } from './matching';
 export { buildControlPointPayload, MockControlPointAdapter } from './control-point';
 export type { ControlPointAdapter, ControlPointBomPayload } from './control-point';
+export { bomColumns, bomIdentity, bomProperties, bomText, flagMissingSources, mergeBom } from './bom';
+export type { BillOfMaterials, BomHeader, BomItemSource, BomProperties, BomReconciliation, BomRow } from './bom';
 import type { VendorRecord } from './matching';
+import type { BomProperties, BomReconciliation } from './bom';
 
 export type AssemblyContext = { documentId: string; workspaceOrVersion: 'w' | 'v' | 'm'; workspaceOrVersionId: string; elementId: string };
-export type AssemblyInstance = { id: string; name: string; type: string; documentId: string; elementId: string; partId?: string; partNumber?: string; configuration?: string; fullConfiguration?: string; documentMicroversion?: string; versionId?: string; workspaceId?: string; suppressed?: boolean; isSuppressed?: boolean };
-export type AssemblyDefinition = { rootAssembly: { name?: string; instances?: AssemblyInstance[] }; subAssemblies?: Array<{ documentId: string; elementId: string; configuration?: string; documentMicroversion?: string; instances?: AssemblyInstance[] }>; parts?: Array<{ documentId: string; elementId: string; partId: string; name?: string }> };
-export type BomLine = { bomLineKey: string; name: string; description: string | null; documentId: string; elementId: string; partId: string | null; partNumber: string | null; configuration: string | null; sourceType: 'w' | 'v' | 'm' | null; sourceId: string | null; qty: number; packsToOrder: number | null; lineTotalUsd: number | null; suppressed: boolean; instancePaths: string[]; massKg: number | null; material: string | null; missingMetadataReason: string | null; metadataIssue?: MetadataIssue | null; vendor: VendorRecord | null; alternatives: VendorRecord[]; matchConfidence: number; matchStatus: 'unmatched' | 'possible' | 'confirmed' | 'exact' | 'rejected'; matchReasons: string[]; classification: 'commercial' | 'printed' | 'unknown'; classificationScore: number; classificationReasons: string[]; manualClassification: 'commercial' | 'printed' | null; partStudioUrl: string; unresolvedSubassembly?: boolean };
+export type AssemblyInstance = { id: string; name: string; type: string; documentId: string; elementId: string; partId?: string; partNumber?: string; configuration?: string; fullConfiguration?: string; documentMicroversion?: string; documentVersion?: string; versionId?: string; workspaceId?: string; suppressed?: boolean; isSuppressed?: boolean; isStandardContent?: boolean;
+  /** Onshape marks instances whose linked source cannot be resolved with a non-OK `status` or an `errorStatus`. */
+  status?: string; errorStatus?: string };
+export type AssemblyDefinition = { rootAssembly: { name?: string; documentMicroversion?: string; instances?: AssemblyInstance[] }; subAssemblies?: Array<{ documentId: string; elementId: string; configuration?: string; documentMicroversion?: string; instances?: AssemblyInstance[] }>; parts?: Array<{ documentId: string; elementId: string; partId: string; name?: string }> };
+export type BomLine = { bomLineKey: string; name: string; description: string | null; documentId: string; elementId: string; partId: string | null; partNumber: string | null; configuration: string | null; sourceType: 'w' | 'v' | 'm' | null; sourceId: string | null; qty: number; packsToOrder: number | null; lineTotalUsd: number | null; suppressed: boolean; instancePaths: string[]; massKg: number | null; material: string | null; missingMetadataReason: string | null; metadataIssue?: MetadataIssue | null; vendor: VendorRecord | null; alternatives: VendorRecord[]; matchConfidence: number; matchStatus: 'unmatched' | 'possible' | 'confirmed' | 'exact' | 'rejected'; matchReasons: string[]; classification: 'commercial' | 'printed' | 'unknown'; classificationScore: number; classificationReasons: string[]; manualClassification: 'commercial' | 'printed' | null; partStudioUrl: string; unresolvedSubassembly?: boolean;
+  /** Properties from Onshape's BOM for this part, when its row was found. */
+  bomProperties?: BomProperties | null; isStandardContent?: boolean };
 /** Why a line lacks data. Codes are stable for UI, export, and diagnostics; the user-facing text lives in `metadataIssueText`. */
-export type MetadataIssueCode = 'unresolved-subassembly' | 'source-revision-unavailable' | 'mass-body-missing' | 'metadata-http-error' | 'metadata-request-failed';
+export type MetadataIssueCode = 'unresolved-subassembly' | 'unresolved-reference' | 'source-revision-unavailable' | 'not-in-bom' | 'bom-unavailable';
 export type MetadataIssue = { code: MetadataIssueCode; httpStatus: number | null };
 export const metadataIssueText: Record<MetadataIssueCode, string> = {
   'unresolved-subassembly': 'Subassembly has no resolvable children',
   'source-revision-unavailable': 'Source revision unavailable for linked document',
-  'mass-body-missing': 'Mass properties unavailable for this part',
-  'metadata-http-error': 'Part metadata could not be read',
-  'metadata-request-failed': 'Part metadata could not be read',
+  'unresolved-reference': 'Linked part could not be resolved in Onshape',
+  'not-in-bom': "Not in Onshape's bill of materials, so no part number or BOM properties",
+  'bom-unavailable': "Onshape's bill of materials could not be read, so part numbers are missing",
 };
 /** Counted outbound Onshape requests for one operation, including retries. Never contains URLs or IDs. */
-export type OnshapeRequestSummary = { total: number; retries: number; byKind: Record<string, number>; byStatus: Record<string, number>; errors: Record<string, number> };
+export type OnshapeRequestSummary = { total: number; billable: number; retries: number; byKind: Record<string, number>; byStatus: Record<string, number>; errors: Record<string, number> };
 export type MetadataIssueGroup = { code: MetadataIssueCode; httpStatus: number | null; sourceType: BomLine['sourceType']; lines: number; suppressedLines: number };
-export type ScanDiagnostics = { onshapeRequests: OnshapeRequestSummary | null; metadataIssues: MetadataIssueGroup[] };
+/**
+ * `revision` is the immutable revision that was read (a version, or the workspace's microversion at scan time).
+ * `cache` says whether the definition and BOM for that revision came from the Worker's cache.
+ */
+export type ScanDiagnostics = { onshapeRequests: OnshapeRequestSummary | null; metadataIssues: MetadataIssueGroup[]; bom?: BomReconciliation | null; revision?: { type: 'v' | 'm'; id: string } | null; cache?: 'hit' | 'miss' | 'off' };
 
 /** Groups issues by code, status, and source type so a scan's failure distribution can be read without part names. */
 export function summarizeMetadataIssues(lines: BomLine[]): MetadataIssueGroup[] {
@@ -48,7 +59,7 @@ export type VendorHealth = { vendorId: VendorRecord['vendorId']; state: VendorHe
   progress: { sitemapsDone: number; sitemapsTotal: number; pagesDoneInSitemap: number; pagesInSitemap: number; recordsCollected: number } | null };
 export type CatalogHealth = { checkedAt: string; vendors: VendorHealth[] };
 export const catalogUsable = (health: CatalogHealth | undefined, vendorId: VendorRecord['vendorId']) => health?.vendors.find(vendor => vendor.vendorId === vendorId)?.state === 'published';
-export type ScanResult = { scanId?: string; diagnostics?: ScanDiagnostics; catalogHealth?: CatalogHealth; assemblyName: string; documentId: string; elementId: string; scannedAt: string; vendorDataUpdatedAt: string | null; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
+export type ScanResult = { scanId?: string; diagnostics?: ScanDiagnostics; catalogHealth?: CatalogHealth; documentName?: string; assemblyName: string; documentId: string; elementId: string; scannedAt: string; vendorDataUpdatedAt: string | null; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
 export type MatchDecision = { status: 'confirmed' | 'rejected'; vendorId: VendorRecord['vendorId']; normalizedSku: string };
 
 export function updatePurchasing(line: BomLine): BomLine {
@@ -78,6 +89,9 @@ export function applyMatchDecision(result: ScanResult, key: string, decision: 'c
   return recalculatePurchasing(next);
 }
 
+/** An instance whose linked source Onshape cannot resolve: any `errorStatus`, or a `status` other than OK. */
+export const unresolvedReference = (instance: AssemblyInstance) => Boolean(instance.errorStatus) || (instance.status !== undefined && instance.status.toUpperCase() !== 'OK');
+
 function subassemblyKey(value: Pick<AssemblyInstance, 'documentId' | 'elementId' | 'configuration' | 'documentMicroversion'>) { return `${value.documentId}:${value.elementId}:${value.configuration ?? ''}:${value.documentMicroversion ?? ''}`; }
 
 /** Reused subassemblies contribute once per insertion; suppression propagates to descendants. */
@@ -90,8 +104,8 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
   function add(instance: AssemblyInstance, path: string[], isSuppressed: boolean, unresolvedSubassembly = false) {
     const configuration = instance.fullConfiguration ?? instance.configuration ?? null;
     const partId = instance.partId ?? null;
-    const sourceType = instance.documentMicroversion ? 'm' : instance.versionId ? 'v' : instance.workspaceId ? 'w' : instance.documentId === context.documentId ? context.workspaceOrVersion : null;
-    const sourceId = instance.documentMicroversion ?? instance.versionId ?? instance.workspaceId ?? (instance.documentId === context.documentId ? context.workspaceOrVersionId : null);
+    const sourceType = instance.documentMicroversion ? 'm' : instance.versionId ?? instance.documentVersion ? 'v' : instance.workspaceId ? 'w' : instance.documentId === context.documentId ? context.workspaceOrVersion : null;
+    const sourceId = instance.documentMicroversion ?? instance.versionId ?? instance.documentVersion ?? instance.workspaceId ?? (instance.documentId === context.documentId ? context.workspaceOrVersionId : null);
     const key = `${instance.documentId}:${instance.elementId}:${partId ?? ''}:${configuration ?? ''}:${sourceType ?? ''}:${sourceId ?? ''}`;
     const bucket = isSuppressed ? suppressed : active;
     const found = bucket.get(key);
@@ -100,7 +114,8 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
     const name = partNames.get(`${instance.documentId}:${instance.elementId}:${partId}`) ?? instance.name.replace(/\s*<\d+>$/, '');
     bucket.set(key, { bomLineKey: key, name, description: null, documentId: instance.documentId, elementId: instance.elementId, partId, partNumber: instance.partNumber ?? null, configuration, sourceType, sourceId, qty: 1, packsToOrder: null, lineTotalUsd: null, suppressed: isSuppressed,
       instancePaths: [path.join(' > ')], massKg: null, material: null, missingMetadataReason: null, vendor: null, alternatives: [], matchConfidence: 0, matchStatus: 'unmatched', matchReasons: [], classification: 'unknown', classificationScore: 0,
-      classificationReasons: [], manualClassification: null, unresolvedSubassembly, partStudioUrl: source ? `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}/${source}/e/${encodeURIComponent(instance.elementId)}` : `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}` });
+      classificationReasons: [], manualClassification: null, unresolvedSubassembly, isStandardContent: instance.isStandardContent ?? false,
+      metadataIssue: unresolvedSubassembly ? { code: 'unresolved-subassembly', httpStatus: null } : unresolvedReference(instance) ? { code: 'unresolved-reference', httpStatus: null } : null, partStudioUrl: source ? `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}/${source}/e/${encodeURIComponent(instance.elementId)}` : `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}` });
   }
   function walk(instances: AssemblyInstance[], path: string[], inheritedSuppression: boolean, ancestry: Set<string>) {
     for (const instance of instances) {

@@ -1,7 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, { type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
-import { massPath } from './scan';
 import { aggregateAssembly, classificationIdentity, type VendorId } from '@control-kit/shared';
 import { clearCatalogMemoryCache } from './catalog';
 import { batchKey, indexKey, pointerKey } from './vendor-ingest';
@@ -276,57 +275,107 @@ describe('M2 scan stream against mock Onshape', () => {
     const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
     return (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
   }
-  it('scans the large fixture, retries real 429 responses twice, and keeps metadata failures local', async () => {
+  const scan = async (cookie: string, documentId = 'robot', wv = 'w') => {
+    const response = await call(`/api/scan?documentId=${documentId}&workspaceOrVersion=${wv}&workspaceOrVersionId=work1&elementId=elem1`, cookie);
+    expect(response.status).toBe(200);
+    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    return { events, result: events.find(event => event.type === 'result')?.result };
+  };
+  // Each test starts without cached Onshape sources so request counts are exact.
+  beforeEach(() => { for (const key of [...env.APP_STATE.values.keys()]) if (key.includes('onshape-source:')) env.APP_STATE.values.delete(key); });
+  it('scans the large fixture in three Onshape requests, retries real 429s, and reconciles with the BOM', async () => {
     const cookie = await connectedCookie();
     mock.setRateLimit(2);
     const before = mock.apiRequests;
-    const response = await call('/api/scan?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
-    expect(response.status).toBe(200);
-    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    const { events, result } = await scan(cookie);
     expect(events.filter(event => event.type === 'rate-limit')).toHaveLength(2);
-    const result = events.find(event => event.type === 'result')?.result;
     expect(result.stats.totalInstances).toBe(260);
     expect(result.suppressed[0].qty).toBe(4);
-    expect(result.missingMetadata).toHaveLength(1);
-    expect(result.missingMetadata[0].suppressed).toBe(true);
-    expect(mock.apiRequests - before).toBe(9); // 3 assembly attempts + one metadata call for each of 6 unique elements.
-    // The ledger counts the same nine outbound requests, separating 429 retries, and the scan reports them.
-    expect(result.diagnostics.onshapeRequests).toMatchObject({ total: 9, retries: 2, byKind: { 'assembly-definition': 3, 'mass-properties': 6 }, byStatus: { 429: 2 } });
-    expect(result.diagnostics.metadataIssues).toEqual([{ code: 'metadata-http-error', httpStatus: 503, sourceType: 'w', lines: 0, suppressedLines: 1 }]);
-    expect(result.missingMetadata[0].metadataIssue).toEqual({ code: 'metadata-http-error', httpStatus: 503 });
-    expect(events.some(event => event.type === 'progress' && event.stage === 'Resolving parts…')).toBe(true);
+    // Microversion, definition (plus two 429 retries), and BOM. The old flow made one mass-properties call per part.
+    expect(mock.apiRequests - before).toBe(5);
+    expect(result.diagnostics.onshapeRequests).toMatchObject({ total: 5, billable: 3, retries: 2, byKind: { microversion: 1, 'assembly-definition': 3, 'assembly-bom': 1 }, byStatus: { 200: 3, 429: 2 } });
+    expect(result.diagnostics.revision).toEqual({ type: 'm', id: 'mv-1' });
+    expect(result.diagnostics.cache).toBe('miss');
+    expect(result.diagnostics.bom).toMatchObject({ status: 'merged', rows: 5, matchedLines: 5, linesWithoutRow: 0, rowsWithoutLine: 0, quantityMismatches: 0 });
+    expect(result.diagnostics.bom.columns.map((column: { propertyName: string }) => column.propertyName)).toEqual(['name', 'quantity', 'partNumber', 'description', 'vendor', 'material']);
+    expect(result.assemblyName).toBe('FTC Competition Robot');
+    expect(result.documentName).toBe('FTC Competition Robot document');
+    const motor = result.lines.find((line: { partId: string }) => line.partId === 'motor-5203');
+    expect(motor).toMatchObject({ partNumber: 'GB-5203', description: 'Yellow Jacket planetary gear motor', bomProperties: { vendor: 'goBILDA', quantity: 20 } });
+    expect(result.lines.find((line: { partId: string }) => line.partId === 'intake-guide').material).toBe('PETG');
+    // Suppressed parts are absent from Onshape's BOM by design and are not reported as missing metadata.
+    expect(result.missingMetadata).toEqual([]);
+    expect(events.some(event => event.type === 'progress' && event.stage === "Reading Onshape's bill of materials…")).toBe(true);
   });
-  it('counts every in-flight metadata request when a session expires mid-batch', async () => {
+  it('rescans an unchanged revision from the per-user cache with one request', async () => {
     const cookie = await connectedCookie();
-    const day = () => JSON.parse(env.APP_STATE.values.get(`onshape-ledger:${new Date().toISOString().slice(0, 10)}`) ?? '{"byKind":{}}').byKind['mass-properties'] ?? 0;
-    const before = day();
-    let massRequests = 0;
-    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const first = await scan(cookie);
+    const before = mock.apiRequests;
+    const second = await scan(cookie);
+    expect(mock.apiRequests - before).toBe(1);
+    expect(second.result.diagnostics).toMatchObject({ cache: 'hit', onshapeRequests: { total: 1, byKind: { microversion: 1 } } });
+    expect(second.result.lines.map((line: { bomLineKey: string; qty: number }) => [line.bomLineKey, line.qty])).toEqual(first.result.lines.map((line: { bomLineKey: string; qty: number }) => [line.bomLineKey, line.qty]));
+    expect([...env.APP_STATE.values.keys()].filter(key => key.includes('onshape-source:')).every(key => key.startsWith('mock-user:'))).toBe(true);
+  });
+  it('reads a version directly, without a microversion request', async () => {
+    const cookie = await connectedCookie();
+    const before = mock.apiRequests;
+    const { result } = await scan(cookie, 'robot', 'v');
+    expect(mock.apiRequests - before).toBe(2);
+    expect(result.diagnostics.revision).toEqual({ type: 'v', id: 'work1' });
+  });
+  it('keeps the scan when the BOM cannot be read, flags its lines, and does not cache the gap', async () => {
+    const cookie = await connectedCookie();
+    mock.setBomFailure(503);
+    try {
+      const { events, result } = await scan(cookie, 'simple');
+      expect(events.some(event => event.type === 'error')).toBe(false);
+      expect(result.stats.totalInstances).toBe(11);
+      expect(result.diagnostics.bom).toMatchObject({ status: 'unavailable', httpStatus: 503 });
+      expect(result.lines.every((line: { metadataIssue: unknown }) => JSON.stringify(line.metadataIssue) === JSON.stringify({ code: 'bom-unavailable', httpStatus: 503 }))).toBe(true);
+      expect(result.diagnostics.metadataIssues[0]).toMatchObject({ code: 'bom-unavailable', httpStatus: 503 });
+    } finally { mock.setBomFailure(null); }
+    const before = mock.apiRequests;
+    const retried = await scan(cookie, 'simple');
+    expect(mock.apiRequests - before).toBe(3);
+    expect(retried.result.diagnostics.bom.status).toBe('merged');
+  });
+  it('completes the scan from the definition when the BOM request fails on the network', async () => {
+    const cookie = await connectedCookie();
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
       const request = new Request(input, init);
-      const path = new URL(request.url).pathname;
-      if (path === '/oauth/token') return Response.json({ error: 'invalid_grant' }, { status: 400 });
-      if (path.endsWith('/massproperties')) {
-        massRequests++;
-        if (path.includes('/e/screws/')) return Response.json({ error: 'expired' }, { status: 401 });
-        await new Promise(resolve => setTimeout(resolve, 30));
-      }
+      if (new URL(request.url).pathname.endsWith('/bom')) throw new TypeError('fetch failed');
       return mock.handle(request);
     });
-    const response = await call('/api/scan?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
-    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
-    expect(events.at(-1)).toEqual({ type: 'session-expired' });
-    expect(massRequests).toBeGreaterThan(1);
-    expect(day() - before).toBe(massRequests);
-  });
-  it('reports a failed metadata element without aborting the scan', async () => {
-    const cookie = await connectedCookie();
-    const response = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
-    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
-    const result = events.find(event => event.type === 'result')?.result;
-    expect(result.stats.totalInstances).toBe(11);
-    expect(result.suppressed[0].missingMetadataReason).toBe('Part metadata could not be read');
-    expect(result.missingMetadata).toHaveLength(1);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { events, result } = await scan(cookie, 'simple');
     expect(events.some(event => event.type === 'error')).toBe(false);
+    expect(result.stats.totalInstances).toBe(11);
+    expect(result.diagnostics.bom).toMatchObject({ status: 'unavailable', httpStatus: null });
+    expect(result.lines[0].metadataIssue).toEqual({ code: 'bom-unavailable', httpStatus: null });
+    vi.restoreAllMocks();
+  });
+  it('stops with the allowance message when the BOM request returns HTTP 402', async () => {
+    const cookie = await connectedCookie();
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.endsWith('/bom')) return Response.json({ error: 'payment_required' }, { status: 402 });
+      return mock.handle(request);
+    });
+    const { events } = await scan(cookie, 'simple');
+    expect(events.find(event => event.type === 'error')?.message).toContain('annual API allowance');
+    expect(events.some(event => event.type === 'result')).toBe(false);
+  });
+  it('explains an exhausted annual Onshape allowance (HTTP 402)', async () => {
+    const cookie = await connectedCookie();
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.endsWith('/currentmicroversion')) return Response.json({ error: 'payment_required' }, { status: 402 });
+      return mock.handle(request);
+    });
+    const { events } = await scan(cookie, 'simple');
+    expect(events.find(event => event.type === 'error')?.message).toContain('annual API allowance');
+    expect(events.some(event => event.type === 'result')).toBe(false);
   });
   it('requires a session and a valid Assembly context', async () => {
     expect((await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1')).status).toBe(401);
@@ -335,9 +384,7 @@ describe('M2 scan stream against mock Onshape', () => {
   });
   it('returns a valid empty result for the empty fixture', async () => {
     const cookie = await connectedCookie();
-    const response = await call('/api/scan?documentId=empty&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
-    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
-    const result = events.find(event => event.type === 'result')?.result;
+    const { result } = await scan(cookie, 'empty');
     expect(result.lines).toEqual([]);
     expect(result.stats.totalInstances).toBe(0);
   });
@@ -348,8 +395,7 @@ describe('M2 scan stream against mock Onshape', () => {
       if (new URL(request.url).pathname.includes('/assemblies/')) return Response.json({ error: 'unavailable' }, { status });
       return mock.handle(request);
     });
-    const response = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
-    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    const { events } = await scan(cookie, 'simple');
     expect(events.find(event => event.type === 'error')?.message).toContain('may need to be public');
     expect(events.some(event => event.type === 'result')).toBe(false);
   });
@@ -360,21 +406,26 @@ describe('M2 scan stream against mock Onshape', () => {
       if (new URL(request.url).pathname.includes('/assemblies/')) throw new TypeError('fetch failed');
       return mock.handle(request);
     });
-    const response = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
-    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { events } = await scan(cookie, 'simple');
     expect(events.find(event => event.type === 'error')?.message).toContain('Check your connection and retry');
     expect(events.some(event => event.type === 'result')).toBe(false);
+    vi.restoreAllMocks();
   });
-  it('uses a linked part microversion and configuration for metadata', () => {
+  it('keeps a linked part microversion and configuration in its identity and source link', () => {
     const result = aggregateAssembly({ rootAssembly: { instances: [{ id: 'linked', name: 'Linked Gear', type: 'Part', documentId: 'other-doc', elementId: 'studio', partId: 'gear', documentMicroversion: 'revision-1', configuration: 'size=large' }] } }, { documentId: 'doc1', workspaceOrVersion: 'w', workspaceOrVersionId: 'work1', elementId: 'assembly' }, 'Robot');
-    expect(massPath(result.lines[0], 'v9')).toBe('/api/v9/partstudios/d/other-doc/m/revision-1/e/studio/massproperties?configuration=size%3Dlarge');
+    expect(result.lines[0]).toMatchObject({ sourceType: 'm', sourceId: 'revision-1', configuration: 'size=large', partStudioUrl: 'https://cad.onshape.com/documents/other-doc/m/revision-1/e/studio' });
   });
-  it('signals reconnect if token refresh fails during metadata', async () => {
+  it('signals reconnect and counts the requests if token refresh fails while reading the BOM', async () => {
     const cookie = await connectedCookie();
+    const day = () => JSON.parse(env.APP_STATE.values.get(`onshape-ledger:${new Date().toISOString().slice(0, 10)}`) ?? '{"total":0}').total;
+    const before = day();
+    const mockBefore = mock.apiRequests;
+    let bomCalls = 0;
     vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
       const request = new Request(input, init);
       if (new URL(request.url).pathname === '/oauth/token') return Response.json({ error: 'invalid_grant' }, { status: 400 });
-      if (new URL(request.url).pathname.endsWith('/massproperties')) return Response.json({ error: 'expired' }, { status: 401 });
+      if (new URL(request.url).pathname.endsWith('/bom')) { bomCalls++; return Response.json({ error: 'expired' }, { status: 401 }); }
       return mock.handle(request);
     });
     const response = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
@@ -382,5 +433,6 @@ describe('M2 scan stream against mock Onshape', () => {
     expect(events.some(event => event.type === 'session-expired')).toBe(true);
     expect(events.some(event => event.type === 'result')).toBe(false);
     expect((await call('/api/session', cookie)).status).toBe(401);
+    expect(day() - before).toBe(mock.apiRequests - mockBefore + bomCalls);
   });
 });

@@ -2,7 +2,7 @@ import type { OnshapeRequestSummary } from '@control-kit/shared';
 import type { Kv } from './index';
 
 /** Endpoint families counted against the owner's annual Onshape API allowance. */
-export type OnshapeRequestKind = 'session-info' | 'assembly-definition' | 'assembly-bom' | 'metadata' | 'element-info' | 'mass-properties'
+export type OnshapeRequestKind = 'session-info' | 'microversion' | 'assembly-definition' | 'assembly-bom' | 'metadata' | 'element-info' | 'mass-properties'
   | 'part-stl' | 'translation-start' | 'translation-status' | 'external-data' | 'other';
 export type RequestPurpose = 'oauth-profile' | 'scan' | 'export';
 /** Outcome of one outbound request; `error` means the fetch threw before a status arrived. */
@@ -17,6 +17,7 @@ export function requestKind(path: string, method = 'GET'): OnshapeRequestKind {
   if (pathname.includes('/metadata/')) return 'metadata';
   if (/\/documents\/d\/[^/]+\/[wvm]\/[^/]+\/elements$/.test(pathname)) return 'element-info';
   if (pathname.endsWith('/massproperties')) return 'mass-properties';
+  if (pathname.endsWith('/currentmicroversion')) return 'microversion';
   if (/\/partid\/[^/]+\/stl$/.test(pathname) || pathname.includes('/stl-download/')) return 'part-stl';
   if (pathname.endsWith('/translations') && method === 'POST') return 'translation-start';
   if (/\/translations\/[^/]+$/.test(pathname)) return 'translation-status';
@@ -42,7 +43,9 @@ export class RequestLedger {
       byKind[entry.kind] = (byKind[entry.kind] ?? 0) + 1;
       byStatus[String(entry.status)] = (byStatus[String(entry.status)] ?? 0) + 1;
     }
-    return { total: this.entries.length, retries: this.entries.filter(entry => entry.retry).length, byKind, byStatus, errors: { ...this.errors } };
+    // Onshape bills only 2xx and 3xx responses against the annual allowance; 4xx, 5xx, and thrown requests are free.
+    const billable = this.entries.filter(entry => typeof entry.status === 'number' && entry.status >= 200 && entry.status < 400).length;
+    return { total: this.entries.length, billable, retries: this.entries.filter(entry => entry.retry).length, byKind, byStatus, errors: { ...this.errors } };
   }
 }
 
@@ -60,7 +63,7 @@ export async function countedFetch(ledger: RequestLedger, target: string | URL, 
   }
 }
 
-type DailyLedger = { date: string; total: number; retries: number; byPurpose: Partial<Record<RequestPurpose, number>>; byKind: Record<string, number>; byStatus: Record<string, number>; errors: Record<string, number>; operations: number };
+type DailyLedger = { date: string; total: number; billable: number; retries: number; byPurpose: Partial<Record<RequestPurpose, number>>; byKind: Record<string, number>; byStatus: Record<string, number>; errors: Record<string, number>; operations: number };
 const add = <K extends string>(target: Partial<Record<K, number>>, source: Partial<Record<K, number>>) => {
   for (const [key, value] of Object.entries(source) as Array<[K, number]>) target[key] = (target[key] ?? 0) + value;
 };
@@ -75,13 +78,19 @@ export async function persistLedger(kv: Kv, ledger: RequestLedger, now = new Dat
   if (!summary.total) return summary;
   const date = now.toISOString().slice(0, 10);
   const key = `onshape-ledger:${date}`;
-  let day: DailyLedger = { date, total: 0, retries: 0, byPurpose: {}, byKind: {}, byStatus: {}, errors: {}, operations: 0 };
+  let day: DailyLedger = { date, total: 0, billable: 0, retries: 0, byPurpose: {}, byKind: {}, byStatus: {}, errors: {}, operations: 0 };
   // A failed read rejects (callers log it) so the day's history is never overwritten with one operation's counts.
   const raw = await kv.get(key);
   if (raw) {
-    try { day = { ...day, ...JSON.parse(raw) as DailyLedger }; } catch { /* Only a malformed aggregate restarts the day. */ }
+    try {
+      const stored = JSON.parse(raw) as Partial<DailyLedger>;
+      day = { ...day, ...stored } as DailyLedger;
+      // Days recorded before billable counting existed: their 2xx/3xx statuses are exactly the billable requests.
+      if (typeof stored.billable !== 'number') day.billable = Object.entries(stored.byStatus ?? {}).reduce((sum, [status, count]) => /^[23]\d\d$/.test(status) ? sum + count : sum, 0);
+    } catch { /* Only a malformed aggregate restarts the day. */ }
   }
   day.total += summary.total;
+  day.billable += summary.billable;
   day.retries += summary.retries;
   day.operations++;
   add(day.byPurpose, { [ledger.purpose]: summary.total } as Partial<Record<RequestPurpose, number>>);
