@@ -31,7 +31,8 @@ const legacyKeys = (vendor: VendorId) => [`vendor:${vendor}:__cursor__`, `vendor
 
 /** `batches` is how many batches readers may use; index entries for later batches are not yet published. */
 export type CatalogPointer = { gen: string; complete: boolean; records: number; batches?: number; publishedAt: string; completedAt: string | null; skipped?: Partial<Record<SkipReason, number>>; previous: { gen: string; batches: number; deleteAfter: number; deleted: number } | null };
-export type IndexEntry = [normalizedSku: string, normalizedName: string, batch: number];
+/** `previousBatch` keeps a re-listed SKU readable from its older batch until the newer batch is published. */
+export type IndexEntry = [normalizedSku: string, normalizedName: string, batch: number, previousBatch?: number];
 export type SkipReason = 'redirect-stub' | 'no-product-data' | 'no-sku' | 'robots-disallowed' | 'off-vendor-url' | 'fetch-failed';
 type Crawl = { gen: string; startedAt: string; sitemaps: string[]; sitemapIndex: number; urlCount: number; urlIndex: number; batches: number; records: number; skipped: Partial<Record<SkipReason, number>>; skipSamples: Array<{ reason: SkipReason; url: string }>; failing: { url: string; runs: number } | null; done?: boolean };
 /** Crawl position, copied into the snapshot so health checks never read crawl or index keys. */
@@ -252,9 +253,10 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     // Records whose SKU is already in this generation keep the newer copy: the index points at the latest batch.
     const positions = new Map(index.map((entry, position) => [entry[0], position]));
     for (const record of unique) {
-      const entry: IndexEntry = [record.normalizedSku, record.normalizedName, batch];
       const position = positions.get(record.normalizedSku);
-      if (position === undefined) { positions.set(record.normalizedSku, index.length); index.push(entry); } else index[position] = entry;
+      // Batches publish in order and every earlier batch is published by the next run, so the old batch covers the gap.
+      if (position === undefined) { positions.set(record.normalizedSku, index.length); index.push([record.normalizedSku, record.normalizedName, batch]); }
+      else index[position] = [record.normalizedSku, record.normalizedName, batch, index[position][2]];
     }
     await kv.put(indexKey(vendor, crawl.gen), JSON.stringify(index));
     crawl.batches++;

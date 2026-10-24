@@ -85,7 +85,12 @@ async function vendorIndex(kv: Kv, vendor: VendorId, cache: Map<string, Promise<
     // Entries that are not [sku, name, batch] are dropped one by one rather than failing the scan.
     // Entries in batches the pointer has not published yet may not have reached this location, so they are ignored.
     const published = pointer.batches ?? Infinity;
-    if (Array.isArray(parsed)) entries = parsed.filter((entry): entry is IndexEntry => Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string' && Number.isInteger(entry[2]) && entry[2] < published);
+    // A re-listed SKU stays readable from its previous batch until its newer batch is published.
+    if (Array.isArray(parsed)) entries = parsed.flatMap((entry): IndexEntry[] => {
+      if (!Array.isArray(entry) || typeof entry[0] !== 'string' || typeof entry[1] !== 'string' || !Number.isInteger(entry[2])) return [];
+      if (entry[2] < published) return [[entry[0], entry[1], entry[2]]];
+      return Number.isInteger(entry[3]) && entry[3] < published ? [[entry[0], entry[1], entry[3]]] : [];
+    });
   } catch { /* A malformed index is a miss. */ }
   const value: VendorIndex = { vendor, gen: pointer.gen, bySku: new Map(), byToken: new Map(), entries };
   entries.forEach(([sku, name], position) => {

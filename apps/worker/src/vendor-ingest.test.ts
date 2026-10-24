@@ -37,8 +37,10 @@ async function records(kv: MemoryKv, vendor: VendorId) {
   const pointer = json<CatalogPointer>(kv, pointerKey(vendor));
   const index = json<IndexEntry[]>(kv, indexKey(vendor, pointer.gen));
   const found: VendorRecord[] = [];
-  // Same rule as the scan reader: entries in batches the pointer has not published are invisible.
-  for (const [sku, , batch] of index.filter(entry => entry[2] < (pointer.batches ?? Infinity))) found.push(json<VendorRecord[]>(kv, batchKey(vendor, pointer.gen, batch)).find(record => record.normalizedSku === sku)!);
+  // Same rule as the scan reader: an unpublished batch falls back to the entry's previous batch, if any.
+  const published = pointer.batches ?? Infinity;
+  const visible = index.flatMap(([sku, name, batch, previous]): IndexEntry[] => batch < published ? [[sku, name, batch]] : previous !== undefined && previous < published ? [[sku, name, previous]] : []);
+  for (const [sku, , batch] of visible) found.push(json<VendorRecord[]>(kv, batchKey(vendor, pointer.gen, batch)).find(record => record.normalizedSku === sku)!);
   return found;
 }
 
@@ -163,6 +165,22 @@ describe('vendor catalog crawl and publication', () => {
     await run('gobilda', kv, fetcher, { maxProducts: 40 });
     // pointer + batch + index + crawl + snapshot
     expect(kv.puts).toBeLessThanOrEqual(5);
+    vi.restoreAllMocks();
+  });
+  it('keeps a published product visible while a later page re-lists its SKU', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    const fetcher = site('andymark', {
+      'https://andymark.com/products/a': product('Hub', 'am-1001', '5.00'),
+      'https://andymark.com/products/b': product('Spacer', 'am-1002', '1.00'),
+      'https://andymark.com/products/c': product('Hub (bundle page)', 'am-1001', '6.00'),
+    });
+    await run('andymark', kv, fetcher, { maxProducts: 2 });
+    await run('andymark', kv, fetcher, { maxProducts: 2 });
+    // Run 2 published run 1's batch and wrote the re-listed hub to batch 1, which is not yet published.
+    expect((await records(kv, 'andymark')).find(record => record.normalizedSku === '1001')?.priceUsd).toBe(5);
+    await run('andymark', kv, fetcher, { maxProducts: 2 });
+    expect((await records(kv, 'andymark')).find(record => record.normalizedSku === '1001')?.priceUsd).toBe(6);
     vi.restoreAllMocks();
   });
   it('keeps records fetched before a failing page and resumes after it', async () => {

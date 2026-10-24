@@ -56,6 +56,24 @@ describe('catalog KV read path and purchasing', () => {
     await enrichScan(result, catalog([...decoys, record('RIGHT', 'M3 Socket Head Cap Screw')]));
     expect(result.lines[0].vendor?.sku).toBe('RIGHT');
   });
+  it('keeps a re-listed SKU readable from its published batch until the newer batch is published', async () => {
+    clearCatalogMemoryCache();
+    const old = { ...records.find(item => item.vendorId === 'rev')!, updatedAt: new Date().toISOString() };
+    const kv = catalog([old]);
+    kv.values.set(batchKey('rev', 'g1', 1), JSON.stringify([{ ...old, priceUsd: 99 }]));
+    kv.values.set(indexKey('rev', 'g1'), JSON.stringify([[old.normalizedSku, old.normalizedName, 1, 0]]));
+    kv.values.set(pointerKey('rev'), JSON.stringify({ ...JSON.parse(kv.values.get(pointerKey('rev'))!), batches: 1 }));
+    const scan = async () => {
+      clearCatalogMemoryCache();
+      const result = aggregateAssembly(fixture('empty'), context, 'Robot');
+      result.lines = [{ ...aggregateAssembly(fixture('simple'), context, 'Robot').lines[0], partNumber: old.sku, bomLineKey: 'relisted' }];
+      await enrichScan(result, kv);
+      return result.lines[0];
+    };
+    expect(await scan()).toMatchObject({ matchStatus: 'exact', vendor: { priceUsd: old.priceUsd } });
+    kv.values.set(pointerKey('rev'), JSON.stringify({ ...JSON.parse(kv.values.get(pointerKey('rev'))!), batches: 2 }));
+    expect(await scan()).toMatchObject({ matchStatus: 'exact', vendor: { priceUsd: 99 } });
+  });
   it('ignores index entries for batches the pointer has not published yet', async () => {
     clearCatalogMemoryCache();
     const seen = { ...records.find(item => item.vendorId === 'rev')!, updatedAt: new Date().toISOString() };
