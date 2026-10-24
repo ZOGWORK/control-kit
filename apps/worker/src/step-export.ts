@@ -8,14 +8,19 @@ import { SessionExpiredError } from './scan';
  * ones, and download and check finished files. The browser polls until every part is ready or failed.
  * Per part: 1 translation start + its status polls + 1 download, all counted in the request ledger.
  */
-export type JobPart = ExportPart & { documentId: string; elementId: string; exportSource: { type: 'w' | 'v'; id: string } | null; translationId: string | null; resultDocumentId: string | null; startedAt: number | null };
+export type JobPart = ExportPart & { documentId: string; elementId: string; exportSource: { type: 'w' | 'v'; id: string } | null; translationId: string | null; resultDocumentId: string | null; startedAt: number | null;
+  /** Set once Onshape reports the translation DONE: the file still to download, no longer subject to the translation deadline. */
+  externalDataId?: string | null };
 export type ExportJob = { jobId: string; documentId: string; scanId: string; assemblyName: string; documentName?: string; revision: { type: 'v' | 'm'; id: string } | null; scannedAt: string; createdAt: string; parts: JobPart[];
   /** Where the next poll resumes among running translations. */
-  cursor?: number };
+  cursor?: number;
+  /** When Onshape last rate-limited this job; the app keeps waiting rather than calling the job stuck. */
+  rateLimitedAt?: number | null };
 type FetchOnshape = (path: string, init?: RequestInit) => Promise<Response>;
 /** Public view of a job: no Onshape IDs beyond what the user's own scan already showed. */
 export const jobSummary = (job: ExportJob) => ({ jobId: job.jobId, assemblyName: job.assemblyName, documentName: job.documentName, revision: job.revision, scannedAt: job.scannedAt, createdAt: job.createdAt,
   done: job.parts.every(part => part.state === 'ready' || part.state === 'failed'),
+  rateLimited: Boolean(job.rateLimitedAt && Date.now() - job.rateLimitedAt < 60000),
   parts: job.parts.map(({ lineKey, name, qty, disposition, partId, configuration, sourceUrl, fileName, state, error, units, nameMatches, bytes }) => ({ lineKey, name, qty, disposition, partId, configuration, sourceUrl, fileName, state, error, units, nameMatches, bytes })) });
 
 export const jobKey = (userId: string, jobId: string) => `export:${userId}:${jobId}`;
@@ -83,16 +88,20 @@ export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetc
         continue;
       }
       polled++;
-      if (now() - (part.startedAt ?? 0) > translationTimeoutMs) { Object.assign(part, { state: 'failed', error: 'STEP translation did not finish within 5 minutes' }); continue; }
-      const status = await fetchOnshape(`/api/${apiVersion}/translations/${encode(part.translationId!)}`);
-      if (status.status === 429) throw new RateLimitedError();
-      if (!status.ok) { Object.assign(part, { state: 'failed', error: failure(status.status) }); continue; }
-      const value = await status.json() as { requestState?: string; failureReason?: string; resultExternalDataIds?: string[]; resultDocumentId?: string; documentId?: string };
-      if (value.requestState === 'FAILED') { Object.assign(part, { state: 'failed', error: value.failureReason?.slice(0, 200) ?? 'Onshape could not translate this part' }); continue; }
-      if (value.requestState !== 'DONE') continue;
-      const externalId = value.resultExternalDataIds?.[0];
-      if (!externalId) { Object.assign(part, { state: 'failed', error: 'Onshape finished without a STEP file' }); continue; }
-      const file = await fetchOnshape(`/api/${apiVersion}/documents/d/${encode(value.resultDocumentId ?? value.documentId ?? part.documentId)}/externaldata/${encode(externalId)}`);
+      // A finished translation only needs its download, which a rate limit may delay past the translation deadline.
+      if (!part.externalDataId) {
+        if (now() - (part.startedAt ?? 0) > translationTimeoutMs) { Object.assign(part, { state: 'failed', error: 'STEP translation did not finish within 5 minutes' }); continue; }
+        const status = await fetchOnshape(`/api/${apiVersion}/translations/${encode(part.translationId!)}`);
+        if (status.status === 429) throw new RateLimitedError();
+        if (!status.ok) { Object.assign(part, { state: 'failed', error: failure(status.status) }); continue; }
+        const value = await status.json() as { requestState?: string; failureReason?: string; resultExternalDataIds?: string[]; resultDocumentId?: string; documentId?: string };
+        if (value.requestState === 'FAILED') { Object.assign(part, { state: 'failed', error: value.failureReason?.slice(0, 200) ?? 'Onshape could not translate this part' }); continue; }
+        if (value.requestState !== 'DONE') continue;
+        const externalId = value.resultExternalDataIds?.[0];
+        if (!externalId) { Object.assign(part, { state: 'failed', error: 'Onshape finished without a STEP file' }); continue; }
+        Object.assign(part, { externalDataId: externalId, resultDocumentId: value.resultDocumentId ?? value.documentId ?? null });
+      }
+      const file = await fetchOnshape(`/api/${apiVersion}/documents/d/${encode(part.resultDocumentId ?? part.documentId)}/externaldata/${encode(part.externalDataId!)}`);
       if (file.status === 429) throw new RateLimitedError();
       if (!file.ok) { Object.assign(part, { state: 'failed', error: `STEP download failed: ${failure(file.status)}` }); continue; }
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -103,7 +112,8 @@ export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetc
       Object.assign(part, { state: 'ready', error: null, units: check.units, nameMatches: check.nameMatches, bytes: bytes.byteLength });
     } catch (error) {
       // An exhausted budget or a persistent rate limit leaves this part as it was for the next poll.
-      if (error instanceof BudgetExhaustedError || error instanceof RateLimitedError) break;
+      if (error instanceof RateLimitedError) { job.rateLimitedAt = now(); break; }
+      if (error instanceof BudgetExhaustedError) break;
       // Session expiry and cancellation belong to the whole request; anything else fails only this part.
       if (error instanceof SessionExpiredError || (error instanceof Error && error.name === 'AbortError')) throw error;
       Object.assign(part, { state: 'failed', error: 'Could not reach Onshape for this part' });

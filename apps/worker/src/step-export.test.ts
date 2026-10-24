@@ -68,6 +68,25 @@ describe('STEP export job scheduling', () => {
     expect(sent).toBe(1);
     expect(work.parts.every(part => part.state === 'pending' && part.error === null)).toBe(true);
   });
+  it('downloads a finished translation after the deadline when a rate limit delayed its download', async () => {
+    const work = job(1);
+    let clock = 0;
+    let limited = true;
+    const fetcher = async (path: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return Response.json({ id: 'tr-p0', requestState: 'ACTIVE' });
+      if (path.includes('/translations/')) return Response.json({ requestState: 'DONE', resultExternalDataIds: ['x-p0'] });
+      return limited ? new Response(null, { status: 429 }) : new Response(mockStep('Bracket 0 [3DP]'));
+    };
+    const poll = async () => { const budget = { remaining: 12 }; await advanceExport(work, 'u', kv(), budgeted(fetcher, budget), 'v9', budget, () => clock); };
+    await poll();
+    await poll();
+    expect(work.parts[0]).toMatchObject({ state: 'translating', externalDataId: 'x-p0' });
+    expect(work.rateLimitedAt).toBe(0);
+    clock = 10 * 60000;
+    limited = false;
+    await poll();
+    expect(work.parts[0].state).toBe('ready');
+  });
   it('finishes a part once its translation is done and checks the file', async () => {
     const work = job(2);
     const { fetcher } = onshape(new Set(['p0']));

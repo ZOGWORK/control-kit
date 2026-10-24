@@ -162,7 +162,7 @@ function App() {
     if (!result?.scanId || downloading) return;
     setDownloading(true); setPrintFailures([]); setExportProgress(null);
     try {
-      type Job = { jobId: string; done: boolean; error?: string; assemblyName: string; documentName?: string; revision?: { type: string; id: string } | null; scannedAt: string; parts: ExportPart[] };
+      type Job = { jobId: string; done: boolean; rateLimited?: boolean; error?: string; assemblyName: string; documentName?: string; revision?: { type: string; id: string } | null; scannedAt: string; parts: ExportPart[] };
       const read = async (response: Response) => { const body = await response.json() as Job; if (!response.ok) throw Error(body.error ?? 'STEP export failed. Try again.'); return body; };
       let job = await read(await fetch(`${workerUrl}/api/exports`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ documentId: result.documentId, scanId: result.scanId }) }));
       // The Worker fails each translation after 5 minutes, so a large export always ends. The app only gives up when
@@ -170,16 +170,20 @@ function App() {
       const started = Date.now();
       let lastChange = Date.now();
       let previous = '';
+      let stalled = false;
       while (!job.done) {
         const ready = job.parts.filter(part => part.state === 'ready').length;
         const failed = job.parts.filter(part => part.state === 'failed').length;
         const signature = job.parts.map(part => part.state).join();
-        if (signature !== previous) { previous = signature; lastChange = Date.now(); }
+        // Waiting out an Onshape rate limit is progress, not a stuck job.
+        if (signature !== previous || job.rateLimited) { previous = signature; lastChange = Date.now(); }
         setExportProgress({ ready, failed, total: job.parts.length });
-        if (Date.now() - lastChange > 3 * 60000 || Date.now() - started > 30 * 60000) throw Error('STEP export stopped making progress. Try again.');
+        if (Date.now() - lastChange > 3 * 60000 || Date.now() - started > 30 * 60000) { stalled = true; break; }
         await new Promise(resolve => setTimeout(resolve, 2000));
         job = await read(await fetch(`${workerUrl}/api/exports/${job.jobId}`, { credentials: 'include' }));
       }
+      // A stalled export still delivers the files that finished; the rest are reported as unfinished.
+      if (stalled) job = { ...job, parts: job.parts.map(part => part.state === 'ready' || part.state === 'failed' ? part : { ...part, state: 'failed', error: 'Export stopped before this part finished. Export again to retry it.' }) };
       // One failed download fails only that part; the others are still zipped.
       const files: Record<number, string> = {};
       for (const [index, part] of job.parts.entries()) {
