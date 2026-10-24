@@ -1,4 +1,4 @@
-import { aggregateAssembly, classifyScan, metadataIssueText, summarizeMetadataIssues, type AssemblyContext, type AssemblyDefinition, type BomLine, type ClassificationOverride, type ClassificationOverrides, type MatchDecision, type MetadataIssue, type OnshapeRequestSummary, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { aggregateAssembly, classifyScan, mergeBom, metadataIssueText, summarizeMetadataIssues, type AssemblyContext, type AssemblyDefinition, type BillOfMaterials, type BomLine, type BomReconciliation, type ClassificationOverride, type ClassificationOverrides, type MatchDecision, type OnshapeRequestSummary, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { enrichScan } from './catalog';
 import type { Kv } from './index';
 
@@ -13,25 +13,32 @@ export class SessionExpiredError extends Error { constructor() { super('Onshape 
 
 /** `retry` is true for repeat attempts after a 429 so the request ledger can count them separately. */
 type FetchOnshape = (path: string, signal: AbortSignal, retry?: boolean) => Promise<Response>;
-const flag = (line: BomLine, issue: MetadataIssue) => { line.metadataIssue = issue; line.missingMetadataReason = metadataIssueText[issue.code]; };
+/** A per-user cache of the definition and BOM read at one immutable revision. */
+export type SourceCache = { get(key: string): Promise<string | null>; put(key: string, value: string): Promise<void> };
+type Revision = { type: 'v' | 'm'; id: string };
+type Source = { definition: AssemblyDefinition; bom: BillOfMaterials | null; bomStatus: number | null };
 const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   const timer = setTimeout(resolve, ms);
   signal.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason); }, { once: true });
 });
+const segments = (...values: string[]) => values.map(encodeURIComponent);
+/** KV values are limited to 25 MiB; a source larger than this is simply not cached. */
+const maxCachedBytes = 20 * 1024 * 1024;
 
-/** Onshape Assembly/getAssemblyDefinition, documented at https://onshape-public.github.io/docs/api-adv/assemblies/ */
-export function assemblyPath(context: AssemblyContext, version: string) {
-  const { documentId, workspaceOrVersion, workspaceOrVersionId, elementId } = context;
-  const path = [documentId, workspaceOrVersion, workspaceOrVersionId, elementId].map(encodeURIComponent);
-  return `/api/${version}/assemblies/d/${path[0]}/${path[1]}/${path[2]}/e/${path[3]}?includeMateFeatures=false&includeMateConnectors=false&includeNonSolids=false&excludeSuppressed=false`;
+/** Onshape Document/getCurrentMicroversion: pins a workspace scan to one immutable revision. */
+export const microversionPath = (context: AssemblyContext, version: string) => {
+  const [did, wid] = segments(context.documentId, context.workspaceOrVersionId);
+  return `/api/${version}/documents/d/${did}/w/${wid}/currentmicroversion`;
+};
+/** Onshape Assembly/getAssemblyDefinition, read at a version or microversion: https://onshape-public.github.io/docs/api-adv/assemblies/ */
+export function assemblyPath(context: AssemblyContext, revision: Revision, version: string) {
+  const [did, id, eid] = segments(context.documentId, revision.id, context.elementId);
+  return `/api/${version}/assemblies/d/${did}/${revision.type}/${id}/e/${eid}?includeMateFeatures=false&includeMateConnectors=false&includeNonSolids=false&excludeSuppressed=false`;
 }
-
-/** Onshape PartStudio/getPartStudioMassProperties, documented at https://onshape-public.github.io/docs/api-adv/partstudios/ */
-export function massPath(line: BomLine, version: string) {
-  if (!line.sourceType || !line.sourceId) return null;
-  const source = `${line.sourceType}/${encodeURIComponent(line.sourceId)}`;
-  const query = line.configuration ? `?configuration=${encodeURIComponent(line.configuration)}` : '';
-  return `/api/${version}/partstudios/d/${encodeURIComponent(line.documentId)}/${source}/e/${encodeURIComponent(line.elementId)}/massproperties${query}`;
+/** Onshape Assembly/getBillOfMaterials, flattened with every column, at the same revision as the definition. */
+export function bomPath(context: AssemblyContext, revision: Revision, version: string) {
+  const [did, id, eid] = segments(context.documentId, revision.id, context.elementId);
+  return `/api/${version}/assemblies/d/${did}/${revision.type}/${id}/e/${eid}/bom?indented=false&generateIfAbsent=true&onlyVisibleColumns=false&includeItemMicroversions=true`;
 }
 
 export async function loadClassificationOverrides(lines: BomLine[], getOverride: (line: BomLine, signal?: AbortSignal) => Promise<ClassificationOverride | null>, signal?: AbortSignal): Promise<ClassificationOverrides> {
@@ -43,8 +50,18 @@ export async function loadClassificationOverrides(lines: BomLine[], getOverride:
   return overrides;
 }
 
+const accessMessage = (status: number) => status === 402 ? "This Onshape account has used its annual API allowance, so Control Kit can't read the assembly until Onshape resets or raises it."
+  : status === 403 || status === 404 ? "This document couldn't be read by the API. On a free plan it may need to be public, or you may not have access."
+  : status === 429 ? 'Onshape is rate-limiting this scan. Try again in a moment.' : 'Could not read this assembly. Check access and retry.';
+class ScanStop extends Error {}
+
+/**
+ * Scans an assembly in at most three Onshape requests: the workspace's current microversion, then the assembly
+ * definition and the flattened BOM at that immutable revision. A rescan of an unchanged revision reads both from
+ * the per-user source cache, so it costs only the microversion request (none for a version).
+ */
 export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 336, settings: UserSettings = { teamNumber: null }, getOverride: (line: BomLine, signal?: AbortSignal) => Promise<ClassificationOverride | null> = async () => null, onResult?: (result: ScanResult) => Promise<void>,
-  requests?: { summary(): OnshapeRequestSummary; finish(): Promise<unknown> }): Response {
+  requests?: { summary(): OnshapeRequestSummary; finish(): Promise<unknown> }, sourceCache?: SourceCache): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -61,68 +78,64 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         }
         throw new Error('Rate limit exhausted');
       };
+      const required = async <T>(path: string): Promise<T> => {
+        const response = await get(path);
+        if (!response.ok) { emit({ type: 'error', message: accessMessage(response.status) }); throw new ScanStop(); }
+        return await response.json() as T;
+      };
       try {
-        emit({ type: 'progress', stage: 'Fetching assembly…', current: 0, total: 1, instances: 0 });
-        const response = await get(assemblyPath(context, version));
-        if (!response.ok) {
-          const message = response.status === 403 || response.status === 404
-            ? "This document couldn't be read by the API. On a free plan it may need to be public, or you may not have access."
-            : response.status === 429 ? 'Onshape is rate-limiting this scan. Try again in a moment.' : 'Could not read this assembly. Check access and retry.';
-          emit({ type: 'error', message }); return;
+        emit({ type: 'progress', stage: 'Checking assembly revision…', current: 0, total: 3, instances: 0 });
+        let revision: Revision;
+        if (context.workspaceOrVersion === 'w') {
+          const { microversion } = await required<{ microversion?: string }>(microversionPath(context, version));
+          if (!microversion) { emit({ type: 'error', message: 'Onshape returned no revision for this workspace. Try again.' }); return; }
+          revision = { type: 'm', id: microversion };
+        } else revision = { type: context.workspaceOrVersion, id: context.workspaceOrVersionId };
+        const cacheKey = `onshape-source:${context.documentId}:${context.elementId}:${revision.type}:${revision.id}`;
+        let source: Source | null = null;
+        let cache: 'hit' | 'miss' | 'off' = sourceCache ? 'miss' : 'off';
+        if (sourceCache) {
+          try { const raw = await sourceCache.get(cacheKey); if (raw) { source = JSON.parse(raw) as Source; cache = 'hit'; } }
+          catch { source = null; /* A failed or malformed cache read costs one fresh read, not the scan. */ }
         }
-        const definition = await response.json() as AssemblyDefinition;
+        if (!source) {
+          emit({ type: 'progress', stage: 'Reading assembly…', current: 1, total: 3, instances: 0 });
+          const definition = await required<AssemblyDefinition>(assemblyPath(context, revision, version));
+          emit({ type: 'progress', stage: "Reading Onshape's bill of materials…", current: 2, total: 3, instances: 0 });
+          const response = await get(bomPath(context, revision, version));
+          source = { definition, bom: response.ok ? await response.json() as BillOfMaterials : null, bomStatus: response.ok ? null : response.status };
+          // Only a complete read is cached: a missing BOM must be retried on the next scan.
+          if (sourceCache && source.bom) {
+            const value = JSON.stringify(source);
+            if (value.length < maxCachedBytes) await sourceCache.put(cacheKey, value).catch(() => undefined);
+          }
+        }
+        const { definition, bom } = source;
         if (!definition.rootAssembly || !Array.isArray(definition.rootAssembly.instances)) { emit({ type: 'error', message: 'Onshape returned an incomplete assembly. Try again.' }); return; }
-        const result = aggregateAssembly(definition, context, definition.rootAssembly.name ?? 'Assembly');
-        const unique = new Map<string, BomLine[]>();
-        for (const line of [...result.lines, ...result.suppressed]) {
-          if (line.unresolvedSubassembly) { flag(line, { code: 'unresolved-subassembly', httpStatus: null }); continue; }
-          const key = `${line.documentId}:${line.elementId}:${line.sourceType}:${line.sourceId}:${line.configuration ?? ''}`;
-          unique.set(key, [...(unique.get(key) ?? []), line]);
+        const name = bom?.bomSource?.element?.name ?? definition.rootAssembly.name ?? 'Assembly';
+        const result = aggregateAssembly(definition, context, name);
+        if (bom?.bomSource?.document?.name) result.documentName = bom.bomSource.document.name;
+        let reconciliation: BomReconciliation;
+        if (bom) reconciliation = mergeBom(result, bom);
+        else {
+          for (const line of result.lines) if (!line.metadataIssue) line.metadataIssue = { code: 'bom-unavailable', httpStatus: source.bomStatus };
+          reconciliation = { status: 'unavailable', httpStatus: source.bomStatus, rows: 0, matchedLines: 0, linesWithoutRow: 0, rowsWithoutLine: 0, quantityMismatches: 0, columns: [] };
         }
-        const entries = [...unique.values()];
-        let completed = 0;
+        const all = [...result.lines, ...result.suppressed];
+        for (const line of all) line.missingMetadataReason = line.metadataIssue ? metadataIssueText[line.metadataIssue.code] : null;
+        result.missingMetadata = all.filter(line => line.metadataIssue);
         const count = result.stats.totalInstances;
-        emit({ type: 'progress', stage: 'Resolving parts…', current: 0, total: entries.length, instances: count });
-        for (let offset = 0; offset < entries.length; offset += 6) {
-          // allSettled: a session expiry in one request must not save the ledger while sibling requests are in flight.
-          const settled = await Promise.allSettled(entries.slice(offset, offset + 6).map(async lines => {
-            try {
-              const path = massPath(lines[0], version);
-              if (!path) { for (const line of lines) flag(line, { code: 'source-revision-unavailable', httpStatus: null }); return; }
-              const response = await get(path);
-              if (!response.ok) { for (const line of lines) flag(line, { code: 'metadata-http-error', httpStatus: response.status }); return; }
-              const value = await response.json() as { bodies?: Record<string, { mass?: number[]; material?: string }> };
-              for (const line of lines) {
-                const body = line.partId ? value.bodies?.[line.partId] : undefined;
-                line.massKg = typeof body?.mass?.[0] === 'number' ? body.mass[0] : null;
-                line.material = body?.material ?? null;
-                if (!body) flag(line, { code: 'mass-body-missing', httpStatus: response.status });
-              }
-            } catch (error) {
-              if (error instanceof SessionExpiredError) throw error;
-              if (request.signal.aborted) throw error;
-              for (const line of lines) flag(line, { code: 'metadata-request-failed', httpStatus: null });
-            } finally {
-              completed++;
-              emit({ type: 'progress', stage: 'Resolving parts…', current: completed, total: entries.length, instances: count });
-            }
-          }));
-          const failure = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
-          if (failure) throw failure.reason;
-        }
-        result.missingMetadata = [...result.lines, ...result.suppressed].filter(line => line.missingMetadataReason !== null);
-        emit({ type: 'progress', stage: 'Matching vendors…', current: 0, total: result.lines.length, instances: count });
+        emit({ type: 'progress', stage: 'Matching vendors…', current: 3, total: 3, instances: count });
         await enrichScan(result, catalog, getDecision, request.signal, staleHours);
         classifyScan(result, settings, await loadClassificationOverrides(result.lines, getOverride, request.signal));
-        emit({ type: 'progress', stage: 'Matching vendors…', current: result.lines.length, total: result.lines.length, instances: count });
-        result.diagnostics = { onshapeRequests: requests?.summary() ?? null, metadataIssues: summarizeMetadataIssues([...result.lines, ...result.suppressed]) };
+        result.diagnostics = { onshapeRequests: requests?.summary() ?? null, metadataIssues: summarizeMetadataIssues(all), bom: reconciliation, revision, cache };
         if (onResult) await onResult(result);
         emit({ type: 'result', result });
       } catch (error) {
-        if (!request.signal.aborted) {
+        if (!request.signal.aborted && !(error instanceof ScanStop)) {
           if (error instanceof SessionExpiredError) emit({ type: 'session-expired' });
           else {
-            console.error('Scan failed', error);
+            console.error('Scan failed', error instanceof Error ? error.name : 'unknown');
             emit({ type: 'error', message: error instanceof TypeError
               ? 'Could not reach Onshape. Check your connection and retry.'
               : 'The scan stopped unexpectedly. Try again.' });

@@ -40,6 +40,6 @@ for (let offset = days - 1; offset >= 0; offset--) {
   if (!raw) continue;
   const day = JSON.parse(raw);
   total += day.total;
-  console.log(`  ${date} ${String(day.total).padStart(5)} requests (${day.retries ?? 0} retries) in ${day.operations} operations | ${JSON.stringify(day.byPurpose)} | ${JSON.stringify(day.byKind)} | status ${JSON.stringify(day.byStatus)}${Object.keys(day.errors).length ? ` | errors ${JSON.stringify(day.errors)}` : ''}`);
+  console.log(`  ${date} ${String(day.total).padStart(5)} requests (${day.billable ?? "?"} billable, ${day.retries ?? 0} retries) in ${day.operations} operations | ${JSON.stringify(day.byPurpose)} | ${JSON.stringify(day.byKind)} | status ${JSON.stringify(day.byStatus)}${Object.keys(day.errors).length ? ` | errors ${JSON.stringify(day.errors)}` : ''}`);
 }
 console.log(`  Total: ${total}. The Onshape Developer page counter remains the authoritative annual figure.`);

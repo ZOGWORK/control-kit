@@ -26,7 +26,7 @@ Run `pnpm --filter @control-kit/worker mock` to start mock Onshape on `http://lo
 pnpm --filter @control-kit/worker exec wrangler dev --port 8787 --var WEB_ORIGIN:http://localhost:5173 --var ONSHAPE_API_BASE:http://localhost:8788 --var ONSHAPE_OAUTH_BASE:http://localhost:8788 --var ONSHAPE_OAUTH_REDIRECT_URI:http://localhost:8787/oauth/redirect
 ```
 
-Open `http://localhost:5173/?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1` and click **Scan Assembly**. Substitute `robot` or `empty` for `simple` to test the other fixtures. Tests use the same mock handler in process and make zero live Onshape calls. M2 pins `ONSHAPE_API_VERSION=v9` for the documented assembly and Part Studio calls; real-response validation remains pending.
+Open `http://localhost:5173/?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1` and click **Scan Assembly**. Substitute `robot` or `empty` for `simple` to test the other fixtures. Tests use the same mock handler in process and make zero live Onshape calls. `ONSHAPE_API_VERSION=v9` is pinned. A workspace scan makes three Onshape requests: the current microversion, then the assembly definition and the flattened bill of materials at that microversion. A rescan of an unchanged revision reads both from a per-user cache and costs one request. Part numbers, descriptions, vendors, and materials come from the Onshape BOM.
 
 For fixture-only vendor matching in local development, generate and load the seed into local Wrangler KV (never use `--remote` for this seed):
 

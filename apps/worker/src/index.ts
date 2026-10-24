@@ -194,7 +194,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     const scanId = random();
     return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 336), settings, getOverride,
       async result => { result.scanId = scanId; await env.APP_STATE.put(`scan:${current.data.user.id}:${scanId}`, JSON.stringify(result), { expirationTtl: 3600 }); },
-      { summary: () => ledger.summary(), finish: () => persistLedger(env.APP_STATE, ledger) });
+      { summary: () => ledger.summary(), finish: () => persistLedger(env.APP_STATE, ledger) },
+      // Scoped to the user: a cached BOM is only served to someone whose own Onshape access already read it.
+      { get: key => env.APP_STATE.get(`${current.data.user.id}:${key}`), put: (key, value) => env.APP_STATE.put(`${current.data.user.id}:${key}`, value, { expirationTtl: 30 * 86400 }) });
   }
   if (url.pathname === '/api/prints/zip' && request.method === 'GET') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
