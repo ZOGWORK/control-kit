@@ -24,6 +24,8 @@ describe('SKU and name normalization', () => {
     const worm = 'Worm Gear Set (28:1 Ratio, 8mm REX Bore Worm)';
     const shared = findBestMatch({ name: 'Worm gear', partNumber: '3204-0001-0002' }, [record('gobilda', '3204-0001-0002', worm, 36.99), record('servocity', '3204-0001-0002', worm, 34.99)]);
     expect(shared).toMatchObject({ status: 'exact', vendor: { vendorId: 'servocity' }, reasons: ['exact SKU 3204-0001-0002; also sold by gobilda'] });
+    const sizes = findBestMatch({ name: 'Screw', partNumber: '2800-0003' }, [record('gobilda', '2800-0003', 'Stainless Steel Socket Head Cap Screw M3'), record('servocity', '2800-0003', 'Stainless Steel Socket Head Cap Screw M4')]);
+    expect(sizes.status).toBe('possible');
     const clash = findBestMatch({ name: 'Part', partNumber: '1309-0016' }, [record('gobilda', '1309-0016', '1309 Series Sonic Hub'), record('pitsco', '1309-0016', 'Classroom Battery Charger')]);
     expect(clash.status).toBe('possible');
     expect(clash.reasons[0]).toContain('names different products');

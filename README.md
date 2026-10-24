@@ -70,7 +70,8 @@ Five staggered Worker crons crawl the vendors' public product sitemaps every two
 A record must carry a real vendor SKU; none is derived from a name. A pack size is recorded only with its evidence, such as `variant label "25 Pack"`. Pages that are redirect stubs, lack product data, or lack a SKU are skipped and counted by reason. A page whose fetch fails holds the crawl position for up to three runs, then is skipped, so one bad page cannot stall a vendor.
 
 **Storage and publication.** Each run appends its records as one batch and updates the generation's SKU/name index, so a run costs about five KV writes regardless of catalog size. [Free Workers KV allows 1,000 writes per day](https://developers.cloudflare.com/kv/platform/limits/).
-- The **first** crawl goes live after its first run and is labeled partial until it finishes.
+- What a run writes becomes visible on the **next** run, two hours later. That gives KV time to propagate everywhere before any scan reads it.
+- The **first** crawl goes live in parts this way and is labeled partial until it finishes.
 - **Later** crawls build a new generation while the last complete one stays live. Scans switch to the new generation only when it is complete. The previous generation is kept for a day for rollback, then deleted in bounded steps.
 
 **Health.** The snapshot records success or failure on every run. `GET /api/catalog/health` and `node --experimental-strip-types scripts/ops-report.ts` report each vendor's state: published (complete or partial), building, failing, or never run. They also report progress, skipped pages, staleness, and the last error. Every scan carries the same health. The app warns when a catalog is unpublished, partial, stale, or failing, even if no line matched. A matched price is stale after `VENDOR_STALE_HOURS` (336, two weeks), which allows for a full refresh cycle.

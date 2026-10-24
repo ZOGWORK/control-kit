@@ -29,10 +29,11 @@ export const indexKey = (vendor: VendorId, gen: string) => `cat:${vendor}:gen:${
 export const snapshotKey = (vendor: VendorId) => `vendor:${vendor}:__snapshot__`;
 const legacyKeys = (vendor: VendorId) => [`vendor:${vendor}:__cursor__`, `vendor:${vendor}:__lastgood__`, `vendor:${vendor}:__retired__`];
 
-export type CatalogPointer = { gen: string; complete: boolean; records: number; publishedAt: string; completedAt: string | null; previous: { gen: string; batches: number; deleteAfter: number; deleted: number } | null };
+/** `batches` is how many batches readers may use; index entries for later batches are not yet published. */
+export type CatalogPointer = { gen: string; complete: boolean; records: number; batches?: number; publishedAt: string; completedAt: string | null; skipped?: Partial<Record<SkipReason, number>>; previous: { gen: string; batches: number; deleteAfter: number; deleted: number } | null };
 export type IndexEntry = [normalizedSku: string, normalizedName: string, batch: number];
 export type SkipReason = 'redirect-stub' | 'no-product-data' | 'no-sku' | 'robots-disallowed' | 'off-vendor-url' | 'fetch-failed';
-type Crawl = { gen: string; startedAt: string; sitemaps: string[]; sitemapIndex: number; urlCount: number; urlIndex: number; batches: number; records: number; skipped: Partial<Record<SkipReason, number>>; skipSamples: Array<{ reason: SkipReason; url: string }>; failing: { url: string; runs: number } | null };
+type Crawl = { gen: string; startedAt: string; sitemaps: string[]; sitemapIndex: number; urlCount: number; urlIndex: number; batches: number; records: number; skipped: Partial<Record<SkipReason, number>>; skipSamples: Array<{ reason: SkipReason; url: string }>; failing: { url: string; runs: number } | null; done?: boolean };
 /** Crawl position, copied into the snapshot so health checks never read crawl or index keys. */
 export type CrawlProgress = { phase: 'fetch'; sitemapsDone: number; sitemapsTotal: number; pagesDoneInSitemap: number; pagesInSitemap: number; recordsCollected: number };
 export type VendorSnapshot = { status: 'ok' | 'failed'; updatedAt: string | null; lastRunAt: string; recordCount: number; source: 'sitemap'; version: string | null; complete?: boolean; inProgress?: boolean; error?: string;
@@ -110,7 +111,7 @@ function shopifyVariants(html: string, pageUrl: string, title: string, offers: R
     const inventory = offer?.inventoryLevel as Record<string, unknown> | undefined;
     const quantity = inventory?.value !== undefined && Number.isFinite(Number(inventory.value)) && Number(inventory.value) >= 0 ? Number(inventory.value) : null;
     return [{ name: label, sku, url: url.toString(), sourceUrl: pageUrl, priceUsd: usd(typeof variant.price === 'number' ? variant.price / 100 : null, currency), stock: stock(offer?.availability, quantity), stockQty: quantity,
-      ...pack(variant.public_title ?? '', 'variant label'), parser: 'shopify-variant' as const }];
+      ...(packFromText(variant.public_title ?? '') ? pack(variant.public_title ?? '', 'variant label') : pack(title, 'product name')), parser: 'shopify-variant' as const }];
   });
 }
 
@@ -181,10 +182,13 @@ const json = async <T>(kv: Kv, key: string): Promise<T | null> => {
 };
 class VendorFetchError extends Error {}
 
-/** Deletes a replaced generation after its grace period, at most `budget` keys per run. */
+/** Deletes a replaced generation after its grace period, at most `budget` keys per run. Never touches the live one. */
 async function retirePrevious(vendor: VendorId, kv: Kv, pointer: CatalogPointer, budget: number) {
   const previous = pointer.previous;
-  if (!previous || previous.deleteAfter > Date.now()) return 0;
+  if (!previous) return 0;
+  // A manual rollback that points back at the old generation must not then delete it.
+  if (previous.gen === pointer.gen) { pointer.previous = null; return 0; }
+  if (previous.deleteAfter > Date.now()) return 0;
   const keys = [indexKey(vendor, previous.gen), ...Array.from({ length: previous.batches }, (_, batch) => batchKey(vendor, previous.gen, batch))];
   let deleted = 0;
   while (previous.deleted < keys.length && deleted < budget) { await kv.delete(keys[previous.deleted]); previous.deleted++; deleted++; }
@@ -197,8 +201,10 @@ async function retirePrevious(vendor: VendorId, kv: Kv, pointer: CatalogPointer,
 }
 
 /**
- * One cron run for one vendor: fetch up to `maxProducts` pages, append their records as one batch, and publish.
- * Parse problems skip the page with a reason; network failures stop the run without moving the crawl position.
+ * One cron run for one vendor. It first publishes what earlier runs wrote, then fetches up to `maxProducts`
+ * pages and appends their records as one batch. Publishing a run later (two hours on the cron schedule) is the
+ * barrier that lets KV propagate the batch and index to every location before any reader is pointed at them.
+ * Parse problems skip the page with a reason; network failures stop the run after saving what was fetched.
  */
 export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; minRequestMs?: number; retireAfterMs?: number; now?: () => Date } = {}): Promise<VendorRun> {
   const started = Date.now();
@@ -208,7 +214,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
   const previousSnapshot = await json<VendorSnapshot>(kv, snapshotKey(vendor));
   let pointer = await json<CatalogPointer>(kv, pointerKey(vendor));
   let crawl = await json<Crawl>(kv, crawlKey(vendor));
-  let fetched = 0; let upserted = 0; let skippedNow = 0; let lastRequest = 0;
+  let fetched = 0; let upserted = 0; let skippedNow = 0; let lastRequest = 0; let published = false;
   const fetchText = async (url: string) => {
     const wait = minRequestMs - (Date.now() - lastRequest);
     if (wait > 0) await sleep(wait);
@@ -229,22 +235,68 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     const progress: CrawlProgress | null = crawl ? { phase: 'fetch', sitemapsDone: Math.max(0, crawl.sitemapIndex - (crawl.urlIndex < crawl.urlCount ? 1 : 0)), sitemapsTotal: crawl.sitemaps.length,
       pagesDoneInSitemap: crawl.urlIndex, pagesInSitemap: crawl.urlCount, recordsCollected: crawl.records } : null;
     const snapshot: VendorSnapshot = { status, updatedAt: pointer?.completedAt ?? (pointer ? pointer.publishedAt : null), lastRunAt: now().toISOString(), recordCount: pointer?.records ?? 0, source: 'sitemap',
-      version: pointer?.gen ?? null, complete: pointer?.complete ?? false, ...(crawl ? { inProgress: true, progress, skipped: crawl.skipped } : {}), ...(error ? { error: error.slice(0, 200) } : {}) };
+      version: pointer?.gen ?? null, complete: pointer?.complete ?? false, skipped: crawl?.skipped ?? pointer?.skipped ?? {},
+      ...(crawl ? { inProgress: true, progress } : {}), ...(error ? { error: error.slice(0, 200) } : {}) };
     await kv.put(snapshotKey(vendor), JSON.stringify(snapshot));
     return snapshot;
   };
+  const savePointer = async (next: CatalogPointer) => { pointer = next; await kv.put(pointerKey(vendor), JSON.stringify(next)); };
+  // Records fetched this run, appended as one batch. Written before any advanced position is saved, including on failure.
+  const collected: VendorRecord[] = [];
+  const flush = async () => {
+    if (!crawl || !collected.length) return;
+    const index = await json<IndexEntry[]>(kv, indexKey(vendor, crawl.gen)) ?? [];
+    const batch = crawl.batches;
+    const unique = [...new Map(collected.map(record => [record.normalizedSku, { ...record, catalogVersion: crawl!.gen }])).values()];
+    await kv.put(batchKey(vendor, crawl.gen, batch), JSON.stringify(unique));
+    // Records whose SKU is already in this generation keep the newer copy: the index points at the latest batch.
+    const positions = new Map(index.map((entry, position) => [entry[0], position]));
+    for (const record of unique) {
+      const entry: IndexEntry = [record.normalizedSku, record.normalizedName, batch];
+      const position = positions.get(record.normalizedSku);
+      if (position === undefined) { positions.set(record.normalizedSku, index.length); index.push(entry); } else index[position] = entry;
+    }
+    await kv.put(indexKey(vendor, crawl.gen), JSON.stringify(index));
+    crawl.batches++;
+    crawl.records = index.length;
+    upserted += unique.length;
+    collected.length = 0;
+  };
   try {
     if (!pointer) for (const key of legacyKeys(vendor)) if (await kv.get(key) !== null) await kv.delete(key);
-    if (pointer?.previous) await retirePrevious(vendor, kv, pointer, 20);
+    if (pointer?.previous) { await retirePrevious(vendor, kv, pointer, 20); await savePointer(pointer); }
+    // Publish what earlier runs wrote.
+    if (crawl && crawl.batches > 0) {
+      const firstCrawl = !pointer || pointer.gen === crawl.gen;
+      if (firstCrawl && (crawl.batches > (pointer?.batches ?? 0) || (crawl.done && !pointer?.complete))) {
+        // No complete catalog exists yet, so the generation being built is the best available and goes live in parts.
+        await savePointer({ gen: crawl.gen, complete: Boolean(crawl.done), records: crawl.records, batches: crawl.batches, publishedAt: now().toISOString(),
+          completedAt: crawl.done ? now().toISOString() : null, skipped: crawl.skipped, previous: pointer?.previous ?? null });
+        published = true;
+      } else if (!firstCrawl && crawl.done) {
+        const replaced = pointer!;
+        await savePointer({ gen: crawl.gen, complete: true, records: crawl.records, batches: crawl.batches, publishedAt: now().toISOString(), completedAt: now().toISOString(), skipped: crawl.skipped,
+          previous: { gen: replaced.gen, batches: replaced.batches ?? await countBatches(vendor, kv, replaced.gen), deleteAfter: Date.now() + (options.retireAfterMs ?? 24 * 3600000), deleted: 0 } });
+        published = true;
+      }
+    }
+    if (crawl?.done) {
+      // Fully published; the next run starts a refresh.
+      crawl = null;
+      await kv.delete(crawlKey(vendor));
+      await writeSnapshot('ok');
+      const summary: VendorRun = { vendor, source: 'sitemap', fetched: 0, upserted: 0, skipped: 0, durationMs: Date.now() - started, complete: true };
+      console.log(JSON.stringify({ ...summary, published }));
+      return summary;
+    }
     const robots = await fetchText(`${vendorSources[vendor].origin}/robots.txt`);
     if (!crawl) {
       const root = await fetchText(vendorSources[vendor].sitemap);
       const sitemaps = sitemapLocations(root).filter(url => /(?:type=products|sitemap_products)/i.test(url) && allowedUrl(vendor, url));
       if (!sitemaps.length) throw new Error('No public product sitemap found');
-      crawl = { gen: crypto.randomUUID().slice(0, 8), startedAt: now().toISOString(), sitemaps, sitemapIndex: 0, urlCount: 0, urlIndex: 0, batches: 0, records: 0, skipped: {}, skipSamples: [], failing: null };
+      crawl = { gen: crypto.randomUUID().slice(0, 8), startedAt: now().toISOString(), sitemaps, sitemapIndex: 0, urlCount: 0, urlIndex: 0, batches: 0, records: 0, skipped: {}, skipSamples: [], failing: null, done: false };
     }
     let urls: string[] = crawl.sitemapIndex > 0 ? await json<string[]>(kv, urlsKey(vendor, crawl.gen, crawl.sitemapIndex - 1)) ?? [] : [];
-    const collected: VendorRecord[] = [];
     while (fetched < maxProducts) {
       if (crawl.urlIndex >= crawl.urlCount) {
         if (crawl.sitemapIndex >= crawl.sitemaps.length) break;
@@ -273,53 +325,35 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
       if (page.skip) { skip(page.skip, url); continue; }
       collected.push(...page.records.filter(record => allowedUrl(vendor, record.url)));
     }
-    const crawlDone = crawl.sitemapIndex >= crawl.sitemaps.length && crawl.urlIndex >= crawl.urlCount;
-    // Records whose SKU is already in this generation keep the newer copy: the index points at the latest batch.
-    const index = await json<IndexEntry[]>(kv, indexKey(vendor, crawl.gen)) ?? [];
-    if (collected.length) {
-      const batch = crawl.batches;
-      const unique = [...new Map(collected.map(record => [record.normalizedSku, { ...record, catalogVersion: crawl!.gen }])).values()];
-      await kv.put(batchKey(vendor, crawl.gen, batch), JSON.stringify(unique));
-      const positions = new Map(index.map((entry, position) => [entry[0], position]));
-      for (const record of unique) {
-        const entry: IndexEntry = [record.normalizedSku, record.normalizedName, batch];
-        const position = positions.get(record.normalizedSku);
-        if (position === undefined) { positions.set(record.normalizedSku, index.length); index.push(entry); } else index[position] = entry;
+    await flush();
+    if (crawl.sitemapIndex >= crawl.sitemaps.length && crawl.urlIndex >= crawl.urlCount) {
+      if (!crawl.records) {
+        // Every page was skipped, for example behind a temporary challenge page. Keep the live catalog and start over next run.
+        const reason = `Crawl finished with no usable records (${JSON.stringify(crawl.skipped)})`;
+        crawl = null;
+        await kv.delete(crawlKey(vendor));
+        throw new Error(reason);
       }
-      await kv.put(indexKey(vendor, crawl.gen), JSON.stringify(index));
-      crawl.batches++;
-      crawl.records = index.length;
-      upserted = unique.length;
+      crawl.done = true;
     }
-    const firstCrawl = !pointer || pointer.gen === crawl.gen;
-    if (firstCrawl && (collected.length || crawlDone) && index.length) {
-      // No complete catalog exists yet, so the generation being built is the best available and goes live now.
-      pointer = { gen: crawl.gen, complete: crawlDone, records: index.length, publishedAt: now().toISOString(), completedAt: crawlDone ? now().toISOString() : null, previous: pointer?.previous ?? null };
-      await kv.put(pointerKey(vendor), JSON.stringify(pointer));
-    } else if (!firstCrawl && crawlDone && index.length) {
-      const replaced = pointer!;
-      pointer = { gen: crawl.gen, complete: true, records: index.length, publishedAt: now().toISOString(), completedAt: now().toISOString(),
-        previous: { gen: replaced.gen, batches: await countBatches(vendor, kv, replaced.gen), deleteAfter: Date.now() + (options.retireAfterMs ?? 24 * 3600000), deleted: 0 } };
-      await kv.put(pointerKey(vendor), JSON.stringify(pointer));
-    } else if (pointer?.previous) await kv.put(pointerKey(vendor), JSON.stringify(pointer));
-    if (crawlDone) {
-      if (!index.length) throw new Error('Product sitemap contained no usable records');
-      crawl = null;
-      await kv.delete(crawlKey(vendor));
-    } else await kv.put(crawlKey(vendor), JSON.stringify(crawl));
+    await kv.put(crawlKey(vendor), JSON.stringify(crawl));
     await writeSnapshot('ok');
-    const summary: VendorRun = { vendor, source: 'sitemap', fetched, upserted, skipped: skippedNow, durationMs: Date.now() - started, complete: crawlDone };
-    console.log(JSON.stringify(summary));
+    const summary: VendorRun = { vendor, source: 'sitemap', fetched, upserted, skipped: skippedNow, durationMs: Date.now() - started, complete: false };
+    console.log(JSON.stringify({ ...summary, published }));
     return summary;
   } catch (cause) {
-    if (crawl) await kv.put(crawlKey(vendor), JSON.stringify(crawl));
+    if (crawl) {
+      // Pages fetched before the failure are kept: their records are written before the advanced position is saved.
+      try { await flush(); } catch (flushError) { console.error(JSON.stringify({ vendor, flushFailed: flushError instanceof Error ? flushError.name : 'unknown' })); throw cause; }
+      await kv.put(crawlKey(vendor), JSON.stringify(crawl));
+    }
     const snapshot = await writeSnapshot('failed', cause instanceof Error ? cause.message : 'Unknown ingestion error');
     console.error(JSON.stringify({ vendor, fetched, upserted, skipped: skippedNow, durationMs: Date.now() - started, error: snapshot.error, previousStatus: previousSnapshot?.status ?? null }));
     throw cause;
   }
 }
 
-/** Batch numbers are dense from zero, so the count is the first missing key. Only used once per generation switch. */
+/** Batch numbers are dense from zero, so the count is the first missing key. Only for pointers written before `batches` existed. */
 async function countBatches(vendor: VendorId, kv: Kv, gen: string) {
   let count = 0;
   while (count < 10000 && await kv.get(batchKey(vendor, gen, count)) !== null) count++;

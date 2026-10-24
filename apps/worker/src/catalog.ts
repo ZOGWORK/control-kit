@@ -1,4 +1,4 @@
-import { findBestMatch, normalizeName, normalizeSku, rankVendorAlternatives, recalculatePurchasing, skuCandidates, type CatalogHealth, type MatchDecision, type ScanResult, type VendorHealth, type VendorId, type VendorRecord } from '@control-kit/shared';
+import { findBestMatch, nameSimilarity, normalizeName, normalizeSku, rankVendorAlternatives, recalculatePurchasing, skuCandidates, type CatalogHealth, type MatchDecision, type ScanResult, type VendorHealth, type VendorId, type VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
 import { batchKey, indexKey, pointerKey, snapshotKey, type CatalogPointer, type IndexEntry, type VendorSnapshot } from './vendor-ingest';
 
@@ -76,14 +76,16 @@ async function vendorIndex(kv: Kv, vendor: VendorId, cache: Map<string, Promise<
   let pointer: CatalogPointer | null = null;
   try { pointer = rawPointer ? JSON.parse(rawPointer) as CatalogPointer : null; } catch { /* No usable catalog. */ }
   if (!pointer?.gen) return null;
-  const cacheKey = `${vendor}:${pointer.gen}:${pointer.records}`;
+  const cacheKey = `${vendor}:${pointer.gen}:${pointer.records}:${pointer.batches ?? 'all'}`;
   const cached = indexes.get(cacheKey);
   if (cached && cached.expires > Date.now()) return cached.value;
   let entries: IndexEntry[] = [];
   try {
     const parsed: unknown = JSON.parse(await read(kv, indexKey(vendor, pointer.gen), cache, signal) ?? '[]');
     // Entries that are not [sku, name, batch] are dropped one by one rather than failing the scan.
-    if (Array.isArray(parsed)) entries = parsed.filter((entry): entry is IndexEntry => Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string' && Number.isInteger(entry[2]));
+    // Entries in batches the pointer has not published yet may not have reached this location, so they are ignored.
+    const published = pointer.batches ?? Infinity;
+    if (Array.isArray(parsed)) entries = parsed.filter((entry): entry is IndexEntry => Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string' && Number.isInteger(entry[2]) && entry[2] < published);
   } catch { /* A malformed index is a miss. */ }
   const value: VendorIndex = { vendor, gen: pointer.gen, bySku: new Map(), byToken: new Map(), entries };
   entries.forEach(([sku, name], position) => {
@@ -95,15 +97,15 @@ async function vendorIndex(kv: Kv, vendor: VendorId, cache: Map<string, Promise<
   return value;
 }
 
-/** Name candidates are ranked on the index's normalized names so only the few best need their batch read. */
-function nameCandidates(index: VendorIndex, name: string, limit = 8): number[] {
-  const tokens = tokensOf(name).slice(0, 6);
-  const shared = new Map<number, number>();
-  for (const token of tokens) for (const position of index.byToken.get(token) ?? []) shared.set(position, (shared.get(position) ?? 0) + 1);
-  return [...shared.entries()].map(([position, count]) => {
-    const size = new Set(index.entries[position][1].split(' ')).size;
-    return [position, count / (tokens.length + size - count)] as const;
-  }).sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, limit).map(([position]) => position);
+/**
+ * Name candidates share a word with the part name and are ranked with the matcher's own score (including its
+ * size/number penalty), so the shortlist cut cannot drop the record the matcher would have chosen.
+ */
+function nameCandidates(index: VendorIndex, name: string, limit = 12): number[] {
+  const positions = new Set<number>();
+  for (const token of tokensOf(name).slice(0, 6)) for (const position of index.byToken.get(token) ?? []) positions.add(position);
+  return [...positions].map(position => [position, nameSimilarity(name, index.entries[position][1])] as const)
+    .sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, limit).map(([position]) => position);
 }
 
 export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null> = async () => null, signal?: AbortSignal, staleHours = 336) {

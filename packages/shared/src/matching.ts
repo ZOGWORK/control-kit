@@ -65,6 +65,18 @@ export function classifyMatchScore(score: number): MatchResult['status'] {
   return score >= 0.50 ? 'possible' : 'unmatched';
 }
 
+const numberTokens = (normalizedName: string) => new Set(normalizedName.split(' ').filter(token => /\d/.test(token)));
+/** Two listings name the same product only if their names agree and every size or number token matches (M3 is not M4). */
+function sameProductName(a: VendorRecord, b: VendorRecord) {
+  const left = numberTokens(a.normalizedName || normalizeName(a.name));
+  const right = numberTokens(b.normalizedName || normalizeName(b.name));
+  return left.size === right.size && [...left].every(token => right.has(token)) && candidateScore(a.name, b).score >= 0.5;
+}
+/** The matcher's own name score, for ranking catalog index entries before their records are read. */
+export function nameSimilarity(name: string, normalizedName: string) {
+  return candidateScore(name, { name: normalizedName, normalizedName } as VendorRecord).score;
+}
+
 function candidateScore(name: string, vendor: VendorRecord) {
   const left = new Set(normalizeName(name).split(' ').filter(Boolean));
   const right = new Set((vendor.normalizedName || normalizeName(vendor.name)).split(' ').filter(Boolean));
@@ -96,7 +108,7 @@ export function findBestMatch(line: { name: string; partNumber?: string | null }
     const vendor = ranked[0];
     // goBILDA products are also sold by ServoCity under the same SKU: one product, several sellers. Only when the
     // product names disagree is the shared number ambiguous, and then a person must say which product it is.
-    const sameProduct = ranked.every(other => candidateScore(vendor.name, other).score >= 0.5);
+    const sameProduct = ranked.every(other => sameProductName(vendor, other));
     const others = [...exactVendors].filter(id => id !== vendor.vendorId).join(', ');
     if (sameProduct) return { vendor, confidence: 1, status: 'exact', reasons: [`exact SKU ${vendor.sku}; also sold by ${others}`] };
     return { vendor, confidence: 0.9, status: 'possible', reasons: [`SKU ${vendor.sku} names different products at ${[...exactVendors].join(', ')}; confirm which one`] };

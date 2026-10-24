@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { aggregateAssembly, applyMatchDecision, type AssemblyDefinition, type VendorRecord } from '@control-kit/shared';
+import { aggregateAssembly, applyMatchDecision, normalizeName, type AssemblyDefinition, type VendorRecord } from '@control-kit/shared';
 import { clearCatalogMemoryCache, enrichScan } from './catalog';
 import { batchKey, indexKey, pointerKey } from './vendor-ingest';
 import type { Kv } from './index';
@@ -46,6 +46,25 @@ describe('catalog KV read path and purchasing', () => {
     expect(wheel.matchStatus).toBe('possible');
     expect(wheel.lineTotalUsd).toBeNull();
     expect(result.stats.totalCostUsd).toBe(699.8);
+  });
+  it('keeps the right size on the name shortlist when many other sizes share its words', async () => {
+    clearCatalogMemoryCache();
+    const record = (sku: string, name: string): VendorRecord => ({ vendorId: 'gobilda', sku, normalizedSku: sku, name, normalizedName: normalizeName(name), url: 'https://www.gobilda.com/x/', priceUsd: 1, packSize: null, packSizeVerified: false, stock: 'in', stockQty: null, category: 'hardware', updatedAt: new Date().toISOString(), source: 'sitemap' });
+    const decoys = ['M4', 'M5', 'M6', 'M8', 'M2', 'M2.5', 'M10', 'M12', 'M1.6', 'M14', 'M16', 'M20'].map((size, n) => record(`D${n}`, `${size} Socket Head Screw`));
+    const result = aggregateAssembly(fixture('empty'), context, 'Robot');
+    result.lines = [{ ...aggregateAssembly(fixture('simple'), context, 'Robot').lines[0], name: 'M3 Socket Head Screw', partNumber: null, bomLineKey: 'm3' }];
+    await enrichScan(result, catalog([...decoys, record('RIGHT', 'M3 Socket Head Cap Screw')]));
+    expect(result.lines[0].vendor?.sku).toBe('RIGHT');
+  });
+  it('ignores index entries for batches the pointer has not published yet', async () => {
+    clearCatalogMemoryCache();
+    const seen = { ...records.find(item => item.vendorId === 'rev')!, updatedAt: new Date().toISOString() };
+    const kv = catalog([seen]);
+    kv.values.set(pointerKey('rev'), JSON.stringify({ ...JSON.parse(kv.values.get(pointerKey('rev'))!), batches: 0 }));
+    const result = aggregateAssembly(fixture('empty'), context, 'Robot');
+    result.lines = [{ ...aggregateAssembly(fixture('simple'), context, 'Robot').lines[0], partNumber: seen.sku, bomLineKey: 'unpublished' }];
+    await enrichScan(result, kv);
+    expect(result.lines[0].matchStatus).toBe('unmatched');
   });
   it('prices a name candidate only after a person confirms it', async () => {
     clearCatalogMemoryCache();

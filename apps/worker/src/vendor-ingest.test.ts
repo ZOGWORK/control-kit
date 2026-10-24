@@ -37,7 +37,8 @@ async function records(kv: MemoryKv, vendor: VendorId) {
   const pointer = json<CatalogPointer>(kv, pointerKey(vendor));
   const index = json<IndexEntry[]>(kv, indexKey(vendor, pointer.gen));
   const found: VendorRecord[] = [];
-  for (const [sku, , batch] of index) found.push(json<VendorRecord[]>(kv, batchKey(vendor, pointer.gen, batch)).find(record => record.normalizedSku === sku)!);
+  // Same rule as the scan reader: entries in batches the pointer has not published are invisible.
+  for (const [sku, , batch] of index.filter(entry => entry[2] < (pointer.batches ?? Infinity))) found.push(json<VendorRecord[]>(kv, batchKey(vendor, pointer.gen, batch)).find(record => record.normalizedSku === sku)!);
   return found;
 }
 
@@ -80,6 +81,12 @@ describe('vendor product page parsing', () => {
     expect(parseProductPage('rev', 'https://www.revrobotics.com/x/', product('Mystery Bracket', null), at)).toEqual({ records: [], skip: 'no-sku' });
     expect(parseProductPage('rev', 'https://www.revrobotics.com/x/', '<html><body>About us</body></html>', at)).toEqual({ records: [], skip: 'no-product-data' });
   });
+  it('falls back to the Shopify product title for pack evidence when the variant has no label', () => {
+    const meta = { product: { variants: [{ id: 1, sku: '40001', price: 899, name: 'Socket Screws (Pack of 10)', public_title: null }] } };
+    const html = `${product('Socket Screws (Pack of 10)', '40001', '8.99')}<script>\n  window.ShopifyAnalytics.meta.currency = 'USD';\n  var meta = ${JSON.stringify(meta)};\n  for (var attr in meta) {}\n</script>`;
+    const [record] = parseProductPage('pitsco', 'https://www.pitsco.com/products/screws', html, at).records;
+    expect(record).toMatchObject({ packSize: 10, packSizeVerified: true, packEvidence: 'product name "Pack of 10"' });
+  });
   it('accepts only explicit pack wording as pack evidence', () => {
     expect(packFromText('M3 Screws (Pack of 10)')).toEqual({ size: 10, phrase: 'Pack of 10' });
     expect(packFromText('25 Pack')).toEqual({ size: 25, phrase: '25 Pack' });
@@ -91,7 +98,7 @@ describe('vendor product page parsing', () => {
 });
 
 describe('vendor catalog crawl and publication', () => {
-  it.each(vendors)('%s publishes its captured product on the first run', async vendor => {
+  it.each(vendors)('%s publishes its captured product on the run after it was fetched', async vendor => {
     quiet();
     const data = captured(vendor);
     const kv = new MemoryKv();
@@ -101,39 +108,46 @@ describe('vendor catalog crawl and publication', () => {
       return body === null ? new Response('missing', { status: 404 }) : new Response(body);
     };
     const first = await run(vendor, kv, fetcher);
-    expect(first).toMatchObject({ vendor, fetched: 1, upserted: 1, complete: true });
-    expect(json<CatalogPointer>(kv, pointerKey(vendor))).toMatchObject({ complete: true, records: 1 });
+    expect(first).toMatchObject({ vendor, fetched: 1, upserted: 1, complete: false });
+    // Publication barrier: nothing a run writes is visible to scans until a later run publishes it.
+    expect(kv.values.has(pointerKey(vendor))).toBe(false);
+    const second = await run(vendor, kv, fetcher);
+    expect(second).toMatchObject({ fetched: 0, complete: true });
+    expect(json<CatalogPointer>(kv, pointerKey(vendor))).toMatchObject({ complete: true, records: 1, batches: 1 });
     const [record] = await records(kv, vendor);
     expect(record.url).toBe(data.capturedFrom.productUrl);
     expect(record.priceUsd).toBeGreaterThan(0);
     expect(json<VendorSnapshot>(kv, snapshotKey(vendor))).toMatchObject({ status: 'ok', complete: true, recordCount: 1 });
     vi.restoreAllMocks();
   });
-  it('skips the goBILDA and ServoCity pages that froze production and keeps crawling', async () => {
+  it('skips the ServoCity page that froze production, keeps crawling, and reports the skip after completion', async () => {
     quiet();
     const kv = new MemoryKv();
     const fetcher = site('servocity', {
       'https://www.servocity.com/16awg-premium-silicone-jacket-wire-black-3m-length/': page('servocity-moved-stub'),
       'https://www.servocity.com/aluminum-channel/': product('1120 Series U-Channel (5 Hole, 120mm Length)', '1120-0005-0120', '7.99'),
     });
-    const result = await run('servocity', kv, fetcher);
-    expect(result).toMatchObject({ fetched: 2, upserted: 1, skipped: 1, complete: true });
-    expect(json<VendorSnapshot>(kv, snapshotKey('servocity'))).toMatchObject({ status: 'ok', recordCount: 1, complete: true });
+    expect(await run('servocity', kv, fetcher)).toMatchObject({ fetched: 2, upserted: 1, skipped: 1 });
+    await run('servocity', kv, fetcher);
+    expect(json<VendorSnapshot>(kv, snapshotKey('servocity'))).toMatchObject({ status: 'ok', recordCount: 1, complete: true, skipped: { 'redirect-stub': 1 } });
     vi.restoreAllMocks();
   });
-  it('makes the first crawl searchable after its first run and labels it incomplete until done', async () => {
+  it('publishes the first crawl in parts, one run behind, and labels it incomplete until done', async () => {
     quiet();
     const kv = new MemoryKv();
     const pages = Object.fromEntries(Array.from({ length: 5 }, (_, n) => [`https://www.revrobotics.com/p${n}/`, product(`Part ${n}`, `REV-41-100${n}`)]));
     const fetcher = site('rev', pages);
     await run('rev', kv, fetcher, { maxProducts: 2 });
-    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: false, records: 2, completedAt: null });
-    expect(json<VendorSnapshot>(kv, snapshotKey('rev'))).toMatchObject({ status: 'ok', complete: false, recordCount: 2, inProgress: true, progress: { pagesDoneInSitemap: 2, pagesInSitemap: 5 } });
+    expect(kv.values.has(pointerKey('rev'))).toBe(false);
+    expect(json<VendorSnapshot>(kv, snapshotKey('rev'))).toMatchObject({ status: 'ok', version: null, inProgress: true, progress: { pagesDoneInSitemap: 2, pagesInSitemap: 5, recordsCollected: 2 } });
     await run('rev', kv, fetcher, { maxProducts: 2 });
-    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: false, records: 4 });
-    const last = await run('rev', kv, fetcher, { maxProducts: 2 });
-    expect(last.complete).toBe(true);
-    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: true, records: 5 });
+    // The second run published the first run's batch; its own batch waits for the third run.
+    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: false, records: 2, batches: 1, completedAt: null });
+    expect(await records(kv, 'rev')).toHaveLength(2);
+    await run('rev', kv, fetcher, { maxProducts: 2 });
+    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: false, records: 4, batches: 2 });
+    expect(await run('rev', kv, fetcher, { maxProducts: 2 })).toMatchObject({ complete: true });
+    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: true, records: 5, batches: 3 });
     expect((await records(kv, 'rev')).map(record => record.normalizedSku).sort()).toEqual(['411000', '411001', '411002', '411003', '411004']);
     expect(kv.values.has('cat:rev:crawl')).toBe(false);
     vi.restoreAllMocks();
@@ -144,10 +158,27 @@ describe('vendor catalog crawl and publication', () => {
     const pages = Object.fromEntries(Array.from({ length: 120 }, (_, n) => [`https://www.gobilda.com/p${n}/`, product(`Part ${n}`, `1000-0000-${String(n).padStart(4, '0')}`)]));
     const fetcher = site('gobilda', pages);
     await run('gobilda', kv, fetcher, { maxProducts: 40 });
+    await run('gobilda', kv, fetcher, { maxProducts: 40 });
     kv.puts = 0;
     await run('gobilda', kv, fetcher, { maxProducts: 40 });
-    // batch + index + pointer + crawl + snapshot
+    // pointer + batch + index + crawl + snapshot
     expect(kv.puts).toBeLessThanOrEqual(5);
+    vi.restoreAllMocks();
+  });
+  it('keeps records fetched before a failing page and resumes after it', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    let broken = true;
+    const fetcher = site('rev', {
+      'https://www.revrobotics.com/a/': product('Shaft A', 'REV-21-0001'),
+      'https://www.revrobotics.com/b/': () => broken ? new Response('unavailable', { status: 503 }) : new Response(product('Shaft B', 'REV-21-0002')),
+      'https://www.revrobotics.com/c/': product('Shaft C', 'REV-21-0003'),
+    });
+    await expect(run('rev', kv, fetcher)).rejects.toThrow('HTTP 503');
+    broken = false;
+    await run('rev', kv, fetcher);
+    await run('rev', kv, fetcher);
+    expect((await records(kv, 'rev')).map(record => record.normalizedSku).sort()).toEqual(['210001', '210002', '210003']);
     vi.restoreAllMocks();
   });
   it('holds position on a failing page, then skips it after three consecutive failed runs', async () => {
@@ -161,9 +192,22 @@ describe('vendor catalog crawl and publication', () => {
       await expect(run('pitsco', kv, fetcher)).rejects.toThrow('HTTP 503');
       expect(json<VendorSnapshot>(kv, snapshotKey('pitsco'))).toMatchObject({ status: 'failed', error: 'Vendor returned HTTP 503', version: null });
     }
-    const third = await run('pitsco', kv, fetcher);
-    expect(third).toMatchObject({ upserted: 1, skipped: 1, complete: true });
-    expect(json<VendorSnapshot>(kv, snapshotKey('pitsco'))).toMatchObject({ status: 'ok', recordCount: 1 });
+    expect(await run('pitsco', kv, fetcher)).toMatchObject({ upserted: 1, skipped: 1 });
+    await run('pitsco', kv, fetcher);
+    expect(json<VendorSnapshot>(kv, snapshotKey('pitsco'))).toMatchObject({ status: 'ok', recordCount: 1, complete: true, skipped: { 'fetch-failed': 1 } });
+    vi.restoreAllMocks();
+  });
+  it('restarts a crawl that ended with no usable records instead of failing forever', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    let challenge = true;
+    const fetcher = site('rev', { 'https://www.revrobotics.com/a/': () => new Response(challenge ? '<html><body>Checking your browser</body></html>' : product('Shaft A', 'REV-21-0001')) });
+    await expect(run('rev', kv, fetcher)).rejects.toThrow('no usable records');
+    expect(kv.values.has('cat:rev:crawl')).toBe(false);
+    challenge = false;
+    await run('rev', kv, fetcher);
+    await run('rev', kv, fetcher);
+    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: true, records: 1 });
     vi.restoreAllMocks();
   });
   it('honors robots.txt per product page', async () => {
@@ -181,9 +225,11 @@ describe('vendor catalog crawl and publication', () => {
     const pages = Object.fromEntries(Array.from({ length: 3 }, (_, n) => [`https://www.revrobotics.com/p${n}/`, () => new Response(product(`Part ${n}`, `REV-41-200${n}`, price))]));
     const fetcher = site('rev', pages);
     await run('rev', kv, fetcher, { maxProducts: 10 });
+    await run('rev', kv, fetcher, { maxProducts: 10 });
     const first = json<CatalogPointer>(kv, pointerKey('rev'));
     expect(first.complete).toBe(true);
     price = '6.00';
+    await run('rev', kv, fetcher, { maxProducts: 2, retireAfterMs: 0 });
     await run('rev', kv, fetcher, { maxProducts: 2, retireAfterMs: 0 });
     expect(json<CatalogPointer>(kv, pointerKey('rev')).gen).toBe(first.gen);
     expect((await records(kv, 'rev')).every(record => record.priceUsd === 5)).toBe(true);
@@ -197,6 +243,18 @@ describe('vendor catalog crawl and publication', () => {
     expect([...kv.values.keys()].some(key => key.startsWith(`cat:rev:gen:${first.gen}:`))).toBe(false);
     vi.restoreAllMocks();
   });
+  it('never deletes the live generation after a manual rollback to the previous one', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    kv.values.set(pointerKey('rev'), JSON.stringify({ gen: 'old', complete: true, records: 1, batches: 1, publishedAt: '2026-10-24T00:00:00Z', completedAt: '2026-10-24T00:00:00Z', previous: { gen: 'old', batches: 1, deleteAfter: 0, deleted: 0 } }));
+    kv.values.set(batchKey('rev', 'old', 0), JSON.stringify([]));
+    kv.values.set(indexKey('rev', 'old'), JSON.stringify([]));
+    await run('rev', kv, site('rev', { 'https://www.revrobotics.com/a/': product('A', 'REV-21-0001') }));
+    expect(kv.values.has(indexKey('rev', 'old'))).toBe(true);
+    expect(kv.values.has(batchKey('rev', 'old', 0))).toBe(true);
+    expect(json<CatalogPointer>(kv, pointerKey('rev')).previous).toBeNull();
+    vi.restoreAllMocks();
+  });
   it('removes the old crawl keys that froze production when the new pipeline first runs', async () => {
     quiet();
     const kv = new MemoryKv();
@@ -208,10 +266,12 @@ describe('vendor catalog crawl and publication', () => {
   it('drops records whose links point off the vendor site', async () => {
     quiet();
     const kv = new MemoryKv();
-    const offsite = page('andymark-variant-family');
-    const fetcher = site('andymark', { 'https://andymark.com/products/neverest-orbital-gearmotors': offsite });
+    const fetcher = site('andymark', { 'https://andymark.com/products/neverest-orbital-gearmotors': page('andymark-variant-family') });
     await run('andymark', kv, fetcher);
-    expect((await records(kv, 'andymark')).every(record => new URL(record.url).hostname === 'andymark.com')).toBe(true);
+    await run('andymark', kv, fetcher);
+    const found = await records(kv, 'andymark');
+    expect(found.length).toBe(8);
+    expect(found.every(record => new URL(record.url).hostname === 'andymark.com')).toBe(true);
     vi.restoreAllMocks();
   });
 });
