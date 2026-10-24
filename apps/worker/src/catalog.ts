@@ -1,4 +1,4 @@
-import { findBestMatch, normalizeName, normalizeSku, rankVendorAlternatives, recalculatePurchasing, skuCandidates, type MatchDecision, type ScanResult, type VendorId, type VendorRecord } from '@control-kit/shared';
+import { findBestMatch, normalizeName, normalizeSku, rankVendorAlternatives, recalculatePurchasing, skuCandidates, type CatalogHealth, type MatchDecision, type ScanResult, type VendorHealth, type VendorId, type VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
 import type { VendorSnapshot } from './vendor-ingest';
 
@@ -35,6 +35,22 @@ const read = async (kv: Kv, key: string, cache: Map<string, Promise<string | nul
 };
 
 export function clearCatalogMemoryCache() { memory.clear(); }
+
+/** Reads only snapshot and pointer keys (two per vendor), never the cursor or records. */
+export async function catalogHealth(kv: Kv, staleHours = 24, signal?: AbortSignal, cache = new Map<string, Promise<string | null>>()): Promise<CatalogHealth> {
+  const health = await Promise.all(vendors.map(async (vendorId): Promise<VendorHealth> => {
+    const [pointer, raw] = await Promise.all([read(kv, `vendor:${vendorId}:__lastgood__`, cache, signal), read(kv, `vendor:${vendorId}:__snapshot__`, cache, signal)]);
+    let snapshot: VendorSnapshot | null = null;
+    try { snapshot = raw ? JSON.parse(raw) as VendorSnapshot : null; } catch { /* Treated as never run. */ }
+    const lastRunFailed = snapshot?.status === 'failed';
+    const updated = snapshot?.updatedAt ? Date.parse(snapshot.updatedAt) : NaN;
+    const state = pointer ? 'published' : lastRunFailed ? 'failing' : snapshot ? 'building' : 'never-run';
+    return { vendorId, state, recordCount: pointer ? snapshot?.recordCount ?? 0 : 0, updatedAt: pointer ? snapshot?.updatedAt ?? null : null, lastRunAt: snapshot?.lastRunAt ?? null,
+      stale: Boolean(pointer) && (!Number.isFinite(updated) || Date.now() - updated > staleHours * 3600000), lastRunFailed, error: lastRunFailed ? snapshot?.error ?? 'Unknown ingestion error' : null,
+      progress: snapshot?.progress ? { sitemapsDone: snapshot.progress.sitemapsDone, sitemapsTotal: snapshot.progress.sitemapsTotal, pagesDoneInSitemap: snapshot.progress.pagesDoneInSitemap, pagesInSitemap: snapshot.progress.pagesInSitemap, recordsCollected: snapshot.progress.recordsCollected } : null };
+  }));
+  return { checkedAt: new Date().toISOString(), vendors: health };
+}
 
 function isVendorRecord(value: unknown): value is VendorRecord {
   if (!value || typeof value !== 'object') return false;
@@ -94,6 +110,7 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
   });
   // KV is not a network scrape, but keep in-flight gets bounded at 20 per batch and results deterministic.
   await Promise.all(jobs);
+  result.catalogHealth = await catalogHealth(kv, staleHours, signal, cache);
   const used = [...new Set(result.lines.map(line => line.vendor?.vendorId).filter((id): id is VendorId => Boolean(id)))];
   const snapshots = await Promise.all(used.map(async vendor => {
     const value = await read(kv, `vendor:${vendor}:__snapshot__`, cache, signal);

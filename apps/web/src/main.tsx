@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, type BomLine, type ClassificationOverride, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, type BomLine, type CatalogHealth, type ClassificationOverride, type ScanResult, type UserSettings, type VendorHealth } from '@control-kit/shared';
 import { buildBomCsv, buildExcelWorkbook } from '@control-kit/excel';
 import './style.css';
 
@@ -218,6 +218,7 @@ function App() {
         {excelFailed && <div className="alert" role="status">Excel export failed. <button onClick={downloadCsv}>Download CSV instead</button></div>}
         {printFailures.length > 0 && <div className="alert" role="status"><strong>STL export failed for some parts</strong><ul>{printFailures.map(item => <li key={`${item.name}:${item.reason}`}>{item.name}: {item.reason} <a href={item.url} target="_blank" rel="noreferrer">Open in Onshape</a></li>)}</ul><p>See README.txt in the zip for the full list.</p></div>}
         {result.vendorDataUpdatedAt && <p className="muted">Vendor data checked {new Date(result.vendorDataUpdatedAt).toLocaleString()}</p>}
+        {result.catalogHealth && <CatalogWarning health={result.catalogHealth} />}
         {result.stats.staleVendorData && <div className="alert" role="status">Some used vendor data is stale or its latest refresh failed. Check prices and stock before ordering.</div>}
         {result.stats.totalInstances === 0 && <p>This assembly has no parts yet.</p>}
         <nav aria-label="Results sections"><button className={activeTab === 'bom' ? 'selected' : 'secondary'} onClick={() => setActiveTab('bom')}>BOM</button><button className={activeTab === 'suppressed' ? 'selected' : 'secondary'} onClick={() => setActiveTab('suppressed')}>Suppressed</button><button className={activeTab === 'missing' ? 'selected' : 'secondary'} onClick={() => setActiveTab('missing')}>Missing metadata</button></nav>
@@ -227,6 +228,18 @@ function App() {
       </>}
     </>}
   </main>;
+}
+
+const vendorLabel: Record<VendorHealth['vendorId'], string> = { gobilda: 'goBILDA', servocity: 'ServoCity', andymark: 'AndyMark', rev: 'REV', pitsco: 'Pitsco' };
+/** Shown even when no line matched: an empty Vendor column must not read as "no supplier sells this". */
+function CatalogWarning({ health }: { health: CatalogHealth }) {
+  const missing = health.vendors.filter(vendor => vendor.state !== 'published');
+  const stale = health.vendors.filter(vendor => vendor.state === 'published' && (vendor.stale || vendor.lastRunFailed));
+  if (!missing.length && !stale.length) return null;
+  return <div className="alert" role="status">
+    {missing.length > 0 && <p><strong>Vendor data {missing.length === health.vendors.length ? 'unavailable' : 'incomplete'}.</strong> No catalog is published yet for {missing.map(vendor => vendorLabel[vendor.vendorId]).join(', ')}, so their parts can't be matched, priced, or linked. A blank Vendor column does not mean the part isn't sold.</p>}
+    {stale.length > 0 && <p>Catalog data for {stale.map(vendor => vendorLabel[vendor.vendorId]).join(', ')} is out of date or its last refresh failed. Check prices and stock before ordering.</p>}
+  </div>;
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);

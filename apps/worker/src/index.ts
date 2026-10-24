@@ -2,7 +2,9 @@ export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: 
 import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from './scan';
 import { applyMatchDecision, classificationIdentity, classifyScan, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
+import { catalogHealth } from './catalog';
 import { buildStlZip } from './stl-zip';
+import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 
 export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string }
 type Tokens = { access_token: string; refresh_token: string };
@@ -57,7 +59,6 @@ async function exchange(env: Env, grant: Record<string, string>): Promise<Tokens
   if (!tokens.access_token || (!tokens.refresh_token && !grant.refresh_token)) throw new Error('Incomplete token response');
   return { access_token: tokens.access_token, refresh_token: tokens.refresh_token ?? grant.refresh_token } as Tokens;
 }
-async function api(env: Env, path: string, accessToken: string) { return fetch(`${env.ONSHAPE_API_BASE}${path}`, { headers: { authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10000) }); }
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/oauth/start') {
@@ -87,7 +88,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!stored) return reply({ error: 'Authorization expired. Reconnect Onshape.' }, 400);
     await env.APP_STATE.delete(`oauth-state:${state}`);
     const tokens = await exchange(env, { grant_type: 'authorization_code', code, redirect_uri: env.ONSHAPE_OAUTH_REDIRECT_URI });
-    const profile = await api(env, '/api/users/sessioninfo', tokens.access_token);
+    const ledger = new RequestLedger('oauth-profile');
+    const profile = await countedFetch(ledger, `${env.ONSHAPE_API_BASE}/api/users/sessioninfo`, { headers: { authorization: `Bearer ${tokens.access_token}` }, signal: AbortSignal.timeout(10000) })
+      .finally(() => persistLedger(env.APP_STATE, ledger).catch(() => undefined));
     if (!profile.ok) return reply({ error: 'Could not read Onshape profile.' }, 502);
     const user = await profile.json() as Session['user'];
     if (!user.id) return reply({ error: 'Onshape profile has no ID.' }, 502);
@@ -120,6 +123,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     const value: MatchDecision = { status: body.decision as MatchDecision['status'], vendorId: body.vendorId as MatchDecision['vendorId'], normalizedSku: body.normalizedSku };
     await env.APP_STATE.put(key, JSON.stringify(value));
     return reply({ saved: true });
+  }
+  if (url.pathname === '/api/catalog/health' && request.method === 'GET') {
+    // Public vendor crawl state only: counts, timestamps, and our own error text. No user data or credentials.
+    return reply(await catalogHealth(env.VENDOR_CATALOG, Number(env.VENDOR_STALE_HOURS ?? 24)));
   }
   if (url.pathname === '/api/settings' && request.method === 'GET') {
     const current = await getSession(request, env);
@@ -156,15 +163,17 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!['w', 'v', 'm'].includes(values[1]!)) return reply({ error: 'Invalid document context.' }, 400);
     const context: AssemblyContext = { documentId: values[0]!, workspaceOrVersion: values[1] as AssemblyContext['workspaceOrVersion'], workspaceOrVersionId: values[2]!, elementId: values[3]! };
     let refreshing: Promise<void> | undefined;
-    const get = async (path: string, signal: AbortSignal) => {
-      let response = await fetch(`${env.ONSHAPE_API_BASE}${path}`, { headers: { authorization: `Bearer ${current.data.tokens.access_token}` }, signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) });
+    const ledger = new RequestLedger('scan');
+    const send = (path: string, signal: AbortSignal, retry: boolean) => countedFetch(ledger, `${env.ONSHAPE_API_BASE}${path}`, { headers: { authorization: `Bearer ${current.data.tokens.access_token}` }, signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) }, retry);
+    const get = async (path: string, signal: AbortSignal, retry = false) => {
+      let response = await send(path, signal, retry);
       if (response.status !== 401) return response;
       refreshing ??= (async () => {
         current.data.tokens = await exchange(env, { grant_type: 'refresh_token', refresh_token: current.data.tokens.refresh_token });
         await save(env, current.id, current.data);
       })();
       try { await refreshing; } catch { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
-      response = await fetch(`${env.ONSHAPE_API_BASE}${path}`, { headers: { authorization: `Bearer ${current.data.tokens.access_token}` }, signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) });
+      response = await send(path, signal, true);
       if (response.status === 401) { await env.APP_STATE.delete(`session:${current.id}`); throw new SessionExpiredError(); }
       return response;
     };
@@ -184,7 +193,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     };
     const scanId = random();
     return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 24), settings, getOverride,
-      async result => { result.scanId = scanId; await env.APP_STATE.put(`scan:${current.data.user.id}:${scanId}`, JSON.stringify(result), { expirationTtl: 3600 }); });
+      async result => { result.scanId = scanId; await env.APP_STATE.put(`scan:${current.data.user.id}:${scanId}`, JSON.stringify(result), { expirationTtl: 3600 }); },
+      { summary: () => ledger.summary(), finish: () => persistLedger(env.APP_STATE, ledger) });
   }
   if (url.pathname === '/api/prints/zip' && request.method === 'GET') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
@@ -216,11 +226,13 @@ async function route(request: Request, env: Env): Promise<Response> {
     }, request.signal);
     classifyScan(result, settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null }, overrides);
     let refreshing: Promise<void> | undefined;
+    const ledger = new RequestLedger('export');
     const fetchStl = async (path: string, init: RequestInit) => {
+      let attempts = 0;
       const send = async () => {
         let target = new URL(path, env.ONSHAPE_API_BASE);
         for (let hops = 0; hops <= 2; hops++) {
-          const response = await fetch(target, { ...init, redirect: 'manual', headers: { ...Object.fromEntries(new Headers(init.headers)), authorization: `Bearer ${current.data.tokens.access_token}` } });
+          const response = await countedFetch(ledger, target, { ...init, redirect: 'manual', headers: { ...Object.fromEntries(new Headers(init.headers)), authorization: `Bearer ${current.data.tokens.access_token}` } }, hops === 0 && attempts++ > 0);
           if (init.method === 'POST' || ![307, 308].includes(response.status) || !response.headers.get('location')) return response;
           const next = new URL(response.headers.get('location')!, target);
           if (next.origin !== new URL(env.ONSHAPE_API_BASE).origin) return response;
@@ -249,29 +261,11 @@ async function route(request: Request, env: Env): Promise<Response> {
       }
       throw Error('Onshape rate limit exhausted');
     };
-    const zip = await buildStlZip(result, env.ONSHAPE_API_VERSION, fetchStl, request.signal);
+    const zip = await buildStlZip(result, env.ONSHAPE_API_VERSION, fetchStl, request.signal)
+      .finally(() => persistLedger(env.APP_STATE, ledger).catch(() => undefined));
     return new Response(zip.bytes.buffer.slice(zip.bytes.byteOffset, zip.bytes.byteOffset + zip.bytes.byteLength) as ArrayBuffer,
       { headers: { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${zip.filename}"`, 'cache-control': 'no-store',
         'x-control-kit-failures': encodeURIComponent(JSON.stringify(zip.failures.slice(0, 10))), 'access-control-expose-headers': 'x-control-kit-failures' } });
-  }
-  if (url.pathname.startsWith('/api/onshape/')) {
-    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
-    const current = await getSession(request, env);
-    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
-    const path = `/api/${url.pathname.slice('/api/onshape/'.length)}${url.search}`;
-    let result = await api(env, path, current.data.tokens.access_token);
-    if (result.status === 401) {
-      try {
-        current.data.tokens = await exchange(env, { grant_type: 'refresh_token', refresh_token: current.data.tokens.refresh_token });
-        await save(env, current.id, current.data);
-        result = await api(env, path, current.data.tokens.access_token);
-      } catch {
-        await env.APP_STATE.delete(`session:${current.id}`);
-        return new Response(JSON.stringify({ error: 'Reconnect Onshape.' }), { status: 401, headers: { 'content-type': 'application/json', 'set-cookie': `${cookieName}=; ${cookieFlags}; Max-Age=0` } });
-      }
-    }
-    if (result.status === 401) { await env.APP_STATE.delete(`session:${current.id}`); return reply({ error: 'Reconnect Onshape.' }, 401); }
-    return new Response(result.body, { status: result.status, headers: { 'content-type': result.headers.get('content-type') ?? 'application/json', 'cache-control': 'no-store' } });
   }
   return reply({ error: 'Not found' }, 404);
 }

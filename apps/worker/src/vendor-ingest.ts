@@ -8,7 +8,11 @@ export const vendorSources: Record<VendorId, { origin: string; sitemap: string }
   rev: { origin: 'https://www.revrobotics.com', sitemap: 'https://www.revrobotics.com/xmlsitemap.php' },
   pitsco: { origin: 'https://www.pitsco.com', sitemap: 'https://www.pitsco.com/sitemap.xml' },
 };
-export type VendorSnapshot = { status: 'ok' | 'failed'; updatedAt: string | null; lastRunAt: string; recordCount: number; source: 'sitemap'; version: string | null; inProgress?: boolean; error?: string };
+/** Crawl position, copied into the snapshot so health checks never need to read the (large) cursor. */
+export type CrawlProgress = { phase: Cursor['phase']; sitemapsDone: number; sitemapsTotal: number; pagesDoneInSitemap: number; pagesInSitemap: number; recordsCollected: number };
+export type VendorSnapshot = { status: 'ok' | 'failed'; updatedAt: string | null; lastRunAt: string; recordCount: number; source: 'sitemap'; version: string | null; inProgress?: boolean; error?: string; progress?: CrawlProgress | null };
+const crawlProgress = (cursor: Cursor | null): CrawlProgress | null => cursor ? { phase: cursor.phase, sitemapsDone: Math.max(0, cursor.sitemapIndex - (cursor.urlIndex < cursor.urls.length ? 1 : 0)), sitemapsTotal: cursor.sitemaps.length,
+  pagesDoneInSitemap: cursor.urlIndex, pagesInSitemap: cursor.urls.length, recordsCollected: Object.keys(cursor.records).length } : null;
 type Cursor = { sitemaps: string[]; sitemapIndex: number; urls: string[]; urlIndex: number; records: Record<string, VendorRecord>; phase: 'fetch' | 'records' | 'indexes' | 'ready'; version?: string; publishIndex?: number; indexIndex?: number; readyAt?: number };
 type Retired = { version: string; keys: string[]; index: number; after: number }[];
 export type VendorRun = { vendor: VendorId; source: 'sitemap'; fetched: number; upserted: number; skipped: number; durationMs: number; complete: boolean };
@@ -226,7 +230,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     else await kv.put(cursorKey(vendor), JSON.stringify(cursor));
     const snapshot: VendorSnapshot = { status: 'ok', updatedAt: complete ? new Date().toISOString() : previous?.updatedAt ?? null,
       lastRunAt: new Date().toISOString(), recordCount: complete ? Object.keys(cursor.records).length : previous?.recordCount ?? 0,
-      source: 'sitemap', version: await kv.get(pointerKey(vendor)), ...(complete ? {} : { inProgress: true }) };
+      source: 'sitemap', version: await kv.get(pointerKey(vendor)), ...(complete ? {} : { inProgress: true, progress: crawlProgress(cursor) }) };
     await kv.put(snapshotKey(vendor), JSON.stringify(snapshot));
     const summary = { vendor, source: 'sitemap' as const, fetched, upserted, skipped, durationMs: Date.now() - started, complete };
     console.log(JSON.stringify(summary));
@@ -234,7 +238,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
   } catch (cause) {
     if (cursor) await kv.put(cursorKey(vendor), JSON.stringify(cursor));
     const snapshot: VendorSnapshot = { status: 'failed', updatedAt: previous?.updatedAt ?? null, lastRunAt: new Date().toISOString(), recordCount: previous?.recordCount ?? 0,
-      source: 'sitemap', version: await kv.get(pointerKey(vendor)), error: cause instanceof Error ? cause.message.slice(0, 200) : 'Unknown ingestion error' };
+      source: 'sitemap', version: await kv.get(pointerKey(vendor)), error: cause instanceof Error ? cause.message.slice(0, 200) : 'Unknown ingestion error', progress: crawlProgress(cursor) };
     await kv.put(snapshotKey(vendor), JSON.stringify(snapshot));
     console.error(JSON.stringify({ vendor, fetched, upserted, skipped, durationMs: Date.now() - started, error: snapshot.error }));
     throw cause;

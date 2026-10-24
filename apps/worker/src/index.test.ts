@@ -84,8 +84,12 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     const cookie = setCookie.split(';')[0];
     expect((await call('/api/session', cookie)).status).toBe(200);
     expect((await call(`/oauth/redirect?code=mock-code&state=${state}`)).status).toBe(400);
-    expect((await call('/api/onshape/test?failOnce=1', cookie)).status).toBe(200);
-    expect(mock.apiRequests).toBe(3);
+    // The generic Onshape passthrough was removed: it let any session spend the annual API allowance.
+    expect((await call('/api/onshape/test', cookie)).status).toBe(404);
+    expect(mock.apiRequests).toBe(1);
+    const day = JSON.parse(env.APP_STATE.values.get(`onshape-ledger:${new Date().toISOString().slice(0, 10)}`)!);
+    expect(day.byPurpose['oauth-profile']).toBeGreaterThanOrEqual(1);
+    expect(day.byKind['session-info']).toBe(day.byPurpose['oauth-profile']);
   });
   it('supports the Applications-page OAuth URL without Assembly context', async () => {
     const target = 'https://cad.onshape.com/user/applications?grant=1';
@@ -95,11 +99,10 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     const callback = await call(`/oauth/redirect?code=mock-code&state=${state}`);
     expect(callback.headers.get('location')).toBe(target);
   });
-  it('rejects malformed context, unsafe return URLs, and unauthenticated proxy requests', async () => {
+  it('rejects malformed context and unsafe return URLs', async () => {
     expect((await call('/oauth/start?documentId=doc1')).status).toBe(400);
     expect((await call('/oauth/start?redirectOnshapeUri=https%3A%2F%2Fcad.onshape.com.evil.test')).status).toBe(400);
     expect((await call('/oauth/start?redirectOnshapeUri=javascript%3Aalert(1)')).status).toBe(400);
-    expect((await call('/api/onshape/test')).status).toBe(401);
   });
   it('shows setup pending without OAuth credentials', async () => {
     const config = { ...env, ONSHAPE_OAUTH_CLIENT_ID: '', ONSHAPE_OAUTH_CLIENT_SECRET: '' };
@@ -131,11 +134,12 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
       const request = new Request(input, init);
       if (new URL(request.url).pathname === '/oauth/token' && request.method === 'POST') return Response.json({ error: 'invalid_grant' }, { status: 400 });
+      if (new URL(request.url).pathname.startsWith('/api/v9/assemblies/')) return Response.json({ error: 'expired' }, { status: 401 });
       return mock.handle(request);
     });
-    const response = await call('/api/onshape/test?always401=1', cookie);
-    expect(response.status).toBe(401);
-    expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+    const response = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    expect(events.at(-1)).toEqual({ type: 'session-expired' });
     expect((await call('/api/session', cookie)).status).toBe(401);
   });
 });
@@ -283,6 +287,10 @@ describe('M2 scan stream against mock Onshape', () => {
     expect(result.missingMetadata).toHaveLength(1);
     expect(result.missingMetadata[0].suppressed).toBe(true);
     expect(mock.apiRequests - before).toBe(9); // 3 assembly attempts + one metadata call for each of 6 unique elements.
+    // The ledger counts the same nine outbound requests, separating 429 retries, and the scan reports them.
+    expect(result.diagnostics.onshapeRequests).toMatchObject({ total: 9, retries: 2, byKind: { 'assembly-definition': 3, 'mass-properties': 6 }, byStatus: { 429: 2 } });
+    expect(result.diagnostics.metadataIssues).toEqual([{ code: 'metadata-http-error', httpStatus: 503, sourceType: 'w', lines: 0, suppressedLines: 1 }]);
+    expect(result.missingMetadata[0].metadataIssue).toEqual({ code: 'metadata-http-error', httpStatus: 503 });
     expect(events.some(event => event.type === 'progress' && event.stage === 'Resolving parts…')).toBe(true);
   });
   it('reports a failed metadata element without aborting the scan', async () => {
