@@ -53,9 +53,9 @@ function rels(target: Sheet) { return `<?xml version="1.0" encoding="UTF-8" stan
 const LOGO_DRAWING = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>47625</xdr:rowOff></xdr:from><xdr:ext cx="952500" cy="952500"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="Control Kit logo" descr="Black and yellow Control Kit hexagon logo"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="952500" cy="952500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>`;
 
 const vendorName: Record<VendorRecord['vendorId'], string> = { gobilda: 'goBILDA', servocity: 'ServoCity', andymark: 'AndyMark', rev: 'REV', pitsco: 'Pitsco' };
-const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', review: 'Needs review' };
+const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', hardware: 'Fastener', review: 'Needs review' };
 const matchText: Record<BomLine['matchStatus'], string> = { exact: 'Exact SKU', confirmed: 'Confirmed', possible: 'Possible, not confirmed', rejected: 'Rejected', unmatched: 'No match' };
-const order: Disposition[] = ['buy', 'print', 'cnc', 'cut-2d', 'fabricate', 'review'];
+const order: Disposition[] = ['buy', 'hardware', 'print', 'cnc', 'cut-2d', 'fabricate', 'review'];
 const date = (iso: string | null | undefined) => iso && Number.isFinite(Date.parse(iso)) ? iso.slice(0, 10) : 'unknown';
 /** Only an exact or confirmed match identifies the product a team orders; anything else is a candidate. */
 const ordered = (line: BomLine) => Boolean(line.vendor && (line.matchStatus === 'exact' || line.matchStatus === 'confirmed'));
@@ -78,6 +78,8 @@ function purchaseNotes(line: BomLine, result: ScanResult) {
   if (ordered(line) && !verifiedPack(line)) values.push('Pack size not verified, so no total');
   if (ordered(line) && line.vendor!.priceUsd === null) values.push('No price, so no total');
   if (result.stats.staleVendorData && ordered(line)) values.push('Vendor data may be out of date');
+  if (line.disposition === 'hardware') values.push('Fastener from stock: CAD count can be low if Replicate or patterns placed some');
+  if (line.purchasedAssembly) values.push(`One product (${line.purchasedAssembly.parts} internal parts not listed)`);
   if (line.manualClassification) values.push('Set by your team');
   if (line.missingMetadataReason) values.push(line.missingMetadataReason);
   return values.join('. ');
@@ -124,15 +126,18 @@ const BUY_HEADERS = ['#', 'Part', 'Qty Needed', 'Pack Size', 'Packs to Order', '
 function buySheet(result: ScanResult, now: Date) {
   const target = sheet('Buy list', BUY_HEADERS.length, { 2: 44, 14: 52 });
   heading(target, 'BUY LIST', result, now, 1);
-  const lines = result.lines.filter(line => line.disposition === 'buy')
-    .sort((a, b) => Number(ordered(b)) - Number(ordered(a)) || (a.vendor ? vendorName[a.vendor.vendorId] : '~').localeCompare(b.vendor ? vendorName[b.vendor.vendorId] : '~') || byName(a, b));
+  // Fasteners follow the parts to buy: listed with their CAD counts, never priced (an exact SKU would have made them Buy).
+  const lines = result.lines.filter(line => line.disposition === 'buy' || line.disposition === 'hardware')
+    .sort((a, b) => Number(a.disposition === 'hardware') - Number(b.disposition === 'hardware') || Number(ordered(b)) - Number(ordered(a)) || (a.vendor ? vendorName[a.vendor.vendorId] : '~').localeCompare(b.vendor ? vendorName[b.vendor.vendorId] : '~') || byName(a, b));
   const first = 7;
   const last = Math.max(first, first + lines.length - 1);
-  const pricedLines = lines.filter(priced);
+  // Stock fasteners are listed but are not purchases, so they never count toward "priced of parts to buy".
+  const purchases = lines.filter(line => line.disposition === 'buy');
+  const pricedLines = purchases.filter(priced);
   const total = Math.round(pricedLines.reduce((sum, line) => sum + line.lineTotalUsd!, 0) * 100) / 100;
-  put(target, 4, 2, 'Lines', S.label); put(target, 4, 3, lines.length, S.value);
+  put(target, 4, 2, 'Lines', S.label); put(target, 4, 3, purchases.length, S.value);
   put(target, 4, 4, 'Priced', S.label); put(target, 4, 5, pricedLines.length, S.value);
-  put(target, 4, 6, 'Unpriced', S.label); put(target, 4, 7, lines.length - pricedLines.length, S.value);
+  put(target, 4, 6, 'Unpriced', S.label); put(target, 4, 7, purchases.length - pricedLines.length, S.value);
   put(target, 4, 8, 'Known subtotal', S.label); put(target, 4, 9, subtotal(`I${first}:I${last}`), S.total, 'f', undefined, pricedLines.length ? total : undefined);
   put(target, 5, 1, 'Known subtotal adds only Line Totals that are filled in: an exact or confirmed product with a verified pack size and price. A blank Line Total is unknown, not zero. Packs to Order = Qty Needed ÷ Pack Size, rounded up.', S.note);
   target.merges.push(`A5:${cellRef(BUY_HEADERS.length, 5)}`); target.tall = [5];
@@ -161,7 +166,7 @@ function buySheet(result: ScanResult, now: Date) {
   if (!lines.length) put(target, first, 1, 'No parts are marked Buy yet. Decide parts in Control Kit, then download again.', S.muted);
   target.filter = `A6:${cellRef(BUY_HEADERS.length, last)}`;
   target.frozen = 6; target.landscape = true;
-  return { target, first, last, total, priced: pricedLines.length, lines: lines.length };
+  return { target, first, last, total, priced: pricedLines.length, lines: purchases.length };
 }
 
 /** Parts the team makes, by process, with the STEP file name each one gets in the export ZIP. */

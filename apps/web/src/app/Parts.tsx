@@ -17,13 +17,13 @@ export function Parts({ kit, open }: { kit: ControlKit; open: (key: string) => v
   const [sort, setSort] = useState<PartSort>('name');
   const [shown, setShown] = useState(page);
   const rows = filterParts(result, filter, query, sort);
-  const count = { all: result.lines.length, buy: result.lines.filter(line => line.disposition === 'buy').length, make: result.lines.filter(isMake).length,
+  const count = { all: result.lines.length, buy: result.lines.filter(line => line.disposition === 'buy').length, hardware: result.lines.filter(line => line.disposition === 'hardware').length, make: result.lines.filter(isMake).length,
     review: result.lines.filter(line => line.disposition === 'review').length, suppressed: result.suppressed.length };
 
   return <>
     <div className="section-head"><div><h2>Parts</h2><p>{result.lines.length} distinct parts, {result.stats.totalInstances} in the assembly. Quantities count every active instance, including inside subassemblies.</p></div></div>
     <SegmentedControl label="Show" value={filter} onValueChange={value => { setFilter(value as PartFilter); setShown(page); }} options={[
-      { value: 'all', label: `All ${count.all}` }, { value: 'buy', label: `Buy ${count.buy}` }, { value: 'make', label: `Make ${count.make}` },
+      { value: 'all', label: `All ${count.all}` }, { value: 'buy', label: `Buy ${count.buy}` }, { value: 'hardware', label: `Fasteners ${count.hardware}` }, { value: 'make', label: `Make ${count.make}` },
       { value: 'review', label: `Review ${count.review}` }, { value: 'suppressed', label: `Suppressed ${count.suppressed}` },
     ]} />
     <div className="toolbar">

@@ -1,6 +1,7 @@
 export const productName = 'Control Kit';
 export { classifyMatchScore, findBestMatch, nameSimilarity, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates } from './matching';
-export { applyClassificationChoice, classificationIdentity, classifyLine, classifyScan, decideDisposition, dispositionLabel, dispositions, parseOverride, printCategory } from './classifier';
+export { applyClassificationChoice, classificationIdentity, classifyLine, classifyScan, decideDisposition, dispositionLabel, dispositions, parseOverride, printCategory, purchasedAssemblyReason } from './classifier';
+import { purchasedAssemblyReason } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, Confidence, Disposition, DispositionSource, Provenance, UserSettings } from './classifier';
 export type { VendorId, VendorRecord, MatchResult } from './matching';
 export { buildControlPointPayload, MockControlPointAdapter } from './control-point';
@@ -24,7 +25,9 @@ export type BomLine = { bomLineKey: string; name: string; description: string | 
   /** Properties from Onshape's BOM for this part, when its row was found. */
   bomProperties?: BomProperties | null; isStandardContent?: boolean;
   /** Workspace or version a file export can read this part from; Onshape's translation endpoint takes no microversion. */
-  exportSource?: { type: 'w' | 'v'; id: string } | null };
+  exportSource?: { type: 'w' | 'v'; id: string } | null;
+  /** Set when a subassembly is listed as one bought product instead of its internal parts. */
+  purchasedAssembly?: { parts: number; reason: string } | null };
 /** Why a line lacks data. Codes are stable for UI, export, and diagnostics; the user-facing text lives in `metadataIssueText`. */
 export type MetadataIssueCode = 'unresolved-subassembly' | 'unresolved-reference' | 'source-revision-unavailable' | 'not-in-bom' | 'bom-unavailable';
 export type MetadataIssue = { code: MetadataIssueCode; httpStatus: number | null };
@@ -108,7 +111,7 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
   const suppressed = new Map<string, BomLine>();
   const partNames = new Map((definition.parts ?? []).map(part => [`${part.documentId}:${part.elementId}:${part.partId}`, part.name]));
   const rootName = assemblyName || definition.rootAssembly.name || 'Assembly';
-  function add(instance: AssemblyInstance, path: string[], isSuppressed: boolean, unresolvedSubassembly = false) {
+  function add(instance: AssemblyInstance, path: string[], isSuppressed: boolean, unresolvedSubassembly = false, purchasedAssembly: BomLine['purchasedAssembly'] = null) {
     const configuration = instance.fullConfiguration ?? instance.configuration ?? null;
     const partId = instance.partId ?? null;
     const sourceType = instance.documentMicroversion ? 'm' : instance.versionId ?? instance.documentVersion ? 'v' : instance.workspaceId ? 'w' : instance.documentId === context.documentId ? context.workspaceOrVersion : null;
@@ -123,8 +126,27 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
     const name = partNames.get(`${instance.documentId}:${instance.elementId}:${partId}`) ?? instance.name.replace(/\s*<\d+>$/, '');
     bucket.set(key, { bomLineKey: key, name, description: null, documentId: instance.documentId, elementId: instance.elementId, partId, partNumber: instance.partNumber ?? null, configuration, sourceType, sourceId, qty: 1, packsToOrder: null, lineTotalUsd: null, suppressed: isSuppressed,
       instancePaths: [path.join(' > ')], massKg: null, material: null, missingMetadataReason: null, vendor: null, alternatives: [], matchConfidence: 0, matchStatus: 'unmatched', matchReasons: [], classification: 'unknown', classificationScore: 0,
-      classificationReasons: [], manualClassification: null, disposition: 'review', dispositionSource: 'none', dispositionConfidence: 'low', dispositionEvidence: [], reviewReason: null, suggestedDisposition: null, provenance: 'unknown', unresolvedSubassembly, isStandardContent: instance.isStandardContent ?? false, exportSource,
+      classificationReasons: [], manualClassification: null, disposition: 'review', dispositionSource: 'none', dispositionConfidence: 'low', dispositionEvidence: [], reviewReason: null, suggestedDisposition: null, provenance: 'unknown', unresolvedSubassembly, purchasedAssembly, isStandardContent: instance.isStandardContent ?? false, exportSource,
       metadataIssue: unresolvedSubassembly ? { code: 'unresolved-subassembly', httpStatus: null } : unresolvedReference(instance) ? { code: 'unresolved-reference', httpStatus: null } : null, partStudioUrl: source ? `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}/${source}/e/${encodeURIComponent(instance.elementId)}` : `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}` });
+  }
+  /** Parts inside a subassembly, counting nested subassemblies' parts. */
+  function countParts(instances: AssemblyInstance[], ancestry: Set<string>): number {
+    return instances.reduce((total, instance) => {
+      if (instance.type.toLowerCase() !== 'assembly') return total + 1;
+      const key = subassemblyKey(instance);
+      const child = definitions.get(key);
+      return total + (child?.instances && !ancestry.has(key) ? countParts(child.instances, new Set([...ancestry, key])) : 0);
+    }, 0);
+  }
+  /** True when a subassembly somewhere inside carries a vendor part number in its own name. */
+  function containsVendorProduct(instances: AssemblyInstance[], ancestry: Set<string>): boolean {
+    return instances.some(instance => {
+      if (instance.type.toLowerCase() !== 'assembly') return false;
+      if (purchasedAssemblyReason(instance.name.replace(/\s*<\d+>$/, ''), instance.partNumber, false)) return true;
+      const key = subassemblyKey(instance);
+      const child = definitions.get(key);
+      return Boolean(child?.instances && !ancestry.has(key) && containsVendorProduct(child.instances, new Set([...ancestry, key])));
+    });
   }
   function walk(instances: AssemblyInstance[], path: string[], inheritedSuppression: boolean, ancestry: Set<string>) {
     for (const instance of instances) {
@@ -133,6 +155,10 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
       if (instance.type.toLowerCase() !== 'assembly') { add(instance, childPath, isSuppressed); continue; }
       const key = subassemblyKey(instance);
       const child = definitions.get(key);
+      let reason = purchasedAssemblyReason(instance.name.replace(/\s*<\d+>$/, ''), instance.partNumber, instance.documentId !== context.documentId);
+      // A wrapper named only like a product ("Motor Smol") steps aside for the SKU-named product inside it, so the SKU survives.
+      if (reason && !purchasedAssemblyReason(instance.name.replace(/\s*<\d+>$/, ''), instance.partNumber, false) && child?.instances && containsVendorProduct(child.instances, new Set([...ancestry, key]))) reason = null;
+      if (reason) { add(instance, childPath, isSuppressed, false, { parts: child?.instances ? countParts(child.instances, new Set([...ancestry, key])) : 0, reason }); continue; }
       if (!child || !Array.isArray(child.instances) || ancestry.has(key)) { add(instance, childPath, isSuppressed, true); continue; }
       walk(child.instances, childPath, isSuppressed, new Set([...ancestry, key]));
     }

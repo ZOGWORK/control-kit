@@ -2,7 +2,7 @@ import { ExternalLink, FileSpreadsheet } from 'lucide-react';
 import { Alert } from '../components/arc/alert/alert';
 import { EmptyState } from '../components/arc/empty-state/empty-state';
 import type { ControlKit } from './useControlKit';
-import { buyList, catalogsComplete, money, summarize, type View } from './model';
+import { buyList, catalogsComplete, fasteners, money, summarize, type View } from './model';
 import { Button, LineCost } from './bits';
 
 /**
@@ -12,6 +12,7 @@ import { Button, LineCost } from './bits';
 export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string) => void; go: (view: View) => void }) {
   const result = kit.result!;
   const { vendors, needsSku } = buyList(result);
+  const stock = fasteners(result);
   const summary = summarize(result);
   const complete = summary.buyLines > 0 && summary.pricedLines === summary.buyLines;
 
@@ -60,6 +61,15 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
       <div className="rows">{needsSku.map(line => <button key={line.bomLineKey} type="button" className="row" onClick={() => open(line.bomLineKey)}>
         <span className="row-main"><span className="row-title"><span>{line.name}</span></span>
           <span className="row-meta"><span><span className="num">{line.qty}</span> needed</span>{line.partNumber ? <span className="num">{line.partNumber}</span> : <span>no part number</span>}{line.matchStatus === 'possible' && <span>possible match to confirm</span>}</span></span>
+        <span className="row-aside muted small">Details</span>
+      </button>)}</div>
+    </section>}
+
+    {stock.length > 0 && <section className="panel" aria-labelledby="fasteners">
+      <div className="panel-head"><div><h2 id="fasteners">Fasteners</h2><p>Screws, nuts, washers, and clips usually come from your hardware stock, so they need no decision. Counts come from the CAD and can be low when fasteners were placed with Replicate or patterns.</p></div></div>
+      <div className="rows">{stock.map(line => <button key={line.bomLineKey} type="button" className="row" onClick={() => open(line.bomLineKey)}>
+        <span className="row-main"><span className="row-title"><span>{line.name}</span></span>
+          <span className="row-meta"><span>about <span className="num">{line.qty}</span> in the CAD</span>{line.partNumber && <span className="num">{line.partNumber}</span>}</span></span>
         <span className="row-aside muted small">Details</span>
       </button>)}</div>
     </section>}

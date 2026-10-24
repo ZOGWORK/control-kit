@@ -108,12 +108,14 @@ test('review explains each part, saves a one-click choice, and accepts all sugge
   await page.route('**/api/classification/override', async route => { saved.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"saved":true}' }); });
   await connected(page);
   await section(page, /^Review/).click();
-  const screw = page.locator('.row').filter({ hasText: 'M3 Screw' });
-  await expect(screw).toContainText('Looks like standard hardware: confirm it is bought');
-  await screw.getByRole('button', { name: 'Mark Buy' }).click();
+  // Fasteners never wait for a decision.
   await expect(page.locator('.row').filter({ hasText: 'M3 Screw' })).toHaveCount(0);
+  const bearing = page.locator('.row').filter({ hasText: 'Bearing' });
+  await expect(bearing).toContainText('Looks like standard hardware: confirm it is bought');
+  await bearing.getByRole('button', { name: 'Mark Buy' }).click();
+  await expect(page.locator('.row').filter({ hasText: 'Bearing' })).toHaveCount(0);
   expect(saved.at(-1)).toMatchObject({ classification: 'buy' });
-  const remaining = result.lines.filter(line => line.disposition === 'review' && line.suggestedDisposition && line.name !== 'M3 Screw').length;
+  const remaining = result.lines.filter(line => line.disposition === 'review' && line.suggestedDisposition && line.name !== 'Bearing').length;
   await page.getByRole('button', { name: `Accept all ${remaining}` }).click();
   await expect.poll(() => saved.length).toBe(1 + remaining);
   // The part drawer explains a decision and offers every choice.
@@ -122,7 +124,12 @@ test('review explains each part, saves a one-click choice, and accepts all sugge
   const drawer = page.getByRole('dialog');
   await expect(drawer).toContainText('How the team gets it');
   await expect(drawer.getByRole('button', { name: 'CNC machine' })).toBeVisible();
-  await expect(drawer).toContainText('Open in Onshape');
+  await expect(drawer.getByRole('button', { name: /Show its tab in Onshape/ })).toBeVisible();
+  // The picture area explains itself when Onshape cannot draw the part (here the local server has no picture route).
+  await expect(drawer.locator('.part-picture')).not.toContainText('Drawing the part');
+  await page.keyboard.press('Escape');
+  await section(page, /^Buy list/).click();
+  await expect(page.getByRole('region', { name: 'Fasteners' })).toContainText('M3 Screw');
 });
 
 test('STEP export polls the job, zips ready files with a manifest, and shows failures', async ({ page }) => {

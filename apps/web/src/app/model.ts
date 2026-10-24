@@ -8,7 +8,7 @@ export const vendorLabel: Record<VendorId, string> = { gobilda: 'goBILDA', servo
 export const chipClass = (line: BomLine) => line.suppressed ? 'suppressed' : line.disposition === 'buy' ? 'buy' : line.disposition === 'review' ? 'review' : 'make';
 export const chipLabel = (line: BomLine) => line.suppressed ? 'Suppressed' : dispositionLabel[line.disposition];
 /** Short label for narrow chips: "2D cut" instead of the full "2D cut (laser/waterjet/router)". */
-export const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', review: 'Needs review' };
+export const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', hardware: 'Fastener', review: 'Needs review' };
 export const money = (value: number) => `$${value.toFixed(2)}`;
 
 /** A line can be paid for only with a confirmed or exact match, a verified pack size, and a price. */
@@ -55,6 +55,9 @@ export type VendorGroup = { vendorId: VendorId; label: string; lines: BomLine[];
  * The Buy list: lines a team can order, grouped by vendor. Only exact or confirmed matches appear under a vendor;
  * Buy lines without one are listed separately, since they need a SKU before they can be ordered.
  */
+/** Fasteners taken from stock: listed with their CAD counts, never priced unless an exact SKU makes them Buy. */
+export const fasteners = (result: ScanResult) => result.lines.filter(line => line.disposition === 'hardware').sort((a, b) => a.name.localeCompare(b.name));
+
 export function buyList(result: ScanResult) {
   const buy = result.lines.filter(line => line.disposition === 'buy');
   const matched = buy.filter(line => line.vendor && (line.matchStatus === 'exact' || line.matchStatus === 'confirmed'));
@@ -73,7 +76,7 @@ export function makeGroups(result: ScanResult) {
     .filter(group => group.lines.length);
 }
 
-export type PartFilter = 'all' | 'buy' | 'make' | 'review' | 'suppressed';
+export type PartFilter = 'all' | 'buy' | 'hardware' | 'make' | 'review' | 'suppressed';
 export type PartSort = 'name' | 'qty';
 export function filterParts(result: ScanResult, filter: PartFilter, query: string, sort: PartSort) {
   const pool = filter === 'suppressed' ? result.suppressed
@@ -100,6 +103,21 @@ export const catalogStateText = (vendor: VendorHealth) => {
 export const catalogsComplete = (health: CatalogHealth | undefined) => Boolean(health?.vendors.length && health.vendors.every(vendor => ['published', 'stale'].includes(catalogState(vendor))));
 /** Complete catalogs whose prices and stock may be out of date. */
 export const staleCatalogs = (health: CatalogHealth | undefined) => health?.vendors.filter(vendor => catalogState(vendor) === 'stale') ?? [];
+
+/** Vendor product search for a part number in the name, so a team can see what an imported vendor part is before catalogs match it. */
+const vendorSearch: Array<[RegExp, (sku: string) => string, string]> = [
+  [/\b\d{4}-\d{4}-\d{4}\b/, sku => `https://www.gobilda.com/search.php?search_query=${sku}`, 'goBILDA'],
+  [/\bREV-\d{2}-\d{4}\b/i, sku => `https://www.revrobotics.com/search.php?search_query=${sku}`, 'REV'],
+  [/\bam-\d{3,5}[a-z]?\b/i, sku => `https://andymark.com/search?q=${sku}`, 'AndyMark'],
+  [/\b\d{4,5}A\d{2,4}\b/, sku => `https://www.mcmaster.com/${sku}/`, 'McMaster-Carr'],
+];
+export function vendorLookup(line: BomLine): { sku: string; vendor: string; url: string } | null {
+  for (const [pattern, url, vendor] of vendorSearch) {
+    const sku = `${line.name} ${line.partNumber ?? ''}`.match(pattern)?.[0];
+    if (sku) return { sku, vendor, url: url(sku) };
+  }
+  return null;
+}
 
 /** "4 minutes ago", for scan and catalog times. Never used in the first render, which has no clock yet. */
 export function ago(iso: string, now: number) {

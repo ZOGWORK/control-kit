@@ -227,3 +227,7 @@ button.row:hover { background: var(--ck-raised); }
   .panel-head { padding: 12px; }
   .row, .step { padding: 10px 12px; }
 }
+
+.part-picture { margin: 0; display: grid; place-items: center; min-height: 180px; border: 1px solid var(--border); border-radius: 12px; background: #f4f4f5; overflow: hidden; }
+.part-picture img { display: block; width: 100%; height: auto; max-height: 260px; object-fit: contain; }
+.part-picture .muted { color: #52525b; padding: 12px; text-align: center; }

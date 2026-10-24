@@ -65,6 +65,14 @@ export function useControlKit(context: URLSearchParams) {
     } finally { if (generation === sessionCheck.current) setCheckingSession(false); }
   }
   useEffect(() => { void refreshSession(); return () => abort.current?.abort(); }, []);
+  // Onshape accepts panel messages only after this handshake from inside its right panel.
+  const inOnshape = window.parent !== window;
+  const onshapeMessage = (messageName: string, extra: Record<string, string> = {}) => {
+    if (!inOnshape || context.get('workspaceOrVersion') !== 'w') return false;
+    window.parent.postMessage({ documentId: context.get('documentId'), workspaceId: context.get('workspaceOrVersionId'), elementId: context.get('elementId'), messageName, ...extra }, '*');
+    return true;
+  };
+  useEffect(() => { onshapeMessage('applicationInit'); }, []);
   useEffect(() => {
     if (!session?.connected) return;
     api('/api/settings').then(async response => { if (!response.ok) throw Error(); return await response.json() as UserSettings; })
@@ -284,7 +292,21 @@ export function useControlKit(context: URLSearchParams) {
     } finally { if (active()) stepRun.current = null; }
   }
 
-  return { session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
+  /** Shows a part where it lives: its tab in this document switches in place; a part from another document opens in a new tab. */
+  function showInOnshape(line: BomLine) {
+    if (line.documentId === context.get('documentId') && onshapeMessage('openAnotherElementInCurrentWorkspace', { anotherElementId: line.elementId })) return;
+    window.open(line.partStudioUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  /** A picture of the part drawn by Onshape at the scanned revision; the Worker caches it, so a second look is free. */
+  async function partPicture(line: BomLine, signal: AbortSignal): Promise<string> {
+    if (!result?.scanId) throw new Error('Scan this assembly to see part pictures.');
+    const response = await api(`/api/preview?${new URLSearchParams({ scanId: result.scanId, line: line.bomLineKey })}`, { signal });
+    if (!response.ok) throw new Error((await response.json().catch(() => null) as { error?: string } | null)?.error ?? 'Onshape could not draw this part.');
+    return URL.createObjectURL(await response.blob());
+  }
+
+  return { showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
     acceptSuggestions, bulk, pending, settings, savingSettings, saveSettings, signOut, excel, downloadExcel, downloadCsv, step, downloadStep };
 }
 export type ControlKit = ReturnType<typeof useControlKit>;

@@ -3,8 +3,10 @@ import type { BomLine, ScanResult } from './index';
 /**
  * How the team will get the physical part. `review` means nothing reliable decided it yet.
  * Suppression is an assembly state, not a disposition, and lives on `BomLine.suppressed`.
+ * `hardware` is a fastener (screw, nut, washer, clip) that teams take from their hardware stock: it needs no decision,
+ * and its CAD count is a guide only, since Replicate and patterns can place fasteners the count may not see.
  */
-export type Disposition = 'buy' | 'print' | 'cnc' | 'cut-2d' | 'fabricate' | 'review';
+export type Disposition = 'buy' | 'print' | 'cnc' | 'cut-2d' | 'fabricate' | 'hardware' | 'review';
 /** Where the CAD model came from, as far as the evidence shows. */
 export type Provenance = 'vendor-catalog' | 'standard-content' | 'linked-library' | 'team-design' | 'unknown';
 /** What decided the disposition, in precedence order. */
@@ -14,8 +16,8 @@ export type Confidence = 'certain' | 'high' | 'medium' | 'low';
 export type ClassificationOverride = Disposition;
 export type UserSettings = { teamNumber: string | null };
 export type ClassificationOverrides = Record<string, ClassificationOverride>;
-export const dispositions: Disposition[] = ['buy', 'print', 'cnc', 'cut-2d', 'fabricate', 'review'];
-export const dispositionLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC machine', 'cut-2d': '2D cut (laser/waterjet/router)', fabricate: 'Other fabrication', review: 'Needs review' };
+export const dispositions: Disposition[] = ['buy', 'print', 'cnc', 'cut-2d', 'fabricate', 'hardware', 'review'];
+export const dispositionLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC machine', 'cut-2d': '2D cut (laser/waterjet/router)', fabricate: 'Other fabrication', hardware: 'Fastener', review: 'Needs review' };
 export function parseOverride(value: unknown): ClassificationOverride | null {
   if (value === 'commercial') return 'buy';
   if (value === 'printed') return 'print';
@@ -37,7 +39,7 @@ export function printCategory(name: string) {
 }
 
 /** Process vocabulary, matched as whole words only. */
-const processWords: Record<Exclude<Disposition, 'review'>, string> = {
+const processWords: Record<Exclude<Disposition, 'review' | 'hardware'>, string> = {
   print: '3dp|3d[ -]?print(?:ed|ing|s)?|print(?:ed|ing|s)?|fdm|sla|sls|additive(?:[ -]manufactur(?:ed|ing))?',
   cnc: 'cnc(?:[ -](?:machin(?:ed|ing)|mill(?:ed|ing)?))?|mill(?:ed|ing|s)?|machin(?:ed|ing)|lathe[sd]?|turn(?:ed|ing)',
   'cut-2d': 'laser(?:[ -]?cut(?:s|ting)?|ed|ing)?|water[ -]?jet(?:s|ted|ting)?|rout(?:er|ed|ing)|2d[ -]?cut(?:s|ting)?|plasma(?:[ -]?cut(?:s|ting)?)?|dxf',
@@ -69,7 +71,26 @@ const vendorNumbers: Array<[RegExp, string]> = [
 ];
 /** Off-the-shelf hardware: fasteners, bearings, belts, retaining rings, and metric thread sizes like "M4 x 0.7". */
 const hardwareWords = /\b(?:screws?|bolts?|(?:lock)?nuts?|washers?|e-?clips?|snap\s*rings?|retaining\s*rings?|bearings?|bushings?|belts?|rivets?|shaft\s*collars?|set\s*screws?|shcs|bhcs|fhcs|standoffs?|motors?|servos?|gearbox(?:es)?)\b|\bM\d(?:\.\d)?\s*x\s*\d/i;
+/** Fasteners a team takes from stock rather than ordering per part. Standoffs, bearings, and belts are not here: those are counted parts. */
+const fastenerWords = /\b(?:screws?|bolts?|(?:lock|hex|nylock)?\s?nuts?|washers?|e-?clips?|snap\s*rings?|retaining\s*rings?|rivets?|set\s*screws?|shcs|bhcs|fhcs|shoulder\s*screws?)\b|^M\d(?:\.\d)?\s*x\s*\d/i;
 const customWords = /\b(?:custom|bracket|mount|spacer|adapter|holder|guide|cover)\b/i;
+/** Products a team buys whole even when the vendor's CAD models them as an assembly. */
+const productWords = /\b(?:bearings?|motors?|servos?|gearbox(?:es)?|wheels?|encoders?|sensors?|batter(?:y|ies)|cameras?|hubs?|actuators?)\b/i;
+/** Names a team gives its own groupings; such a subassembly is never treated as one product by wording alone. */
+const groupingWords = /\b(?:stack|assembly|asm|sub-?assembly|pod|module|mechanism|system|side|left|right|front|back)\b/i;
+
+/**
+ * Why a subassembly should be one bought line instead of its internal parts, or null to list its parts. Vendor CAD
+ * often models a motor, bearing, or wheel kit as an assembly of its insides (gearbox, races, rollers), which a team
+ * never orders separately. A vendor part number in the name or part number is enough; otherwise the subassembly must
+ * be linked from another document and named like a product, so a team's own subassemblies always expand.
+ */
+export function purchasedAssemblyReason(name: string, partNumber: string | null | undefined, linked: boolean): string | null {
+  const text = `${name} ${partNumber ?? ''}`;
+  for (const [pattern, label] of vendorNumbers) if (pattern.test(text) && !/Series/.test(label)) return `its name has a ${label}`;
+  if (linked && productWords.test(name) && !groupingWords.test(name)) return 'it is linked from another document and named like a product';
+  return null;
+}
 
 type Decision = { disposition: Disposition; source: DispositionSource; confidence: Confidence; provenance: Provenance; evidence: string[]; suggestion: Disposition | null; reviewReason: string | null };
 
@@ -102,6 +123,8 @@ export function decideDisposition(line: BomLine, teamNumber: string | null, asse
   if (tagMatch) return { ...base, disposition: 'review', source: 'none', confidence: 'low', evidence: [...base.evidence, `team tags ${tagMatch.text} in name`], reviewReason: 'Team tags in the name disagree: choose one process' };
   if (line.material && printMaterial.test(line.material)) return { ...base, disposition: 'print', source: 'explicit-metadata', confidence: 'high', evidence: [...base.evidence, `print material ${line.material}`] };
   if (line.matchStatus === 'confirmed') return { ...base, disposition: 'buy', source: 'provenance', confidence: 'high' };
+  // "Nut Holder" or "Screw Mount" is a part to make, so custom-part wording keeps a name with fastener words in Review.
+  if (fastenerWords.test(line.name) && !printWords.test(text) && !customWords.test(line.name)) return { ...base, disposition: 'hardware', source: 'suggestion', confidence: 'medium', evidence: [...base.evidence, 'fastener wording in name'] };
   if (provenance === 'standard-content') return { ...base, disposition: 'buy', source: 'provenance', confidence: 'high' };
   if (provenance === 'linked-library' && line.partNumber) return { ...base, disposition: 'buy', source: 'provenance', confidence: 'medium', evidence: [...base.evidence, 'library parts with a part number are usually purchased; no catalog match yet'] };
   // Everything below is a suggestion for a person to confirm.

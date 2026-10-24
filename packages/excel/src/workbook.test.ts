@@ -128,6 +128,18 @@ describe('Excel export', () => {
     expect(row).not.toContain('17.98');
   });
 
+  it('lists stock fasteners on the Buy list without counting them as purchases', () => {
+    const withFasteners = robot();
+    const template = withFasteners.lines.find(line => line.partId === 'bracket')!;
+    withFasteners.lines.push(...Array.from({ length: 3 }, (_, n) => ({ ...template, bomLineKey: `f${n}`, partId: `f${n}`, name: `M3 Screw ${n}`, disposition: 'hardware' as const })));
+    const zipped = unzipSync(buildExcelWorkbook(withFasteners, new Date('2026-10-24T12:00:00Z')).bytes);
+    const buy = text(zipped, 2);
+    expect(buy).toContain('M3 Screw 0');
+    const purchases = withFasteners.lines.filter(line => line.disposition === 'buy').length;
+    expect(buy).toContain(`<c r="C4" s="21"><v>${purchases}</v></c>`);
+    expect(text(zipped, 1)).toContain(`1 of ${purchases} parts to buy are priced`);
+  });
+
   it('writes Onshape part names as inert CSV text', () => {
     const hostile = aggregateAssembly({ rootAssembly: { instances: [
       { id: 'bad', name: '=HYPERLINK("https://example.com","Open part")', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'bad' },

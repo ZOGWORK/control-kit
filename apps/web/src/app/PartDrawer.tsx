@@ -1,10 +1,11 @@
+import { useEffect, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { dispositions, dispositionLabel, type BomLine } from '@control-kit/shared';
 import { Alert } from '../components/arc/alert/alert';
 import { Button } from './bits';
 import { Drawer, DrawerContent, useDrawerItem } from '../components/arc/drawer/drawer';
 import type { ControlKit } from './useControlKit';
-import { money, vendorLabel } from './model';
+import { money, vendorLabel, vendorLookup } from './model';
 
 const sourceLabel: Record<BomLine['dispositionSource'], string> = { manual: 'Set by you', 'exact-sku': 'Exact vendor SKU', 'explicit-metadata': 'From Onshape data', provenance: 'From where the part comes from', suggestion: 'Suggested', none: 'Not decided' };
 const matchLabel: Record<BomLine['matchStatus'], string> = { exact: 'Exact SKU match', confirmed: 'Confirmed by you', possible: 'Possible match', rejected: 'Rejected by you', unmatched: 'No match' };
@@ -27,6 +28,23 @@ function usedIn(line: BomLine): Array<[string, number]> {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 
+/** Onshape's rendering of the part, so a name like "encoder cap" has a face. Costs one Onshape request the first time. */
+function PartPicture({ kit, line }: { kit: ControlKit; line: BomLine }) {
+  const [state, setState] = useState<{ url: string | null; error: string | null }>({ url: null, error: null });
+  useEffect(() => {
+    const controller = new AbortController();
+    let url: string | null = null;
+    setState({ url: null, error: null });
+    kit.partPicture(line, controller.signal).then(value => { url = value; setState({ url: value, error: null }); })
+      .catch(error => { if (!controller.signal.aborted) setState({ url: null, error: error instanceof Error ? error.message : 'No picture' }); });
+    return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
+    // A rescan can keep the same line key, so the picture follows the scan shown, not just the part.
+  }, [line.bomLineKey, kit.result?.scanId]);
+  return <figure className="part-picture" aria-busy={!state.url && !state.error}>
+    {state.url ? <img src={state.url} alt={`${line.name}, as modelled in Onshape`} /> : <span className="muted small">{state.error ?? 'Drawing the part…'}</span>}
+  </figure>;
+}
+
 /** Everything about one part: how it is obtained and why, its vendor product, and its Onshape source. */
 export function PartDrawer({ kit, line, onClose }: { kit: ControlKit; line: BomLine | null; onClose: () => void }) {
   // Keeps the last part on screen while the drawer closes.
@@ -42,7 +60,9 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
   const locked = Boolean(kit.pending) || !kit.result?.scanId || line.suppressed;
   const vendor = line.vendor;
   return <div className="stack">
+    <PartPicture kit={kit} line={line} />
     {line.metadataIssue && <Alert tone="warning" title={line.missingMetadataReason ?? 'Missing data'} />}
+    {line.purchasedAssembly && <p className="small">Listed as one product because {line.purchasedAssembly.reason}. Its {line.purchasedAssembly.parts} internal part{line.purchasedAssembly.parts === 1 ? '' : 's'} (gearbox, bearings, screws inside it) are not listed separately.</p>}
 
     <section className="stack" aria-labelledby="how">
       <div><h3 id="how">How the team gets it</h3><p className="muted small">{dispositionLabel[line.disposition]}. {sourceLabel[line.dispositionSource]}.</p></div>
@@ -72,7 +92,10 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
           <Button size="sm" disabled={locked} onClick={() => void kit.decide(line, 'confirmed')}>Confirm this product</Button>
           <Button size="sm" variant="ghost" disabled={locked} onClick={() => void kit.decide(line, 'rejected')}>Not this product</Button>
         </div>}
-      </> : <p className="muted small">{line.matchStatus === 'rejected' ? 'You rejected the suggested product.' : 'No vendor product matched. A part number holding the vendor SKU gives an exact match after the next rescan.'}</p>}
+      </> : <>
+        <p className="muted small">{line.matchStatus === 'rejected' ? 'You rejected the suggested product.' : 'No vendor product matched. A part number holding the vendor SKU gives an exact match after the next rescan.'}</p>
+        {vendorLookup(line) && <a className="link small" href={vendorLookup(line)!.url} target="_blank" rel="noopener noreferrer">Look up {vendorLookup(line)!.sku} on {vendorLookup(line)!.vendor} <ExternalLink aria-hidden size={11} /></a>}
+      </>}
     </section>
 
     <section className="stack" aria-labelledby="onshape">
@@ -85,7 +108,8 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
         {configurationText(line.configuration) && <><dt>Configuration</dt><dd className="small">{configurationText(line.configuration)}</dd></>}
         <dt>Used in</dt><dd className="small">{usedIn(line).map(([where, count]) => <div key={where}>{where}{count > 1 && <span className="muted"> ×{count}</span>}</div>)}</dd>
       </dl>
-      <a className="link small" href={line.partStudioUrl} target="_blank" rel="noopener noreferrer">Open in Onshape <ExternalLink aria-hidden size={11} /></a>
+      <div><Button size="sm" variant="secondary" onClick={() => kit.showInOnshape(line)}>{line.documentId === kit.result?.documentId ? 'Show its tab in Onshape' : 'Open its document in Onshape'} <ExternalLink aria-hidden size={12} /></Button></div>
+      <p className="muted small">{line.documentId === kit.result?.documentId ? 'Switches this document to the tab the part is modelled in.' : 'This part is linked from another document, which opens in a new browser tab.'}</p>
     </section>
   </div>;
 }
