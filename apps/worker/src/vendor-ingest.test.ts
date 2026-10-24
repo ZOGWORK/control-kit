@@ -56,12 +56,26 @@ describe('vendor product page parsing', () => {
     ]);
     expect(parsed.records[0]).toMatchObject({ url, vendorId: 'gobilda', stock: 'unknown' });
   });
-  it('reads single products from Product JSON-LD and leaves their pack size unverified', () => {
+  it('reads single products from Product JSON-LD; goBILDA and REV name every pack, so no wording means one unit', () => {
     const motor = parseProductPage('gobilda', 'https://www.gobilda.com/motor/', page('gobilda-single-product'), at).records;
     expect(motor).toHaveLength(1);
-    expect(motor[0]).toMatchObject({ sku: '5203-2402-0019', normalizedSku: '520324020019', priceUsd: 54.99, stock: 'out', packSize: null, packSizeVerified: false, packEvidence: null });
+    expect(motor[0]).toMatchObject({ sku: '5203-2402-0019', normalizedSku: '520324020019', priceUsd: 54.99, stock: 'out', packSize: 1, packSizeVerified: true, packEvidence: 'sold individually: no pack wording, and this vendor names every multi-unit product' });
     const rev = parseProductPage('rev', 'https://www.revrobotics.com/rev-41-1600/', page('rev-single-product'), at).records;
     expect(rev[0]).toMatchObject({ sku: 'REV-41-1600', normalizedSku: '411600', priceUsd: 50, stock: 'in', parser: 'jsonld' });
+  });
+  it('takes pack size from a "Pack Info" product field or a -PKn SKU, and never assumes one unit for ServoCity', () => {
+    const jsonld = (name: string, sku: string) => `<script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name, sku, offers: { price: '3.99', priceCurrency: 'USD' } })}</script>`;
+    // As ServoCity embeds it: a JSON string inside the page's product data, with escaped quotes.
+    const field = '<script>var BCData = {"product_attributes":{"custom_fields":"[{\\"id\\":\\"11069\\",\\"name\\":\\"Pack Info\\",\\"value\\":\\"25 Pack\\"}]"}};</script>';
+    const screw = parseProductPage('servocity', 'https://www.servocity.com/screw/', jsonld('6-32 x 0.750" Zinc-Plated Socket Head Machine Screw', '632120') + field, at).records[0];
+    expect(screw).toMatchObject({ packSize: 25, packSizeVerified: true, packEvidence: 'product field "Pack Info: 25 Pack"' });
+    const plain = parseProductPage('servocity', 'https://www.servocity.com/spacer/', jsonld('1504 Series 32mm OD Pattern Spacer (4mm Length)', '1504-0032-0040'), at).records[0];
+    expect(plain).toMatchObject({ packSize: null, packSizeVerified: false });
+    const cables = parseProductPage('rev', 'https://www.revrobotics.com/rev-31-1413/', jsonld('JST VH 2-pin Motor Cables', 'REV-31-1413-PK4'), at).records[0];
+    expect(cables).toMatchObject({ packSize: 4, packSizeVerified: true, packEvidence: 'SKU suffix "PK4"' });
+    // Pack wording on the product itself still wins over the convention.
+    const washers = parseProductPage('gobilda', 'https://www.gobilda.com/washer/', page('gobilda-variant-family'), at).records;
+    expect(washers.map(record => record.packSize)).toEqual([25, 250]);
   });
   it('reads every Shopify variant SKU with a variant-specific product link', () => {
     const url = 'https://andymark.com/products/neverest-orbital-gearmotors';
