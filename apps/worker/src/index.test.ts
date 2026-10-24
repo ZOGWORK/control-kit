@@ -208,7 +208,14 @@ describe('M5 settings and classification overrides against mock Onshape', () => 
     const third = await scan();
     expect(third.lines[0].manualClassification).toBeNull();
     const [key] = [...env.APP_STATE.values.keys()].filter(item => item.startsWith('disposition:simple:'));
-    expect(JSON.parse(env.APP_STATE.values.get(key)!)).toMatchObject({ disposition: null, by: 'FTC Mentor', history: [{ disposition: 'print', by: 'FTC Mentor' }] });
+    expect(JSON.parse(env.APP_STATE.values.get(key)!)).toMatchObject({ disposition: null, by: 'FTC Mentor' });
+    const changes = () => [...env.APP_STATE.values.entries()].filter(([item]) => item.startsWith(`disposition-change:simple:${key.split(':')[2]}:`)).map(([, value]) => JSON.parse(value).disposition);
+    expect(changes().sort()).toEqual(['print', null].sort());
+    // Two saves of the same part at once both stay in the history.
+    await Promise.all([set('cnc', second.scanId), set('cut-2d', second.scanId)]);
+    expect(changes()).toHaveLength(4);
+    expect(changes()).toEqual(expect.arrayContaining(['cnc', 'cut-2d']));
+    await set(null, second.scanId);
     const [a, b] = third.lines.slice(0, 2);
     await Promise.all([set('cnc', third.scanId, classificationIdentity(a)), set('buy', third.scanId, classificationIdentity(b))]);
     const fourth = await scan();

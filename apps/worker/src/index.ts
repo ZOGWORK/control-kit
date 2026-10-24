@@ -25,7 +25,9 @@ async function matchDecisionKey(userId: string, documentId: string, lineKey: str
 async function legacyClassificationKey(userId: string, documentId: string, identity: string) { return `override:${userId}:${documentId}:${await lineKeyDigest(identity)}`; }
 /** Manual dispositions are shared by everyone who scans the document, with who set them and a short history. */
 async function dispositionKey(documentId: string, identity: string) { return `disposition:${documentId}:${await lineKeyDigest(identity)}`; }
-type SavedDisposition = { disposition: ClassificationOverride | null; by: string; byId: string; at: string; history: Array<{ disposition: ClassificationOverride | null; by: string; at: string }> };
+/** The current choice (last write wins). Every change is also kept under its own key, so concurrent saves never erase history. */
+type SavedDisposition = { disposition: ClassificationOverride | null; by: string; byId: string; at: string };
+async function dispositionChangeKey(documentId: string, identity: string, at: string) { return `disposition-change:${documentId}:${await lineKeyDigest(identity)}:${at}:${random()}`; }
 async function readDisposition(env: Env, userId: string, documentId: string, identity: string): Promise<ClassificationOverride | null> {
   const raw = await env.APP_STATE.get(await dispositionKey(documentId, identity));
   if (raw) { try { return parseOverride((JSON.parse(raw) as SavedDisposition).disposition); } catch { return null; } }
@@ -163,14 +165,12 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!body.scanId || !/^[a-f0-9-]{36}$/.test(body.scanId)) return reply({ error: 'Scan this assembly before changing a part type.' }, 409);
     const scanned = await env.APP_STATE.get(`scan:${current.data.user.id}:${body.scanId}`);
     if (!scanned || (JSON.parse(scanned) as ScanResult).documentId !== body.documentId) return reply({ error: 'Scan this assembly before changing a part type.' }, 409);
-    const key = await dispositionKey(body.documentId, body.identity);
-    let previous: SavedDisposition | null = null;
-    try { const raw = await env.APP_STATE.get(key); previous = raw ? JSON.parse(raw) as SavedDisposition : null; } catch { previous = null; }
     const now = new Date().toISOString();
-    const saved: SavedDisposition = { disposition: choice, by: current.data.user.name, byId: current.data.user.id, at: now,
-      history: [...(previous ? [{ disposition: previous.disposition, by: previous.by, at: previous.at }, ...previous.history] : [])].slice(0, 10) };
-    // Clearing keeps the record (disposition null) so the history and "who reset it" survive.
-    await env.APP_STATE.put(key, JSON.stringify(saved));
+    const saved: SavedDisposition = { disposition: choice, by: current.data.user.name, byId: current.data.user.id, at: now };
+    // KV has no atomic read-modify-write, so history is append-only: one never-overwritten key per change (kept a year).
+    await env.APP_STATE.put(await dispositionChangeKey(body.documentId, body.identity, now), JSON.stringify(saved), { expirationTtl: 365 * 86400 });
+    // Clearing keeps a current record (disposition null) so "who reset it" survives.
+    await env.APP_STATE.put(await dispositionKey(body.documentId, body.identity), JSON.stringify(saved));
     await env.APP_STATE.delete(await legacyClassificationKey(current.data.user.id, body.documentId, body.identity));
     return reply({ saved: true, disposition: choice, by: saved.by, at: now });
   }

@@ -38,6 +38,17 @@ describe('manufacturing disposition', () => {
   ] as const)('treats the team tag in "%s" as explicit metadata', (name, expected) => {
     expect(classify(line(name))).toMatchObject({ disposition: expected, dispositionSource: 'explicit-metadata', dispositionConfidence: 'high' });
   });
+  it('requires complete tags and whole process words, and sends conflicts to review', () => {
+    expect(classify(line('Mount (printer bracket)')).dispositionSource).not.toBe('explicit-metadata');
+    expect(classify(line('Spacer #printable')).dispositionSource).not.toBe('explicit-metadata');
+    expect(classify(line('Arm [3DP] (CNC)'))).toMatchObject({ disposition: 'review', dispositionSource: 'none' });
+    const process = (value: string) => { const item = line('Arm'); item.bomProperties = { name: null, partNumber: null, description: null, vendor: null, material: null, quantity: 1, process: value }; return classify(item); };
+    expect(process('3D CNC milling').disposition).toBe('cnc');
+    expect(process('Waterjet').disposition).toBe('cut-2d');
+    expect(process('Printed then machined')).toMatchObject({ disposition: 'review' });
+    expect(process('Printed then machined').reviewReason).toContain('more than one process');
+    expect(process('Turnkey').dispositionSource).not.toBe('explicit-metadata');
+  });
   it('uses a print material or a BOM process column as explicit metadata', () => {
     const pla = line('Sensor mount'); pla.material = 'PLA';
     expect(classify(pla)).toMatchObject({ disposition: 'print', dispositionSource: 'explicit-metadata' });

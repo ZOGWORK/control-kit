@@ -36,18 +36,25 @@ export function printCategory(name: string) {
   return 'misc';
 }
 
-/** Team-written process markers count as explicit metadata: "[3DP]", "(CNC)", "{laser}", "#waterjet". */
-const tagged: Array<[RegExp, Disposition]> = [
-  [/[[({#]\s*(?:3dp|3d\s*print(?:ed)?|print(?:ed)?|fdm)\s*[\])}]?/i, 'print'],
-  [/[[({#]\s*(?:cnc|mill(?:ed)?|machined|lathe)\s*[\])}]?/i, 'cnc'],
-  [/[[({#]\s*(?:laser(?:\s*cut)?|water\s*jet|waterjet|router|2d\s*cut|dxf)\s*[\])}]?/i, 'cut-2d'],
-  [/[[({#]\s*(?:buy|cots|purchased?)\s*[\])}]?/i, 'buy'],
-];
-/** A BOM process/manufacturing column, when the team keeps one. */
-const processValue: Array<[RegExp, Disposition]> = [
-  [/3d|print|fdm|sla|sls|additive/i, 'print'], [/cnc|mill|machin|lathe|turn/i, 'cnc'], [/laser|water\s*jet|router|2d|plasma|cut/i, 'cut-2d'],
-  [/buy|purchase|cots|vendor|off.the.shelf/i, 'buy'], [/weld|bend|sheet|fabricat|hand|manual/i, 'fabricate'],
-];
+/** Process vocabulary, matched as whole words only. */
+const processWords: Record<Exclude<Disposition, 'review'>, string> = {
+  print: '3dp|3d[ -]?print(?:ed|ing)?|print(?:ed)?|fdm|sla|sls|additive',
+  cnc: 'cnc|mill(?:ed|ing)?|machin(?:ed|ing)|lathe|turn(?:ed|ing)',
+  'cut-2d': 'laser(?:[ -]?cut)?|water[ -]?jet|router|2d[ -]?cut|plasma(?:[ -]?cut)?|dxf',
+  buy: 'buy|purchased?|cots|off[ -]the[ -]shelf',
+  fabricate: 'weld(?:ed|ing)?|bent|bend|sheet[ -]?metal|fabricat(?:ed|ion)|hand[ -]?made',
+};
+/** Team-written process markers in a name: a complete bracketed tag ("[3DP]", "(CNC)", "{laser}") or "#word". */
+const tagged = (Object.entries(processWords) as Array<[Disposition, string]>).map(([disposition, words]) =>
+  [new RegExp(`[[({]\\s*(?:${words})\\s*[\\])}]|#(?:${words})(?![a-z0-9])`, 'i'), disposition] as const);
+const processValue = (Object.entries(processWords) as Array<[Disposition, string]>).map(([disposition, words]) =>
+  [new RegExp(`(?<![a-z0-9])(?:${words})(?![a-z0-9])`, 'i'), disposition] as const);
+/** The single disposition all matching patterns agree on, or what matched when they conflict. */
+function explicitMatch(value: string, patterns: ReadonlyArray<readonly [RegExp, Disposition]>) {
+  const found = patterns.flatMap(([pattern, disposition]) => { const match = value.match(pattern); return match ? [{ disposition, text: match[0].trim() }] : []; });
+  const distinct = [...new Set(found.map(item => item.disposition))];
+  return found.length ? { disposition: distinct.length === 1 ? distinct[0] : null, text: found.map(item => item.text).join(', ') } : null;
+}
 const printMaterial = /\b(?:pla|petg|abs|asa|tpu|nylon|pa12|pa-cf|onyx|resin|cf-?pla|cf-?nylon)\b/i;
 const printWords = /\b(?:print(?:ed)?|3[ -]?d[ -]?print(?:ed)?|stl|fdm)\b/i;
 const flatWords = /\b(?:plate|panel|sheet|gusset|side\s*plate)\b/i;
@@ -75,8 +82,13 @@ export function decideDisposition(line: BomLine, teamNumber: string | null, asse
   if (line.matchStatus === 'exact') return { ...base, disposition: 'buy', source: 'exact-sku', confidence: 'certain' };
   const text = `${line.name} ${line.description ?? ''}`;
   const process = line.bomProperties?.process ?? null;
-  if (process) for (const [pattern, disposition] of processValue) if (pattern.test(process)) return { ...base, disposition, source: 'explicit-metadata', confidence: 'high', evidence: [...base.evidence, `BOM process column "${process}"`] };
-  for (const [pattern, disposition] of tagged) { const found = text.match(pattern); if (found) return { ...base, disposition, source: 'explicit-metadata', confidence: 'high', evidence: [...base.evidence, `team tag "${found[0].trim()}" in name`] }; }
+  // Explicit metadata that names two different processes is a question for a person, not a decision.
+  const processMatch = process ? explicitMatch(process, processValue) : null;
+  if (processMatch?.disposition) return { ...base, disposition: processMatch.disposition, source: 'explicit-metadata', confidence: 'high', evidence: [...base.evidence, `BOM process column "${process}"`] };
+  if (processMatch) return { ...base, disposition: 'review', source: 'none', confidence: 'low', evidence: [...base.evidence, `BOM process column "${process}"`], reviewReason: `BOM process "${process}" names more than one process: choose one` };
+  const tagMatch = explicitMatch(text, tagged);
+  if (tagMatch?.disposition) return { ...base, disposition: tagMatch.disposition, source: 'explicit-metadata', confidence: 'high', evidence: [...base.evidence, `team tag "${tagMatch.text}" in name`] };
+  if (tagMatch) return { ...base, disposition: 'review', source: 'none', confidence: 'low', evidence: [...base.evidence, `team tags ${tagMatch.text} in name`], reviewReason: 'Team tags in the name disagree: choose one process' };
   if (line.material && printMaterial.test(line.material)) return { ...base, disposition: 'print', source: 'explicit-metadata', confidence: 'high', evidence: [...base.evidence, `print material ${line.material}`] };
   if (line.matchStatus === 'confirmed') return { ...base, disposition: 'buy', source: 'provenance', confidence: 'high' };
   if (provenance === 'standard-content') return { ...base, disposition: 'buy', source: 'provenance', confidence: 'high' };
