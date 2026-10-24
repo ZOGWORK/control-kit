@@ -36,10 +36,10 @@ describe('Control Kit view model', () => {
     expect(reviewQueue(result).map(item => item.kind)).toEqual(['match']);
   });
   it('orders the review queue by what one click can settle', () => {
-    const result = scan([...parts('Mystery part', 1, 'a'), ...parts('M3 x 8 screw', 5, 'b'), ...parts('Wheel', 1, 'c')], lines => {
+    const result = scan([...parts('Mystery part', 1, 'a'), ...parts('8mm ball bearing', 5, 'b'), ...parts('Wheel', 1, 'c')], lines => {
       const wheel = lines.find(line => line.partId === 'c')!; wheel.vendor = vendor('3606-0014-0096', 1, 12); wheel.matchStatus = 'possible';
     });
-    expect(reviewQueue(result).map(item => [item.line.name, item.kind])).toEqual([['Wheel', 'match'], ['M3 x 8 screw', 'suggested'], ['Mystery part', 'undecided']]);
+    expect(reviewQueue(result).map(item => [item.line.name, item.kind])).toEqual([['Wheel', 'match'], ['8mm ball bearing', 'suggested'], ['Mystery part', 'undecided']]);
   });
   it('filters and searches parts by disposition, part number, and SKU', () => {
     const result = scan([...parts('Sensor mount [3DP]', 1, 'm'), ...parts('M3 screw', 2, 's'), { id: 'x', name: 'Spare', type: 'Part', documentId: 'doc', elementId: 'studio', partId: 'x', suppressed: true }], lines => {

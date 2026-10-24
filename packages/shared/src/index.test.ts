@@ -35,6 +35,40 @@ describe('assembly traversal and aggregation', () => {
     expect(result.lines[0].unresolvedSubassembly).toBe(true);
     expect(result.lines[0].qty).toBe(1);
   });
+  it('lists a vendor product modelled as an assembly as one line, and expands the team\'s own subassemblies', () => {
+    const part = (id: string, name: string, documentId = 'doc1', elementId = 'ps') => ({ id, name, type: 'Part', documentId, elementId, partId: id });
+    const sub = (id: string, name: string, documentId: string, elementId: string) => ({ id, name, type: 'Assembly', documentId, elementId, documentVersion: documentId === 'doc1' ? undefined : 'v1' });
+    const result = aggregateAssembly({
+      rootAssembly: { instances: [
+        sub('pod', 'Right Pod <1>', 'doc1', 'pod'),
+        sub('drive', 'Drive Pod <1>', 'teamlib', 'drive'),
+      ] },
+      subAssemblies: [
+        { documentId: 'doc1', elementId: 'pod', instances: [
+          sub('m1', '5204 Series Yellow Jacket Planetary Gear Motor (13.7:1 Ratio) 5204-8002-0014 <1>', 'gobilda', 'motor'),
+          sub('m2', '5204 Series Yellow Jacket Planetary Gear Motor (13.7:1 Ratio) 5204-8002-0014 <2>', 'gobilda', 'motor'),
+          sub('b1', '4mm ID Non-Flanged Ball Bearing (10mm OD, 4mm Thickness) <1>', 'vendorcad', 'bearing'),
+          sub('stack', 'Bearing stack <1>', 'teamlib', 'stack'),
+          part('plate', 'Pod Plate'),
+        ] },
+        { documentId: 'gobilda', elementId: 'motor', instances: [part('gearbox', '5203 gearbox', 'gobilda', 'mps'), part('shaft', '5203 Shaft', 'gobilda', 'mps'), part('can', 'Motor Part', 'gobilda', 'mps')] },
+        { documentId: 'vendorcad', elementId: 'bearing', instances: [part('inner', 'Inner Race', 'vendorcad', 'bps'), part('outer', 'Outer Race', 'vendorcad', 'bps')] },
+        { documentId: 'teamlib', elementId: 'stack', instances: [part('washer', 'Thrust washer', 'teamlib', 'sps')] },
+        { documentId: 'teamlib', elementId: 'drive', instances: [part('side', 'Drive side plate', 'teamlib', 'dps')] },
+      ],
+    }, context, 'Robot');
+    const names = result.lines.map(line => [line.name, line.qty, line.purchasedAssembly?.parts ?? null]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    expect(names).toEqual([
+      ['4mm ID Non-Flanged Ball Bearing (10mm OD, 4mm Thickness)', 1, 2],
+      ['5204 Series Yellow Jacket Planetary Gear Motor (13.7:1 Ratio) 5204-8002-0014', 2, 3],
+      ['Drive side plate', 1, null],
+      ['Pod Plate', 1, null],
+      ['Thrust washer', 1, null],
+    ]);
+    const motor = result.lines.find(line => line.name.includes('Yellow Jacket'))!;
+    expect(motor.purchasedAssembly?.reason).toBe('its name has a goBILDA/ServoCity part number');
+    expect(motor).toMatchObject({ unresolvedSubassembly: false, metadataIssue: null });
+  });
   it('does not count a resolved but empty child assembly as a part', () => {
     const definition: AssemblyDefinition = { rootAssembly: { instances: [{ id: 'empty', name: 'Empty Module', type: 'Assembly', documentId: 'doc1', elementId: 'module' }] }, subAssemblies: [{ documentId: 'doc1', elementId: 'module', instances: [] }] };
     expect(aggregateAssembly(definition, context, 'Robot').stats.totalInstances).toBe(0);

@@ -5,6 +5,7 @@ import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
+import { linePreview, previewCacheKey, PreviewUnavailableError } from './preview';
 
 export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string }
 type Tokens = { access_token: string; refresh_token: string };
@@ -245,6 +246,29 @@ async function route(request: Request, env: Env): Promise<Response> {
       { summary: () => ledger.summary(), finish: () => persistLedger(env.APP_STATE, ledger) },
       // Scoped to the user: a cached BOM is only served to someone whose own Onshape access already read it.
       { get: key => env.APP_STATE.get(`${current.data.user.id}:${key}`), put: (key, value) => env.APP_STATE.put(`${current.data.user.id}:${key}`, value, { expirationTtl: 30 * 86400 }) });
+  }
+  if (url.pathname === '/api/preview' && request.method === 'GET') {
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const scanId = url.searchParams.get('scanId');
+    const lineKey = url.searchParams.get('line');
+    if (!scanId || !/^[a-f0-9-]{36}$/.test(scanId) || !lineKey || lineKey.length > 4096) return reply({ error: 'Invalid part.' }, 400);
+    // Only a part from the person's own scan, which proves their Onshape access read it.
+    const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${scanId}`);
+    if (!raw) return reply({ error: 'Scan this assembly again to see part pictures.' }, 409);
+    const result = JSON.parse(raw) as ScanResult;
+    const line = [...result.lines, ...result.suppressed].find(item => item.bomLineKey === lineKey);
+    if (!line) return reply({ error: 'This part is not in your latest scan.' }, 404);
+    const ledger = new RequestLedger('preview');
+    try {
+      const png = await linePreview(line, previewCacheKey(current.data.user.id, result, line, await lineKeyDigest(`${line.bomLineKey}|${line.purchasedAssembly ? 'assembly' : 'part'}`)), env.APP_STATE, onshapeFetcher(env, current, ledger, { remaining: 3 }), env.ONSHAPE_API_VERSION);
+      return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png', 'cache-control': 'private, max-age=3600' } });
+    } catch (error) {
+      if (error instanceof SessionExpiredError) return reply({ error: 'Reconnect Onshape.' }, 401);
+      if (error instanceof PreviewUnavailableError || error instanceof BudgetExhaustedError) return reply({ error: error instanceof PreviewUnavailableError ? error.message : 'Onshape is busy. Try again shortly.' }, 404);
+      throw error;
+    } finally { await persistLedger(env.APP_STATE, ledger).catch(() => undefined); }
   }
   const exportsMatch = url.pathname.match(/^\/api\/exports(?:\/([a-f0-9-]{36}))?(?:\/files\/(\d{1,4}))?$/);
   if (exportsMatch) {

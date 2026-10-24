@@ -63,7 +63,9 @@ describe('manufacturing disposition', () => {
     expect(classify(aluminum).disposition).toBe('review');
   });
   it('buys standard content and linked library parts with a part number', () => {
-    expect(classify(line('Socket head cap screw M3x8', { isStandardContent: true }))).toMatchObject({ disposition: 'buy', provenance: 'standard-content', dispositionSource: 'provenance' });
+    expect(classify(line('Dowel pin 3mm', { isStandardContent: true }))).toMatchObject({ disposition: 'buy', provenance: 'standard-content', dispositionSource: 'provenance' });
+    // Fasteners come from stock, standard content or not.
+    expect(classify(line('Socket head cap screw M3x8', { isStandardContent: true }))).toMatchObject({ disposition: 'hardware' });
     expect(classify(line('Hub', { documentId: 'ftc-library', partNumber: '1309-0016-0006' }))).toMatchObject({ disposition: 'buy', provenance: 'linked-library', dispositionConfidence: 'medium' });
     expect(classify(line('Mystery bracket', { documentId: 'ftc-library' }))).toMatchObject({ disposition: 'review', provenance: 'linked-library' });
   });
@@ -71,15 +73,16 @@ describe('manufacturing disposition', () => {
     const suggested = (name: string, extra: Partial<AssemblyInstance> = {}) => classify(line(name, extra));
     expect(suggested('2302 Series Aluminum, MOD 0.8, Hub Mount Gear (14mm Bore, 48 Tooth)')).toMatchObject({ disposition: 'review', suggestedDisposition: 'buy', dispositionSource: 'suggestion' });
     expect(suggested('2106-4008-0560', { documentId: 'library' })).toMatchObject({ suggestedDisposition: 'buy', reviewReason: "Name includes a goBILDA/ServoCity part number (2106-4008-0560): confirm it's bought" });
-    expect(suggested('5103 Gearbox Base Mounting Screw M3 x 5mm length SHCS)_91290A110', { documentId: 'library' }).suggestedDisposition).toBe('buy');
-    expect(suggested('M4 x 0.7mm Locknut', { documentId: 'library' })).toMatchObject({ suggestedDisposition: 'buy', reviewReason: 'Looks like standard hardware: confirm it is bought' });
-    expect(suggested('Roller E-Clip', { documentId: 'library' }).suggestedDisposition).toBe('buy');
+    // Fasteners need no decision: they are listed as stock hardware, not suggested for Buy one by one.
+    for (const name of ['5103 Gearbox Base Mounting Screw M3 x 5mm length SHCS)_91290A110', 'M4 x 0.7mm Locknut', 'Roller E-Clip', 'Button Head Screw M4 x 12'])
+      expect(suggested(name, { documentId: 'library' })).toMatchObject({ disposition: 'hardware', reviewReason: null });
+    expect(suggested('8mm REX Ball Bearing', { documentId: 'library' })).toMatchObject({ suggestedDisposition: 'buy', reviewReason: 'Looks like standard hardware: confirm it is bought' });
     expect(suggested('80 Tooth x 9mm HTD5 Belt').suggestedDisposition).toBe('buy');
     // Print wording still wins over hardware wording, and a plain plate still goes to 2D-cut review.
     expect(suggested('Printed bearing holder').suggestedDisposition).toBe('print');
     expect(suggested('Inner Plate').suggestedDisposition).toBe('cut-2d');
     // A suggestion never decides: nothing here is Buy until a person or a catalog match says so.
-    expect(suggested('M4 x 0.7mm Locknut').disposition).toBe('review');
+    expect(suggested('80 Tooth x 9mm HTD5 Belt').disposition).toBe('review');
   });
   it('asks a person about a possible vendor match instead of buying it', () => {
     const value = line('96mm wheel');
