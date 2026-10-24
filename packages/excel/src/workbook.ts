@@ -369,8 +369,11 @@ export function buildBomCsv(result: ScanResult, now = new Date()): CsvExport {
   const lines = [...result.lines].sort((a, b) => order.indexOf(a.disposition) - order.indexOf(b.disposition) || byName(a, b));
   const rows = [CSV_HEADERS.map(quote).join(','), ...lines.map((line, index) => {
     const vendor = ordered(line) ? line.vendor! : null;
-    return [String(index + 1), text(line.name), String(line.qty), text(shortLabel[line.disposition]), String(verifiedPack(line) ?? ''), priced(line) ? String(line.packsToOrder) : '',
-      text(vendor ? vendorName[vendor.vendorId] : ''), text(vendor?.sku), vendor?.priceUsd === null || !vendor ? '' : vendor.priceUsd.toFixed(2), priced(line) ? line.lineTotalUsd!.toFixed(2) : '',
+    // Only parts the team buys carry purchasing amounts; a matched part set to print or fabricate is named, never charged.
+    const buying = line.disposition === 'buy';
+    const charged = buying && priced(line);
+    return [String(index + 1), text(line.name), String(line.qty), text(shortLabel[line.disposition]), buying ? String(verifiedPack(line) ?? '') : '', charged ? String(line.packsToOrder) : '',
+      text(vendor ? vendorName[vendor.vendorId] : ''), text(vendor?.sku), !buying || !vendor || vendor.priceUsd === null ? '' : vendor.priceUsd.toFixed(2), charged ? line.lineTotalUsd!.toFixed(2) : '',
       text(stock(line).value), text(matchText[line.matchStatus]), text(vendor ? safeUrl(vendor.url) : ''), text(safeUrl(line.partStudioUrl)), text(purchaseNotes(line, result))].join(',');
   })];
   const { filename } = buildFilename(result.assemblyName, now);

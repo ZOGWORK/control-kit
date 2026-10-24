@@ -119,6 +119,15 @@ describe('Excel export', () => {
     expect(lines.find(line => line.includes('"Bearing"'))).toMatch(/"Buy",,,"goBILDA","1611-0019-0006",8\.99,,/);
   });
 
+  it('never charges a matched part the team chose to make', () => {
+    const changed = robot();
+    const screw = changed.lines.find(line => line.partId === 'screw')!;
+    Object.assign(screw, { disposition: 'print', manualClassification: 'print' });
+    const row = new TextDecoder().decode(buildBomCsv(changed).bytes).split('\r\n').find(line => line.includes('"M4 Screw"'))!;
+    expect(row).toMatch(/"3D print",,,"goBILDA","2802-0004-0010",,,/);
+    expect(row).not.toContain('17.98');
+  });
+
   it('writes Onshape part names as inert CSV text', () => {
     const hostile = aggregateAssembly({ rootAssembly: { instances: [
       { id: 'bad', name: '=HYPERLINK("https://example.com","Open part")', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'bad' },
