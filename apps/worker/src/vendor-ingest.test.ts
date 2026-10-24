@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { VendorId, VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
-import { batchKey, indexKey, packFromText, parseProductPage, pointerKey, runVendor, snapshotKey, vendorSources, type CatalogPointer, type IndexEntry, type VendorSnapshot } from './vendor-ingest';
+import { batchKey, feedUrl, indexKey, packFromText, parseProductPage, parseShopifyFeed, pointerKey, runVendor, snapshotKey, vendorSources, type CatalogPointer, type IndexEntry, type VendorSnapshot } from './vendor-ingest';
 
 class MemoryKv implements Kv {
   values = new Map<string, string>();
@@ -100,7 +100,7 @@ describe('vendor product page parsing', () => {
 });
 
 describe('vendor catalog crawl and publication', () => {
-  it.each(vendors)('%s publishes its captured product on the run after it was fetched', async vendor => {
+  it.each(vendors.filter(vendor => !vendorSources[vendor].feed))('%s publishes its captured product on the run after it was fetched', async vendor => {
     quiet();
     const data = captured(vendor);
     const kv = new MemoryKv();
@@ -170,17 +170,17 @@ describe('vendor catalog crawl and publication', () => {
   it('keeps a published product visible while a later page re-lists its SKU', async () => {
     quiet();
     const kv = new MemoryKv();
-    const fetcher = site('andymark', {
-      'https://andymark.com/products/a': product('Hub', 'am-1001', '5.00'),
-      'https://andymark.com/products/b': product('Spacer', 'am-1002', '1.00'),
-      'https://andymark.com/products/c': product('Hub (bundle page)', 'am-1001', '6.00'),
+    const fetcher = site('servocity', {
+      'https://www.servocity.com/a/': product('Hub', '1001', '5.00'),
+      'https://www.servocity.com/b/': product('Spacer', '1002', '1.00'),
+      'https://www.servocity.com/c/': product('Hub (bundle page)', '1001', '6.00'),
     });
-    await run('andymark', kv, fetcher, { maxProducts: 2 });
-    await run('andymark', kv, fetcher, { maxProducts: 2 });
+    await run('servocity', kv, fetcher, { maxProducts: 2 });
+    await run('servocity', kv, fetcher, { maxProducts: 2 });
     // Run 2 published run 1's batch and wrote the re-listed hub to batch 1, which is not yet published.
-    expect((await records(kv, 'andymark')).find(record => record.normalizedSku === '1001')?.priceUsd).toBe(5);
-    await run('andymark', kv, fetcher, { maxProducts: 2 });
-    expect((await records(kv, 'andymark')).find(record => record.normalizedSku === '1001')?.priceUsd).toBe(6);
+    expect((await records(kv, 'servocity')).find(record => record.normalizedSku === '1001')?.priceUsd).toBe(5);
+    await run('servocity', kv, fetcher, { maxProducts: 2 });
+    expect((await records(kv, 'servocity')).find(record => record.normalizedSku === '1001')?.priceUsd).toBe(6);
     vi.restoreAllMocks();
   });
   it('keeps records fetched before a failing page and resumes after it', async () => {
@@ -202,17 +202,17 @@ describe('vendor catalog crawl and publication', () => {
   it('holds position on a failing page, then skips it after three consecutive failed runs', async () => {
     quiet();
     const kv = new MemoryKv();
-    const fetcher = site('pitsco', {
-      'https://www.pitsco.com/products/broken': () => new Response('unavailable', { status: 503 }),
-      'https://www.pitsco.com/products/motor': product('TETRIX MAX Motor', '44260', '30.75'),
+    const fetcher = site('gobilda', {
+      'https://www.gobilda.com/broken/': () => new Response('unavailable', { status: 503 }),
+      'https://www.gobilda.com/motor/': product('Yellow Jacket Motor', '5203-2402-0019', '44.99'),
     });
     for (let attempt = 1; attempt <= 2; attempt++) {
-      await expect(run('pitsco', kv, fetcher)).rejects.toThrow('HTTP 503');
-      expect(json<VendorSnapshot>(kv, snapshotKey('pitsco'))).toMatchObject({ status: 'failed', error: 'Vendor returned HTTP 503', version: null });
+      await expect(run('gobilda', kv, fetcher)).rejects.toThrow('HTTP 503');
+      expect(json<VendorSnapshot>(kv, snapshotKey('gobilda'))).toMatchObject({ status: 'failed', error: 'Vendor returned HTTP 503', version: null });
     }
-    expect(await run('pitsco', kv, fetcher)).toMatchObject({ upserted: 1, skipped: 1 });
-    await run('pitsco', kv, fetcher);
-    expect(json<VendorSnapshot>(kv, snapshotKey('pitsco'))).toMatchObject({ status: 'ok', recordCount: 1, complete: true, skipped: { 'fetch-failed': 1 } });
+    expect(await run('gobilda', kv, fetcher)).toMatchObject({ upserted: 1, skipped: 1 });
+    await run('gobilda', kv, fetcher);
+    expect(json<VendorSnapshot>(kv, snapshotKey('gobilda'))).toMatchObject({ status: 'ok', recordCount: 1, complete: true, skipped: { 'fetch-failed': 1 } });
     vi.restoreAllMocks();
   });
   it('restarts a crawl that ended with no usable records instead of failing forever', async () => {
@@ -281,15 +281,114 @@ describe('vendor catalog crawl and publication', () => {
     expect(kv.values.has('vendor:gobilda:__cursor__')).toBe(false);
     vi.restoreAllMocks();
   });
-  it('drops records whose links point off the vendor site', async () => {
-    quiet();
-    const kv = new MemoryKv();
-    const fetcher = site('andymark', { 'https://andymark.com/products/neverest-orbital-gearmotors': page('andymark-variant-family') });
-    await run('andymark', kv, fetcher);
-    await run('andymark', kv, fetcher);
-    const found = await records(kv, 'andymark');
+  it('drops records whose links point off the vendor site', () => {
+    const found = parseProductPage('andymark', 'https://andymark.com/products/neverest-orbital-gearmotors', page('andymark-variant-family'), '2026-10-24T00:00:00Z').records;
     expect(found.length).toBe(8);
     expect(found.every(record => new URL(record.url).hostname === 'andymark.com')).toBe(true);
+  });
+});
+
+/** A Shopify store's feed: `pages[n]` is the products on page n + 1; later pages are empty. */
+function shopify(vendor: VendorId, pages: unknown[][], robots = 'User-agent: *\nAllow: /') {
+  return vi.fn(async (url: string) => {
+    if (url === `${vendorSources[vendor].origin}/robots.txt`) return new Response(robots);
+    const page = Number(new URL(url).searchParams.get('page'));
+    if (url !== feedUrl(vendor, page)) return new Response('missing', { status: 404 });
+    return new Response(JSON.stringify({ products: pages[page - 1] ?? [] }));
+  });
+}
+const feedProduct = (title: string, handle: string, variants: Array<{ id: number; title: string; sku: string | null; price: string; available: boolean }>, type = 'Hardware') => ({ title, handle, product_type: type, variants });
+
+describe('Shopify product feed (AndyMark, Pitsco)', () => {
+  it('reads every variant with its own SKU, price, availability, and pack evidence', () => {
+    const { records: found, skippedProducts } = parseShopifyFeed('andymark', JSON.stringify({ products: [
+      feedProduct('Hex Shaft Collar', 'hex-collar', [{ id: 1, title: '1/2in Hex', sku: 'am-1001', price: '4.00', available: true }, { id: 2, title: '10 Pack', sku: 'am-1001_10', price: '35.00', available: false }]),
+      feedProduct('Gift Card', 'gift-card', [{ id: 3, title: 'Default Title', sku: '', price: '25.00', available: true }]),
+      feedProduct('Climber Hook &amp; Plate', 'hook', [{ id: 4, title: 'Default Title', sku: 'am-2000', price: '12.5', available: true }]),
+    ] }), '2026-10-24T00:00:00Z');
+    expect(skippedProducts).toBe(1);
+    expect(found.map(record => [record.sku, record.name, record.priceUsd, record.stock, record.packSize, record.packSizeVerified, record.url])).toEqual([
+      ['am-1001', 'Hex Shaft Collar (1/2in Hex)', 4, 'in', null, false, 'https://andymark.com/products/hex-collar?variant=1'],
+      ['am-1001_10', 'Hex Shaft Collar (10 Pack)', 35, 'out', 10, true, 'https://andymark.com/products/hex-collar?variant=2'],
+      ['am-2000', 'Climber Hook & Plate', 12.5, 'in', null, false, 'https://andymark.com/products/hook'],
+    ]);
+    expect(found[0]).toMatchObject({ vendorId: 'andymark', source: 'feed', parser: 'shopify-feed', category: 'hardware', packEvidence: null });
+    expect(found[1].packEvidence).toBe('variant label "10 Pack"');
+  });
+  it('crawls feed pages until an empty page, then publishes on the next run', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    const products = (from: number, count: number) => Array.from({ length: count }, (_, n) => feedProduct(`Part ${from + n}`, `part-${from + n}`, [{ id: from + n, title: 'Default Title', sku: `${40000 + from + n}`, price: '1.00', available: true }]));
+    const fetcher = shopify('pitsco', [products(0, 3), products(3, 3), products(6, 2)]);
+    expect(await run('pitsco', kv, fetcher, { maxFeedPages: 2 })).toMatchObject({ fetched: 2, upserted: 6, complete: false });
+    expect(kv.values.has(pointerKey('pitsco'))).toBe(false);
+    // Page 3 has products, page 4 is empty: the crawl ends there.
+    expect(await run('pitsco', kv, fetcher, { maxFeedPages: 2 })).toMatchObject({ fetched: 2, upserted: 2 });
+    expect(json<CatalogPointer>(kv, pointerKey('pitsco'))).toMatchObject({ complete: false, batches: 1 });
+    expect(await run('pitsco', kv, fetcher, { maxFeedPages: 2 })).toMatchObject({ fetched: 0, complete: true });
+    expect(json<CatalogPointer>(kv, pointerKey('pitsco'))).toMatchObject({ complete: true, records: 8, batches: 2 });
+    expect((await records(kv, 'pitsco')).length).toBe(8);
+    expect(fetcher.mock.calls.map(([url]) => url).filter(url => url.includes('products.json'))).toEqual([1, 2, 3, 4].map(page => feedUrl('pitsco', page)));
+    vi.restoreAllMocks();
+  });
+  it('retries a rate-limited request after Retry-After before failing the run', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    const feed = shopify('andymark', [[feedProduct('Hub', 'hub', [{ id: 1, title: 'Default Title', sku: 'am-1001', price: '5.00', available: true }])]]);
+    let limited = 2;
+    const fetcher = async (url: string) => url.includes('products.json') && limited-- > 0 ? new Response('slow down', { status: 429, headers: { 'retry-after': '0' } }) : feed(url);
+    expect(await run('andymark', kv, fetcher)).toMatchObject({ upserted: 1 });
+    limited = 3;
+    await expect(run('andymark', new MemoryKv(), fetcher)).rejects.toThrow('HTTP 429');
+    vi.restoreAllMocks();
+  });
+  it('rejects a feed response without a product list instead of ending the crawl', () => {
+    expect(() => parseShopifyFeed('pitsco', '{}', '2026-10-24T00:00:00Z')).toThrow('no product list');
+    expect(() => parseShopifyFeed('pitsco', '{"errors":"Not Found"}', '2026-10-24T00:00:00Z')).toThrow('no product list');
+    expect(parseShopifyFeed('pitsco', '{"products":[]}', '2026-10-24T00:00:00Z').empty).toBe(true);
+  });
+  it('restarts a Shopify crawl begun from the sitemap as a feed crawl', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    await kv.put('cat:andymark:crawl', JSON.stringify({ gen: 'oldgen', startedAt: '2026-10-24T00:00:00Z', sitemaps: ['https://andymark.com/sitemap_products_1.xml'], sitemapIndex: 1, urlCount: 500, urlIndex: 40, batches: 0, records: 0, skipped: {}, skipSamples: [], failing: null, done: false }));
+    const fetcher = shopify('andymark', [[feedProduct('Hub', 'hub', [{ id: 1, title: 'Default Title', sku: 'am-1001', price: '5.00', available: true }])]]);
+    expect(await run('andymark', kv, fetcher)).toMatchObject({ upserted: 1 });
+    expect(json<{ gen: string; sitemaps: string[] }>(kv, 'cat:andymark:crawl')).toMatchObject({ sitemaps: [feedUrl('andymark', 1)] });
+    expect(json<{ gen: string }>(kv, 'cat:andymark:crawl').gen).not.toBe('oldgen');
+    vi.restoreAllMocks();
+  });
+  it('waits for the replaced generation to be deleted before starting another refresh', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    const fetcher = shopify('pitsco', [[feedProduct('Motor', 'motor', [{ id: 1, title: 'Default Title', sku: '44260', price: '30.75', available: true }])]]);
+    const feedCalls = () => fetcher.mock.calls.filter(([url]) => url.includes('products.json')).length;
+    // First crawl: fetch, publish, finish. Refresh: fetch, then switch generations, keeping the old one for a day.
+    for (let n = 0; n < 4; n++) await run('pitsco', kv, fetcher, { retireAfterMs: 3600000 });
+    expect(json<CatalogPointer>(kv, pointerKey('pitsco')).previous).not.toBeNull();
+    const before = feedCalls();
+    expect(await run('pitsco', kv, fetcher, { retireAfterMs: 3600000 })).toMatchObject({ fetched: 0 });
+    expect(feedCalls()).toBe(before);
+    vi.restoreAllMocks();
+  });
+  it('counts retries against the request limit and saves progress when it runs out', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    const pages = Object.fromEntries(Array.from({ length: 10 }, (_, n) => [`https://www.revrobotics.com/p${n}/`, product(`Part ${n}`, `REV-21-000${n}`)]));
+    const base = site('rev', pages);
+    const limited = new Set<string>();
+    // Each product page answers 429 once, then succeeds.
+    const fetcher = vi.fn(async (url: string) => url.includes('/p') && !limited.has(url) ? (limited.add(url), new Response('slow', { status: 429, headers: { 'retry-after': '0' } })) : base(url));
+    await run('rev', kv, fetcher, { maxRequests: 9 }).catch(() => undefined);
+    expect(fetcher.mock.calls.length).toBeLessThanOrEqual(9);
+    // Pages fetched before the limit were kept and the crawl resumes from there.
+    const crawl = json<{ urlIndex: number; batches: number }>(kv, 'cat:rev:crawl');
+    expect(crawl.urlIndex).toBeGreaterThan(0);
+    expect(crawl.batches).toBe(1);
+    vi.restoreAllMocks();
+  });
+  it('respects a robots.txt rule against the feed', async () => {
+    quiet();
+    await expect(run('andymark', new MemoryKv(), shopify('andymark', [], 'User-agent: *\nDisallow: /products.json'))).rejects.toThrow('robots.txt disallows the product feed');
     vi.restoreAllMocks();
   });
 });

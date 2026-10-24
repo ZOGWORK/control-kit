@@ -95,17 +95,22 @@ Failed parts are also shown in the app. If every part fails, no ZIP is produced 
 
 ## Vendor catalog refresh
 
-Five staggered Worker crons crawl the vendors' public product sitemaps every two hours: goBILDA at :00, ServoCity at :12, AndyMark at :24, REV at :36, and Pitsco at :48. Each run respects `robots.txt` and fetches at most 40 product pages, at no more than two requests per second. This keeps each run within [Cloudflare's 50-subrequest free-plan limit](https://developers.cloudflare.com/changelog/post/2026-02-11-subrequests-limit/).
+Five staggered Worker crons run every hour: goBILDA at :00, ServoCity at :12, AndyMark at :24, REV at :36, and Pitsco at :48. Each run respects `robots.txt` and stays within [Cloudflare's 50-subrequest free-plan limit](https://developers.cloudflare.com/changelog/post/2026-02-11-subrequests-limit/).
 
-**Parsing.** Each product page yields one record per purchasable SKU:
-- Shopify pages (AndyMark, Pitsco): from the page's variant list, with a variant-specific link.
+- **AndyMark and Pitsco** are Shopify stores. A run reads up to four pages of the store's public `/products.json` feed, 250 products each, with every variant's SKU, price, and availability. A full catalog takes two runs (AndyMark: 8 pages, 6,255 SKUs; Pitsco: 6 pages, 1,625 SKUs, as of 2026-10-24). Fetching their product pages one by one drew HTTP 429 responses.
+- **goBILDA, ServoCity, and REV** are BigCommerce stores with no public feed. A run fetches at most 40 product pages from the product sitemap, at no more than two requests per second. A first full crawl takes about 60 runs for goBILDA (2,387 pages), 130 for ServoCity (5,152), and 10 for REV (390).
+
+A rate-limited request (HTTP 429) is retried twice after the vendor's `Retry-After`, at most 10 seconds, before the run stops and resumes next hour.
+
+**Parsing.** The Shopify feed yields one record per variant with a SKU, linked to that variant. Each product page yields one record per purchasable SKU:
+- Shopify pages: from the page's variant list, with a variant-specific link (kept for pages; the crawl now uses the feed).
 - BigCommerce family pages (goBILDA, ServoCity, REV): from their child rows.
 - Otherwise: from Product JSON-LD.
 
 A record must carry a real vendor SKU; none is derived from a name. A pack size is recorded only with its evidence, such as `variant label "25 Pack"`. Pages that are redirect stubs, lack product data, or lack a SKU are skipped and counted by reason. A page whose fetch fails holds the crawl position for up to three runs, then is skipped, so one bad page cannot stall a vendor.
 
 **Storage and publication.** Each run appends its records as one batch and updates the generation's SKU/name index, so a run costs about five KV writes regardless of catalog size. [Free Workers KV allows 1,000 writes per day](https://developers.cloudflare.com/kv/platform/limits/).
-- What a run writes becomes visible on the **next** run, two hours later. That gives KV time to propagate everywhere before any scan reads it.
+- What a run writes becomes visible on the **next** run, an hour later. That gives KV time to propagate everywhere before any scan reads it.
 - The **first** crawl goes live in parts this way and is labeled partial until it finishes.
 - **Later** crawls build a new generation while the last complete one stays live. Scans switch to the new generation only when it is complete. The previous generation is kept for a day for rollback, then deleted in bounded steps.
 
