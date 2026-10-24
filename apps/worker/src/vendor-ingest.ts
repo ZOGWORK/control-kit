@@ -161,10 +161,20 @@ export function applyPackEvidence(record: VendorRecord, packInfo: string | null 
   if (labelsEveryPack.includes(record.vendorId)) return { ...record, packSize: 1, packSizeVerified: true, packEvidence: 'sold individually: no pack wording, and this vendor names every multi-unit product' };
   return record;
 }
-/** BigCommerce product custom fields as the page embeds them: `{"name":"Pack Info","value":"25 Pack"}`, JSON-escaped. */
+/**
+ * A BigCommerce product custom field such as `{"name":"Pack Info","value":"25 Pack"}`, which pages embed as JSON, often
+ * inside an escaped string. Each small object that mentions a pack is parsed, so spacing and key order do not matter.
+ */
 function packInfoField(html: string) {
-  const match = html.match(/\\?"name\\?":\\?"Pack (?:Info|Qty|Quantity|Size)\\?",\\?"value\\?":\\?"([^"\\]{1,40})/i);
-  return match ? match[1].trim() : null;
+  const text = html.replace(/\\"/g, '"');
+  for (const [candidate] of text.matchAll(/\{[^{}]{0,300}\}/g)) {
+    if (!/pack/i.test(candidate)) continue;
+    try {
+      const field = JSON.parse(candidate) as { name?: unknown; value?: unknown };
+      if (typeof field.name === 'string' && /^pack (?:info|qty|quantity|size)$/i.test(field.name.trim()) && typeof field.value === 'string' && field.value.trim()) return field.value.trim();
+    } catch { /* Not a JSON object; keep looking. */ }
+  }
+  return null;
 }
 
 type FeedProduct = { title?: string; handle?: string; product_type?: string; variants?: Array<{ id?: number; title?: string; sku?: string | null; price?: string | number; available?: boolean }> };

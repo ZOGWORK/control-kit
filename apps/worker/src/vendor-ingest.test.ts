@@ -69,6 +69,9 @@ describe('vendor product page parsing', () => {
     const field = '<script>var BCData = {"product_attributes":{"custom_fields":"[{\\"id\\":\\"11069\\",\\"name\\":\\"Pack Info\\",\\"value\\":\\"25 Pack\\"}]"}};</script>';
     const screw = parseProductPage('servocity', 'https://www.servocity.com/screw/', jsonld('6-32 x 0.750" Zinc-Plated Socket Head Machine Screw', '632120') + field, at).records[0];
     expect(screw).toMatchObject({ packSize: 25, packSizeVerified: true, packEvidence: 'product field "Pack Info: 25 Pack"' });
+    // Spacing and key order in the embedded JSON do not matter.
+    const spaced = '<script>var BCData = { "custom_fields": [ { "value": "12 Pack", "id": "1", "name": "Pack Info" } ] };</script>';
+    expect(parseProductPage('servocity', 'https://www.servocity.com/nut/', jsonld('6-32 Hex Nut', '632000') + spaced, at).records[0]).toMatchObject({ packSize: 12, packSizeVerified: true });
     const plain = parseProductPage('servocity', 'https://www.servocity.com/spacer/', jsonld('1504 Series 32mm OD Pattern Spacer (4mm Length)', '1504-0032-0040'), at).records[0];
     expect(plain).toMatchObject({ packSize: null, packSizeVerified: false });
     const cables = parseProductPage('rev', 'https://www.revrobotics.com/rev-31-1413/', jsonld('JST VH 2-pin Motor Cables', 'REV-31-1413-PK4'), at).records[0];
