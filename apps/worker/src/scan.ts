@@ -84,7 +84,8 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         const count = result.stats.totalInstances;
         emit({ type: 'progress', stage: 'Resolving parts…', current: 0, total: entries.length, instances: count });
         for (let offset = 0; offset < entries.length; offset += 6) {
-          await Promise.all(entries.slice(offset, offset + 6).map(async lines => {
+          // allSettled: a session expiry in one request must not save the ledger while sibling requests are in flight.
+          const settled = await Promise.allSettled(entries.slice(offset, offset + 6).map(async lines => {
             try {
               const path = massPath(lines[0], version);
               if (!path) { for (const line of lines) flag(line, { code: 'source-revision-unavailable', httpStatus: null }); return; }
@@ -106,6 +107,8 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
               emit({ type: 'progress', stage: 'Resolving parts…', current: completed, total: entries.length, instances: count });
             }
           }));
+          const failure = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+          if (failure) throw failure.reason;
         }
         result.missingMetadata = [...result.lines, ...result.suppressed].filter(line => line.missingMetadataReason !== null);
         emit({ type: 'progress', stage: 'Matching vendors…', current: 0, total: result.lines.length, instances: count });

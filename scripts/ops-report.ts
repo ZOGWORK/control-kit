@@ -10,8 +10,17 @@ const appState = 'c3ef1ad4a11a47f1899c2b63e7a0c3b6';
 const days = Number(process.argv[process.argv.indexOf('--days') + 1]) || 30;
 // Runs wrangler's own entry point with Node, so no shell parses the arguments on any platform.
 const wranglerBin = fileURLToPath(new URL('../apps/worker/node_modules/wrangler/bin/wrangler.js', import.meta.url));
-const wrangler = (args: string[]) => execFileSync(process.execPath, [wranglerBin, ...args, '--remote'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-const get = (namespace: string, key: string): string | null => { try { return wrangler(['kv', 'key', 'get', key, '--namespace-id', namespace]).trim() || null; } catch { return null; } };
+const wrangler = (args: string[]) => execFileSync(process.execPath, [wranglerBin, ...args, '--remote'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+/** A 404 is a missing key; any other failure (credentials, network) stops the report instead of printing zeros. */
+const get = (namespace: string, key: string): string | null => {
+  try { return wrangler(['kv', 'key', 'get', key, '--namespace-id', namespace]).trim() || null; }
+  catch (error) {
+    const output = String((error as { stderr?: unknown }).stderr ?? '') + String((error as { stdout?: unknown }).stdout ?? '');
+    if (/404: Not Found/.test(output)) return null;
+    console.error(`Could not read ${key}: wrangler failed. Check \`wrangler whoami\` and the network, then rerun.`);
+    process.exit(1);
+  }
+};
 
 console.log('Vendor catalogs');
 for (const vendor of vendors) {
@@ -30,6 +39,6 @@ for (let offset = days - 1; offset >= 0; offset--) {
   if (!raw) continue;
   const day = JSON.parse(raw);
   total += day.total;
-  console.log(`  ${date} ${String(day.total).padStart(5)} requests in ${day.operations} operations | ${JSON.stringify(day.byPurpose)} | ${JSON.stringify(day.byKind)} | status ${JSON.stringify(day.byStatus)}${Object.keys(day.errors).length ? ` | errors ${JSON.stringify(day.errors)}` : ''}`);
+  console.log(`  ${date} ${String(day.total).padStart(5)} requests (${day.retries ?? 0} retries) in ${day.operations} operations | ${JSON.stringify(day.byPurpose)} | ${JSON.stringify(day.byKind)} | status ${JSON.stringify(day.byStatus)}${Object.keys(day.errors).length ? ` | errors ${JSON.stringify(day.errors)}` : ''}`);
 }
 console.log(`  Total: ${total}. The Onshape Developer page counter remains the authoritative annual figure.`);

@@ -46,8 +46,24 @@ describe('Onshape request ledger', () => {
     profile.record({ kind: 'session-info', status: 200, retry: false });
     await persistLedger(kv, scan, now);
     await persistLedger(kv, profile, now);
+    const exported = new RequestLedger('export');
+    exported.record({ kind: 'part-stl', status: 429, retry: false });
+    exported.record({ kind: 'part-stl', status: 200, retry: true });
+    await persistLedger(kv, exported, now);
     await persistLedger(kv, new RequestLedger('export'), now);
-    expect(JSON.parse(kv.values.get('onshape-ledger:2026-10-24')!)).toEqual({ date: '2026-10-24', total: 3, operations: 2, byPurpose: { scan: 2, 'oauth-profile': 1 },
-      byKind: { 'assembly-definition': 1, 'mass-properties': 1, 'session-info': 1 }, byStatus: { 200: 2, 404: 1 }, errors: {} });
+    expect(JSON.parse(kv.values.get('onshape-ledger:2026-10-24')!)).toEqual({ date: '2026-10-24', total: 5, retries: 1, operations: 3, byPurpose: { scan: 2, 'oauth-profile': 1, export: 2 },
+      byKind: { 'assembly-definition': 1, 'mass-properties': 1, 'session-info': 1, 'part-stl': 2 }, byStatus: { 200: 3, 404: 1, 429: 1 }, errors: {} });
+  });
+  it('never overwrites a day when its aggregate cannot be read, but restarts a malformed one', async () => {
+    const kv = new MemoryKv();
+    kv.values.set('onshape-ledger:2026-10-24', JSON.stringify({ date: '2026-10-24', total: 40, retries: 2, operations: 3, byPurpose: { scan: 40 }, byKind: {}, byStatus: {}, errors: {} }));
+    const ledger = new RequestLedger('scan');
+    ledger.record({ kind: 'assembly-definition', status: 200, retry: false });
+    const failing = Object.assign(Object.create(kv) as MemoryKv, { get: async () => { throw new Error('KV unavailable'); } });
+    await expect(persistLedger(failing, ledger, new Date('2026-10-24T12:00:00Z'))).rejects.toThrow('KV unavailable');
+    expect(JSON.parse(kv.values.get('onshape-ledger:2026-10-24')!).total).toBe(40);
+    kv.values.set('onshape-ledger:2026-10-24', '{not json');
+    await persistLedger(kv, ledger, new Date('2026-10-24T12:00:00Z'));
+    expect(JSON.parse(kv.values.get('onshape-ledger:2026-10-24')!)).toMatchObject({ total: 1, operations: 1 });
   });
 });

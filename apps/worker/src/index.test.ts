@@ -293,6 +293,28 @@ describe('M2 scan stream against mock Onshape', () => {
     expect(result.missingMetadata[0].metadataIssue).toEqual({ code: 'metadata-http-error', httpStatus: 503 });
     expect(events.some(event => event.type === 'progress' && event.stage === 'Resolving parts…')).toBe(true);
   });
+  it('counts every in-flight metadata request when a session expires mid-batch', async () => {
+    const cookie = await connectedCookie();
+    const day = () => JSON.parse(env.APP_STATE.values.get(`onshape-ledger:${new Date().toISOString().slice(0, 10)}`) ?? '{"byKind":{}}').byKind['mass-properties'] ?? 0;
+    const before = day();
+    let massRequests = 0;
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const path = new URL(request.url).pathname;
+      if (path === '/oauth/token') return Response.json({ error: 'invalid_grant' }, { status: 400 });
+      if (path.endsWith('/massproperties')) {
+        massRequests++;
+        if (path.includes('/e/screws/')) return Response.json({ error: 'expired' }, { status: 401 });
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }
+      return mock.handle(request);
+    });
+    const response = await call('/api/scan?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    expect(events.at(-1)).toEqual({ type: 'session-expired' });
+    expect(massRequests).toBeGreaterThan(1);
+    expect(day() - before).toBe(massRequests);
+  });
   it('reports a failed metadata element without aborting the scan', async () => {
     const cookie = await connectedCookie();
     const response = await call('/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);

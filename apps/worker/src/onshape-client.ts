@@ -60,7 +60,7 @@ export async function countedFetch(ledger: RequestLedger, target: string | URL, 
   }
 }
 
-type DailyLedger = { date: string; total: number; byPurpose: Partial<Record<RequestPurpose, number>>; byKind: Record<string, number>; byStatus: Record<string, number>; errors: Record<string, number>; operations: number };
+type DailyLedger = { date: string; total: number; retries: number; byPurpose: Partial<Record<RequestPurpose, number>>; byKind: Record<string, number>; byStatus: Record<string, number>; errors: Record<string, number>; operations: number };
 const add = <K extends string>(target: Partial<Record<K, number>>, source: Partial<Record<K, number>>) => {
   for (const [key, value] of Object.entries(source) as Array<[K, number]>) target[key] = (target[key] ?? 0) + value;
 };
@@ -75,9 +75,14 @@ export async function persistLedger(kv: Kv, ledger: RequestLedger, now = new Dat
   if (!summary.total) return summary;
   const date = now.toISOString().slice(0, 10);
   const key = `onshape-ledger:${date}`;
-  let day: DailyLedger = { date, total: 0, byPurpose: {}, byKind: {}, byStatus: {}, errors: {}, operations: 0 };
-  try { const raw = await kv.get(key); if (raw) day = { ...day, ...JSON.parse(raw) as DailyLedger }; } catch { /* A malformed aggregate restarts the day rather than failing the user's request. */ }
+  let day: DailyLedger = { date, total: 0, retries: 0, byPurpose: {}, byKind: {}, byStatus: {}, errors: {}, operations: 0 };
+  // A failed read rejects (callers log it) so the day's history is never overwritten with one operation's counts.
+  const raw = await kv.get(key);
+  if (raw) {
+    try { day = { ...day, ...JSON.parse(raw) as DailyLedger }; } catch { /* Only a malformed aggregate restarts the day. */ }
+  }
   day.total += summary.total;
+  day.retries += summary.retries;
   day.operations++;
   add(day.byPurpose, { [ledger.purpose]: summary.total } as Partial<Record<RequestPurpose, number>>);
   add(day.byKind, summary.byKind);

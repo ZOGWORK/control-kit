@@ -110,10 +110,18 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
   });
   // KV is not a network scrape, but keep in-flight gets bounded at 20 per batch and results deterministic.
   await Promise.all(jobs);
-  result.catalogHealth = await catalogHealth(kv, staleHours, signal, cache);
+  // Health is diagnostic: a failed read leaves it absent rather than failing a scan whose BOM is complete.
+  try { result.catalogHealth = await catalogHealth(kv, staleHours, signal, cache); }
+  catch (error) {
+    if (signal?.aborted) throw error;
+    console.error('Catalog health read failed', error instanceof Error ? error.name : 'unknown');
+  }
   const used = [...new Set(result.lines.map(line => line.vendor?.vendorId).filter((id): id is VendorId => Boolean(id)))];
+  const unreadable = new Set<VendorId>();
   const snapshots = await Promise.all(used.map(async vendor => {
-    const value = await read(kv, `vendor:${vendor}:__snapshot__`, cache, signal);
+    let value: string | null;
+    try { value = await read(kv, `vendor:${vendor}:__snapshot__`, cache, signal); }
+    catch (error) { if (signal?.aborted) throw error; unreadable.add(vendor); return null; }
     if (!value) return null;
     try { return JSON.parse(value) as VendorSnapshot; } catch { return null; }
   }));
@@ -123,7 +131,8 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
   result.stats.staleVendorData = used.some((vendor, index) => {
     const snapshot = matchingSnapshot(vendor, index);
     const updatedAt = snapshot?.updatedAt ?? result.lines.find(line => line.vendor?.vendorId === vendor)?.vendor?.updatedAt;
-    return Boolean(snapshots[index] && !snapshot) || snapshot?.status === 'failed' || !updatedAt || !Number.isFinite(Date.parse(updatedAt)) || Date.now() - Date.parse(updatedAt) > staleHours * 3600000;
+    // A snapshot that could not be read cannot vouch for freshness, so the vendor is reported stale.
+    return unreadable.has(vendor) || Boolean(snapshots[index] && !snapshot) || snapshot?.status === 'failed' || !updatedAt || !Number.isFinite(Date.parse(updatedAt)) || Date.now() - Date.parse(updatedAt) > staleHours * 3600000;
   });
   return recalculatePurchasing(result);
 }
