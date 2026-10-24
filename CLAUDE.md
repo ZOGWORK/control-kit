@@ -128,7 +128,9 @@ PR 6b (workbook redesign): six sheets in the app's order (Overview, Buy list, Ma
 
 PR 6c (catalog throughput, after production showed AndyMark and Pitsco failing with HTTP 429 and no vendor published after a day):
 - **Shopify feed.** `vendorSources[v].feed` marks AndyMark and Pitsco. Their crawl reads `/products.json?limit=250&page=N` (`parseShopifyFeed`), up to `maxFeedPages` (4) pages per run, and ends at the first empty page. Crawl state reuses `Crawl`: `urlIndex` is pages read and `sitemapIndex` becomes 1 at the end. Batches, index, and publication are unchanged. A probe from Cloudflare's edge got HTTP 200 for robots, sitemap, and the feed at a gentle pace, so the 429s came from the page-by-page crawl rate, not an IP block.
-- **429 retry.** `fetchText` retries a 429 twice after `Retry-After` (capped at 10 s, default 2 s) before failing the run.
+- **429 retry.** `fetchText` retries a 429 twice after `Retry-After` (capped at 10 s, default 2 s) before failing the run. Every attempt counts against `maxRequests` (47, under the 50-subrequest limit); loops stop starting fetches at the limit, and a retry the run cannot afford ends it through the normal failure path, which saves progress.
+- **Feed safety.** A feed body without a `products` array throws; only an explicit empty list ends a crawl. A Shopify vendor's crawl saved in the old sitemap format is dropped and restarted as a feed generation (its unpublished keys are left behind; production had none, since both vendors failed before a crawl was saved).
+- **Refresh pacing.** No new crawl starts while `pointer.previous` awaits deletion, so feed vendors (which finish in two runs) refresh about once a day and every replaced generation is retired.
 - **Hourly crons.** `cronVendors` in `apps/worker/src/index.ts` maps each `wrangler.toml` cron to a vendor; a test fails if they drift. KV writes stay near 600 a day at about five per run.
 
 ## Tuning, tests, and release

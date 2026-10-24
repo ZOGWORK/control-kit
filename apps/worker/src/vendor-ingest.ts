@@ -145,7 +145,11 @@ type FeedProduct = { title?: string; handle?: string; product_type?: string; var
  */
 export function parseShopifyFeed(vendor: VendorId, body: string, updatedAt: string): { records: VendorRecord[]; skippedProducts: number; empty: boolean } {
   let products: FeedProduct[];
-  try { products = (JSON.parse(body) as { products?: FeedProduct[] }).products ?? []; } catch { throw new VendorFetchError('Vendor product feed was not JSON'); }
+  let parsed: { products?: unknown };
+  try { parsed = JSON.parse(body) as { products?: unknown }; } catch { throw new VendorFetchError('Vendor product feed was not JSON'); }
+  // Only an explicit empty list ends a crawl; any other body (an error object, `{}`) must not cut a catalog short.
+  if (!Array.isArray(parsed.products)) throw new VendorFetchError('Vendor product feed had no product list');
+  products = parsed.products as FeedProduct[];
   const origin = vendorSources[vendor].origin;
   let skippedProducts = 0;
   const records = products.flatMap(product => {
@@ -246,13 +250,16 @@ async function retirePrevious(vendor: VendorId, kv: Kv, pointer: CatalogPointer,
  * barrier that lets KV propagate the batch and index to every location before any reader is pointed at them.
  * Parse problems skip the page with a reason; network failures stop the run after saving what was fetched.
  */
-export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; maxFeedPages?: number; minRequestMs?: number; retireAfterMs?: number; now?: () => Date } = {}): Promise<VendorRun> {
+export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; maxFeedPages?: number; maxRequests?: number; minRequestMs?: number; retireAfterMs?: number; now?: () => Date } = {}): Promise<VendorRun> {
   const started = Date.now();
   const now = options.now ?? (() => new Date());
   const maxProducts = Math.max(1, Math.min(options.maxProducts ?? 40, 500));
   const minRequestMs = options.minRequestMs ?? 500;
   // Each feed page is a large JSON document (about 1.5 MB for AndyMark); four keep one run's parsing modest.
   const maxFeedPages = Math.max(1, Math.min(options.maxFeedPages ?? 4, 20));
+  // Every fetch attempt, retries included, counts against Cloudflare's 50-subrequest limit; a few are kept in reserve.
+  const maxRequests = Math.max(2, options.maxRequests ?? 47);
+  let requests = 0;
   const previousSnapshot = await json<VendorSnapshot>(kv, snapshotKey(vendor));
   let pointer = await json<CatalogPointer>(kv, pointerKey(vendor));
   let crawl = await json<Crawl>(kv, crawlKey(vendor));
@@ -264,6 +271,9 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     let response: Response;
     // A 429 is retried twice after the vendor's Retry-After (at most 10 s) before the run gives up.
     for (let attempt = 0; ; attempt++) {
+      // A retry the run cannot afford ends the run like any 429; its progress is saved and the next run resumes.
+      if (requests >= maxRequests) throw new VendorFetchError(attempt ? 'Vendor returned HTTP 429' : 'Request limit for this run reached');
+      requests++;
       try { response = await fetcher(url, { headers: { 'user-agent': userAgent, accept: 'text/html,application/json,application/xml,text/xml;q=0.9' }, signal: AbortSignal.timeout(15000) }); }
       catch (cause) { throw new VendorFetchError(`Vendor request failed (${cause instanceof Error ? cause.name : 'error'})`); }
       if (response.status !== 429) break;
@@ -339,12 +349,21 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
       console.log(JSON.stringify({ ...summary, published }));
       return summary;
     }
+    // A Shopify vendor's crawl started before the feed (a sitemap position) is dropped and restarted as a feed generation.
+    if (vendorSources[vendor].feed && crawl && !crawl.sitemaps[0]?.includes('/products.json')) crawl = null;
+    if (!crawl && pointer?.previous) {
+      // The replaced generation is still awaiting deletion; a new refresh would overwrite that record and leak its keys.
+      await writeSnapshot('ok');
+      const summary: VendorRun = { vendor, source: 'sitemap', fetched: 0, upserted: 0, skipped: 0, durationMs: Date.now() - started, complete: true };
+      console.log(JSON.stringify({ ...summary, published, waitingForRetirement: true }));
+      return summary;
+    }
     const robots = await fetchText(`${vendorSources[vendor].origin}/robots.txt`);
     if (vendorSources[vendor].feed) {
       if (!robotsAllows(robots, '/products.json')) throw new Error('robots.txt disallows the product feed');
       // Feed crawl state: urlIndex counts pages read, and sitemapIndex becomes 1 at the first empty page, which ends the crawl.
       crawl ??= { gen: crypto.randomUUID().slice(0, 8), startedAt: now().toISOString(), sitemaps: [feedUrl(vendor, 1)], sitemapIndex: 0, urlCount: 1, urlIndex: 0, batches: 0, records: 0, skipped: {}, skipSamples: [], failing: null, done: false };
-      for (let pages = 0; pages < maxFeedPages && crawl.sitemapIndex < 1; pages++) {
+      for (let pages = 0; pages < maxFeedPages && crawl.sitemapIndex < 1 && requests < maxRequests; pages++) {
         const page = crawl.urlIndex + 1;
         const feed = parseShopifyFeed(vendor, await fetchText(feedUrl(vendor, page)), now().toISOString());
         fetched++;
@@ -361,7 +380,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
         crawl = { gen: crypto.randomUUID().slice(0, 8), startedAt: now().toISOString(), sitemaps, sitemapIndex: 0, urlCount: 0, urlIndex: 0, batches: 0, records: 0, skipped: {}, skipSamples: [], failing: null, done: false };
       }
       let urls: string[] = crawl.sitemapIndex > 0 ? await json<string[]>(kv, urlsKey(vendor, crawl.gen, crawl.sitemapIndex - 1)) ?? [] : [];
-      while (fetched < maxProducts) {
+      while (fetched < maxProducts && requests < maxRequests) {
         if (crawl.urlIndex >= crawl.urlCount) {
           if (crawl.sitemapIndex >= crawl.sitemaps.length) break;
           const xml = await fetchText(crawl.sitemaps[crawl.sitemapIndex]);

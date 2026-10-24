@@ -342,6 +342,50 @@ describe('Shopify product feed (AndyMark, Pitsco)', () => {
     await expect(run('andymark', new MemoryKv(), fetcher)).rejects.toThrow('HTTP 429');
     vi.restoreAllMocks();
   });
+  it('rejects a feed response without a product list instead of ending the crawl', () => {
+    expect(() => parseShopifyFeed('pitsco', '{}', '2026-10-24T00:00:00Z')).toThrow('no product list');
+    expect(() => parseShopifyFeed('pitsco', '{"errors":"Not Found"}', '2026-10-24T00:00:00Z')).toThrow('no product list');
+    expect(parseShopifyFeed('pitsco', '{"products":[]}', '2026-10-24T00:00:00Z').empty).toBe(true);
+  });
+  it('restarts a Shopify crawl begun from the sitemap as a feed crawl', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    await kv.put('cat:andymark:crawl', JSON.stringify({ gen: 'oldgen', startedAt: '2026-10-24T00:00:00Z', sitemaps: ['https://andymark.com/sitemap_products_1.xml'], sitemapIndex: 1, urlCount: 500, urlIndex: 40, batches: 0, records: 0, skipped: {}, skipSamples: [], failing: null, done: false }));
+    const fetcher = shopify('andymark', [[feedProduct('Hub', 'hub', [{ id: 1, title: 'Default Title', sku: 'am-1001', price: '5.00', available: true }])]]);
+    expect(await run('andymark', kv, fetcher)).toMatchObject({ upserted: 1 });
+    expect(json<{ gen: string; sitemaps: string[] }>(kv, 'cat:andymark:crawl')).toMatchObject({ sitemaps: [feedUrl('andymark', 1)] });
+    expect(json<{ gen: string }>(kv, 'cat:andymark:crawl').gen).not.toBe('oldgen');
+    vi.restoreAllMocks();
+  });
+  it('waits for the replaced generation to be deleted before starting another refresh', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    const fetcher = shopify('pitsco', [[feedProduct('Motor', 'motor', [{ id: 1, title: 'Default Title', sku: '44260', price: '30.75', available: true }])]]);
+    const feedCalls = () => fetcher.mock.calls.filter(([url]) => url.includes('products.json')).length;
+    // First crawl: fetch, publish, finish. Refresh: fetch, then switch generations, keeping the old one for a day.
+    for (let n = 0; n < 4; n++) await run('pitsco', kv, fetcher, { retireAfterMs: 3600000 });
+    expect(json<CatalogPointer>(kv, pointerKey('pitsco')).previous).not.toBeNull();
+    const before = feedCalls();
+    expect(await run('pitsco', kv, fetcher, { retireAfterMs: 3600000 })).toMatchObject({ fetched: 0 });
+    expect(feedCalls()).toBe(before);
+    vi.restoreAllMocks();
+  });
+  it('counts retries against the request limit and saves progress when it runs out', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    const pages = Object.fromEntries(Array.from({ length: 10 }, (_, n) => [`https://www.revrobotics.com/p${n}/`, product(`Part ${n}`, `REV-21-000${n}`)]));
+    const base = site('rev', pages);
+    const limited = new Set<string>();
+    // Each product page answers 429 once, then succeeds.
+    const fetcher = vi.fn(async (url: string) => url.includes('/p') && !limited.has(url) ? (limited.add(url), new Response('slow', { status: 429, headers: { 'retry-after': '0' } })) : base(url));
+    await run('rev', kv, fetcher, { maxRequests: 9 }).catch(() => undefined);
+    expect(fetcher.mock.calls.length).toBeLessThanOrEqual(9);
+    // Pages fetched before the limit were kept and the crawl resumes from there.
+    const crawl = json<{ urlIndex: number; batches: number }>(kv, 'cat:rev:crawl');
+    expect(crawl.urlIndex).toBeGreaterThan(0);
+    expect(crawl.batches).toBe(1);
+    vi.restoreAllMocks();
+  });
   it('respects a robots.txt rule against the feed', async () => {
     quiet();
     await expect(run('andymark', new MemoryKv(), shopify('andymark', [], 'User-agent: *\nDisallow: /products.json'))).rejects.toThrow('robots.txt disallows the product feed');
