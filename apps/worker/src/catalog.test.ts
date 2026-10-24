@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { aggregateAssembly, applyMatchDecision, type AssemblyDefinition, type VendorRecord } from '@control-kit/shared';
 import { clearCatalogMemoryCache, enrichScan } from './catalog';
 import type { Kv } from './index';
@@ -160,5 +160,45 @@ describe('catalog KV read path and purchasing', () => {
     const old = makeResult();
     await enrichScan(old, kv);
     expect(old.stats.staleVendorData).toBe(true);
+  });
+});
+
+describe('catalog health', () => {
+  it('reports every vendor, including unpublished catalogs that no scan line matched', async () => {
+    clearCatalogMemoryCache();
+    const kv = new MemoryKv();
+    const now = new Date().toISOString();
+    kv.values.set('vendor:rev:__lastgood__', 'v1');
+    kv.values.set('vendor:rev:__snapshot__', JSON.stringify({ status: 'ok', updatedAt: now, lastRunAt: now, recordCount: 390, source: 'sitemap', version: 'v1' }));
+    kv.values.set('vendor:gobilda:__snapshot__', JSON.stringify({ status: 'failed', updatedAt: null, lastRunAt: now, recordCount: 0, source: 'sitemap', version: null, error: 'Product page contained no usable Product JSON-LD',
+      progress: { phase: 'fetch', sitemapsDone: 0, sitemapsTotal: 1, pagesDoneInSitemap: 7, pagesInSitemap: 2387, recordsCollected: 7 } }));
+    kv.values.set('vendor:andymark:__snapshot__', JSON.stringify({ status: 'ok', updatedAt: null, lastRunAt: now, recordCount: 0, source: 'sitemap', version: null, inProgress: true }));
+    const result = await enrichScan(aggregateAssembly(fixture('empty'), context, 'Empty'), kv);
+    const byVendor = Object.fromEntries(result.catalogHealth!.vendors.map(vendor => [vendor.vendorId, vendor]));
+    expect(Object.keys(byVendor)).toEqual(['gobilda', 'servocity', 'andymark', 'rev', 'pitsco']);
+    expect(byVendor.rev).toMatchObject({ state: 'published', recordCount: 390, stale: false, lastRunFailed: false });
+    expect(byVendor.gobilda).toMatchObject({ state: 'failing', recordCount: 0, error: 'Product page contained no usable Product JSON-LD', progress: { pagesDoneInSitemap: 7, pagesInSitemap: 2387 } });
+    expect(byVendor.andymark.state).toBe('building');
+    expect(byVendor.servocity.state).toBe('never-run');
+  });
+  it('completes the scan without health when a snapshot read fails', async () => {
+    clearCatalogMemoryCache();
+    const kv = catalog();
+    const failing = Object.assign(Object.create(kv) as MemoryKv, { get: async (key: string) => { if (key.endsWith('__snapshot__')) throw new Error('KV unavailable'); return kv.get(key); } });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await enrichScan(aggregateAssembly(fixture('simple'), context, 'Simple'), failing);
+      expect(result.catalogHealth).toBeUndefined();
+      expect(result.lines.length).toBeGreaterThan(0);
+      expect(log).toHaveBeenCalledWith('Catalog health read failed', 'Error');
+    } finally { log.mockRestore(); }
+  });
+  it('marks an old published catalog stale and keeps it usable after a failed refresh', async () => {
+    clearCatalogMemoryCache();
+    const kv = new MemoryKv();
+    kv.values.set('vendor:pitsco:__lastgood__', 'v1');
+    kv.values.set('vendor:pitsco:__snapshot__', JSON.stringify({ status: 'failed', updatedAt: '2026-01-01T00:00:00.000Z', lastRunAt: new Date().toISOString(), recordCount: 12, source: 'sitemap', version: 'v1', error: 'Vendor returned HTTP 503' }));
+    const result = await enrichScan(aggregateAssembly(fixture('empty'), context, 'Empty'), kv);
+    expect(result.catalogHealth!.vendors.find(vendor => vendor.vendorId === 'pitsco')).toMatchObject({ state: 'published', stale: true, lastRunFailed: true, error: 'Vendor returned HTTP 503', recordCount: 12 });
   });
 });

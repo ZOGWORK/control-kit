@@ -10,8 +10,44 @@ import type { VendorRecord } from './matching';
 export type AssemblyContext = { documentId: string; workspaceOrVersion: 'w' | 'v' | 'm'; workspaceOrVersionId: string; elementId: string };
 export type AssemblyInstance = { id: string; name: string; type: string; documentId: string; elementId: string; partId?: string; partNumber?: string; configuration?: string; fullConfiguration?: string; documentMicroversion?: string; versionId?: string; workspaceId?: string; suppressed?: boolean; isSuppressed?: boolean };
 export type AssemblyDefinition = { rootAssembly: { name?: string; instances?: AssemblyInstance[] }; subAssemblies?: Array<{ documentId: string; elementId: string; configuration?: string; documentMicroversion?: string; instances?: AssemblyInstance[] }>; parts?: Array<{ documentId: string; elementId: string; partId: string; name?: string }> };
-export type BomLine = { bomLineKey: string; name: string; description: string | null; documentId: string; elementId: string; partId: string | null; partNumber: string | null; configuration: string | null; sourceType: 'w' | 'v' | 'm' | null; sourceId: string | null; qty: number; packsToOrder: number | null; lineTotalUsd: number | null; suppressed: boolean; instancePaths: string[]; massKg: number | null; material: string | null; missingMetadataReason: string | null; vendor: VendorRecord | null; alternatives: VendorRecord[]; matchConfidence: number; matchStatus: 'unmatched' | 'possible' | 'confirmed' | 'exact' | 'rejected'; matchReasons: string[]; classification: 'commercial' | 'printed' | 'unknown'; classificationScore: number; classificationReasons: string[]; manualClassification: 'commercial' | 'printed' | null; partStudioUrl: string; unresolvedSubassembly?: boolean };
-export type ScanResult = { scanId?: string; assemblyName: string; documentId: string; elementId: string; scannedAt: string; vendorDataUpdatedAt: string | null; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
+export type BomLine = { bomLineKey: string; name: string; description: string | null; documentId: string; elementId: string; partId: string | null; partNumber: string | null; configuration: string | null; sourceType: 'w' | 'v' | 'm' | null; sourceId: string | null; qty: number; packsToOrder: number | null; lineTotalUsd: number | null; suppressed: boolean; instancePaths: string[]; massKg: number | null; material: string | null; missingMetadataReason: string | null; metadataIssue?: MetadataIssue | null; vendor: VendorRecord | null; alternatives: VendorRecord[]; matchConfidence: number; matchStatus: 'unmatched' | 'possible' | 'confirmed' | 'exact' | 'rejected'; matchReasons: string[]; classification: 'commercial' | 'printed' | 'unknown'; classificationScore: number; classificationReasons: string[]; manualClassification: 'commercial' | 'printed' | null; partStudioUrl: string; unresolvedSubassembly?: boolean };
+/** Why a line lacks data. Codes are stable for UI, export, and diagnostics; the user-facing text lives in `metadataIssueText`. */
+export type MetadataIssueCode = 'unresolved-subassembly' | 'source-revision-unavailable' | 'mass-body-missing' | 'metadata-http-error' | 'metadata-request-failed';
+export type MetadataIssue = { code: MetadataIssueCode; httpStatus: number | null };
+export const metadataIssueText: Record<MetadataIssueCode, string> = {
+  'unresolved-subassembly': 'Subassembly has no resolvable children',
+  'source-revision-unavailable': 'Source revision unavailable for linked document',
+  'mass-body-missing': 'Mass properties unavailable for this part',
+  'metadata-http-error': 'Part metadata could not be read',
+  'metadata-request-failed': 'Part metadata could not be read',
+};
+/** Counted outbound Onshape requests for one operation, including retries. Never contains URLs or IDs. */
+export type OnshapeRequestSummary = { total: number; retries: number; byKind: Record<string, number>; byStatus: Record<string, number>; errors: Record<string, number> };
+export type MetadataIssueGroup = { code: MetadataIssueCode; httpStatus: number | null; sourceType: BomLine['sourceType']; lines: number; suppressedLines: number };
+export type ScanDiagnostics = { onshapeRequests: OnshapeRequestSummary | null; metadataIssues: MetadataIssueGroup[] };
+
+/** Groups issues by code, status, and source type so a scan's failure distribution can be read without part names. */
+export function summarizeMetadataIssues(lines: BomLine[]): MetadataIssueGroup[] {
+  const groups = new Map<string, MetadataIssueGroup>();
+  for (const line of lines) {
+    if (!line.metadataIssue) continue;
+    const key = `${line.metadataIssue.code}:${line.metadataIssue.httpStatus ?? ''}:${line.sourceType ?? ''}`;
+    const group = groups.get(key) ?? { code: line.metadataIssue.code, httpStatus: line.metadataIssue.httpStatus, sourceType: line.sourceType, lines: 0, suppressedLines: 0 };
+    if (line.suppressed) group.suppressedLines++; else group.lines++;
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) => (b.lines + b.suppressedLines) - (a.lines + a.suppressedLines) || a.code.localeCompare(b.code));
+}
+/**
+ * Per-vendor catalog state. `published` means scans can match against it; `building` and `failing` mean no
+ * usable catalog exists yet, so an empty Vendor column says nothing about whether a supplier sells the part.
+ */
+export type VendorHealthState = 'published' | 'building' | 'failing' | 'never-run';
+export type VendorHealth = { vendorId: VendorRecord['vendorId']; state: VendorHealthState; recordCount: number; updatedAt: string | null; lastRunAt: string | null; stale: boolean; lastRunFailed: boolean; error: string | null;
+  progress: { sitemapsDone: number; sitemapsTotal: number; pagesDoneInSitemap: number; pagesInSitemap: number; recordsCollected: number } | null };
+export type CatalogHealth = { checkedAt: string; vendors: VendorHealth[] };
+export const catalogUsable = (health: CatalogHealth | undefined, vendorId: VendorRecord['vendorId']) => health?.vendors.find(vendor => vendor.vendorId === vendorId)?.state === 'published';
+export type ScanResult = { scanId?: string; diagnostics?: ScanDiagnostics; catalogHealth?: CatalogHealth; assemblyName: string; documentId: string; elementId: string; scannedAt: string; vendorDataUpdatedAt: string | null; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
 export type MatchDecision = { status: 'confirmed' | 'rejected'; vendorId: VendorRecord['vendorId']; normalizedSku: string };
 
 export function updatePurchasing(line: BomLine): BomLine {
