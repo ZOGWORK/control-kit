@@ -126,7 +126,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   if (url.pathname === '/api/catalog/health' && request.method === 'GET') {
     // Public vendor crawl state only: counts, timestamps, and our own error text. No user data or credentials.
-    return reply(await catalogHealth(env.VENDOR_CATALOG, Number(env.VENDOR_STALE_HOURS ?? 24)));
+    return reply(await catalogHealth(env.VENDOR_CATALOG, Number(env.VENDOR_STALE_HOURS ?? 336)));
   }
   if (url.pathname === '/api/settings' && request.method === 'GET') {
     const current = await getSession(request, env);
@@ -192,7 +192,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       return value === 'commercial' || value === 'printed' ? value : null;
     };
     const scanId = random();
-    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 24), settings, getOverride,
+    return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 336), settings, getOverride,
       async result => { result.scanId = scanId; await env.APP_STATE.put(`scan:${current.data.user.id}:${scanId}`, JSON.stringify(result), { expirationTtl: 3600 }); },
       { summary: () => ledger.summary(), finish: () => persistLedger(env.APP_STATE, ledger) });
   }
@@ -286,7 +286,7 @@ export default {
     return result;
   },
   scheduled(event: { cron: string }, env: Env, context: { waitUntil(promise: Promise<unknown>): void }) {
-    const vendor = ({ '0 */6 * * *': 'gobilda', '12 */6 * * *': 'servocity', '24 */6 * * *': 'andymark', '36 */6 * * *': 'rev', '48 */6 * * *': 'pitsco' } as const)[event.cron as '0 */6 * * *'];
+    const vendor = ({ '0 */2 * * *': 'gobilda', '12 */2 * * *': 'servocity', '24 */2 * * *': 'andymark', '36 */2 * * *': 'rev', '48 */2 * * *': 'pitsco' } as const)[event.cron as '0 */2 * * *'];
     if (vendor) context.waitUntil(runVendor(vendor, env.VENDOR_CATALOG));
   },
 };

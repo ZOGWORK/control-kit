@@ -71,9 +71,10 @@ test('mock-backed scan downloads the fixture BOM workbook', async ({ page }) => 
 
 test('an unpublished vendor catalog shows a warning even when no line matched', async ({ page }) => {
   const now = new Date().toISOString();
-  const vendor = (vendorId: string, state: string) => ({ vendorId, state, recordCount: state === 'published' ? 10 : 0, updatedAt: state === 'published' ? now : null, lastRunAt: now, stale: false, lastRunFailed: state === 'failing', error: state === 'failing' ? 'Vendor returned HTTP 503' : null, progress: null });
+  const vendor = (vendorId: string, state: string, complete = state === 'published') => ({ vendorId, state, complete, skipped: {}, recordCount: state === 'published' ? 10 : 0, updatedAt: state === 'published' ? now : null, lastRunAt: now, stale: false, lastRunFailed: state === 'failing', error: state === 'failing' ? 'Vendor returned HTTP 503' : null, progress: null });
   const unmatched = { ...result, lines: result.lines.map(line => ({ ...line, vendor: null, matchStatus: 'unmatched' })),
     catalogHealth: { checkedAt: now, vendors: [vendor('gobilda', 'failing'), vendor('servocity', 'building'), vendor('andymark', 'building'), vendor('rev', 'published'), vendor('pitsco', 'never-run')] } };
+  const partial = { ...unmatched, catalogHealth: { ...unmatched.catalogHealth, vendors: unmatched.catalogHealth.vendors.map(item => item.vendorId === 'rev' ? { ...item, complete: false } : item) } };
   await page.route('**/api/session', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ connected: true, user: { id: 'fixture', name: 'Test User' } }) }));
   await page.route('**/api/settings', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ teamNumber: null }) }));
   await page.route('**/api/scan?**', route => route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: `${JSON.stringify({ type: 'result', result: unmatched })}\n` }));
@@ -83,4 +84,9 @@ test('an unpublished vendor catalog shows a warning even when no line matched', 
   await expect(warning).toBeVisible();
   await expect(warning).toContainText('goBILDA, ServoCity, AndyMark, Pitsco');
   await expect(warning).not.toContainText('REV');
+  await page.unroute('**/api/scan?**');
+  await page.route('**/api/scan?**', route => route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: `${JSON.stringify({ type: 'result', result: partial })}
+` }));
+  await page.getByRole('button', { name: 'Scan Again' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Partial catalogs' })).toContainText('REV (10 products so far)');
 });

@@ -1,5 +1,5 @@
 export const productName = 'Control Kit';
-export { classifyMatchScore, findBestMatch, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates } from './matching';
+export { classifyMatchScore, findBestMatch, nameSimilarity, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates } from './matching';
 export { applyClassificationChoice, classificationForScore, classificationIdentity, classifyLine, classifyScan, printCategory } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, UserSettings } from './classifier';
 export type { VendorId, VendorRecord, MatchResult } from './matching';
@@ -43,7 +43,8 @@ export function summarizeMetadataIssues(lines: BomLine[]): MetadataIssueGroup[] 
  * usable catalog exists yet, so an empty Vendor column says nothing about whether a supplier sells the part.
  */
 export type VendorHealthState = 'published' | 'building' | 'failing' | 'never-run';
-export type VendorHealth = { vendorId: VendorRecord['vendorId']; state: VendorHealthState; recordCount: number; updatedAt: string | null; lastRunAt: string | null; stale: boolean; lastRunFailed: boolean; error: string | null;
+/** `complete` is false while the first crawl is still publishing as it goes; coverage is partial until then. */
+export type VendorHealth = { vendorId: VendorRecord['vendorId']; state: VendorHealthState; complete: boolean; recordCount: number; updatedAt: string | null; lastRunAt: string | null; stale: boolean; lastRunFailed: boolean; error: string | null; skipped: Record<string, number>;
   progress: { sitemapsDone: number; sitemapsTotal: number; pagesDoneInSitemap: number; pagesInSitemap: number; recordsCollected: number } | null };
 export type CatalogHealth = { checkedAt: string; vendors: VendorHealth[] };
 export const catalogUsable = (health: CatalogHealth | undefined, vendorId: VendorRecord['vendorId']) => health?.vendors.find(vendor => vendor.vendorId === vendorId)?.state === 'published';

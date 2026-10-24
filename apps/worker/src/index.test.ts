@@ -2,8 +2,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, { type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
 import { massPath } from './scan';
-import { aggregateAssembly, classificationIdentity } from '@control-kit/shared';
+import { aggregateAssembly, classificationIdentity, type VendorId } from '@control-kit/shared';
 import { clearCatalogMemoryCache } from './catalog';
+import { batchKey, indexKey, pointerKey } from './vendor-ingest';
 import { readFileSync } from 'node:fs';
 import { strFromU8, unzipSync } from 'fflate';
 
@@ -149,8 +150,10 @@ describe('M3 match decisions against local catalog KV', () => {
     clearCatalogMemoryCache();
     const seed = JSON.parse(readFileSync(new URL('../../../fixtures/vendors/seed.json', import.meta.url), 'utf8')) as Array<{ vendorId: string; normalizedSku: string; normalizedName: string }>;
     const bearing = seed.find(record => record.vendorId === 'servocity')!;
-    env.VENDOR_CATALOG.values.set(`vendor:${bearing.vendorId}:${bearing.normalizedSku}`, JSON.stringify(bearing));
-    env.VENDOR_CATALOG.values.set('vendor-index:bearing', JSON.stringify([`${bearing.vendorId}:${bearing.normalizedSku}`]));
+    const vendor = bearing.vendorId as VendorId;
+    env.VENDOR_CATALOG.values.set(pointerKey(vendor), JSON.stringify({ gen: 'g1', complete: true, records: 1, publishedAt: new Date().toISOString(), completedAt: new Date().toISOString(), previous: null }));
+    env.VENDOR_CATALOG.values.set(batchKey(vendor, 'g1', 0), JSON.stringify([bearing]));
+    env.VENDOR_CATALOG.values.set(indexKey(vendor, 'g1'), JSON.stringify([[bearing.normalizedSku, bearing.normalizedName, 0]]));
     const start = await call('/oauth/start?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
     const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
     const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];

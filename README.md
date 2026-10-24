@@ -60,13 +60,29 @@ The deterministic classifier scores each active BOM line using print keywords, c
 
 ## Vendor catalog refresh
 
-Five staggered Worker crons refresh public product sitemaps every six hours: goBILDA at :00, ServoCity at :12, AndyMark at :24, REV at :36, and Pitsco at :48. Each run fetches at most 40 products, at no more than two requests per second per vendor, and resumes from a KV cursor on the next run. This keeps external fetches within [Cloudflare's 50-subrequest free-plan limit](https://developers.cloudflare.com/changelog/post/2026-02-11-subrequests-limit/). A completed catalog is published by updating one last-good version pointer after all versioned records and indexes exist. Initial backfill can take many cron cycles, especially for ServoCity's large sitemap; until then, no partial version appears in scans. [Free Workers KV allows 1,000 writes per day](https://developers.cloudflare.com/kv/platform/limits/), so monitor quota and cursor progress during backfill. The separate snapshot status records success or failure on every run. A stale-data warning appears when a used vendor's last complete refresh is older than `VENDOR_STALE_HOURS` or its latest refresh failed. `GET /api/catalog/health` and `node --experimental-strip-types scripts/ops-report.ts` report each vendor's state (published, building, failing, or never run), progress, staleness, and last error. Every scan carries the same health, and the app warns when a vendor catalog is unpublished or stale, even if no line matched. As of 2026-10-24 no vendor has published; see [docs/baseline-2026-10-24.md](docs/baseline-2026-10-24.md).
+Five staggered Worker crons crawl the vendors' public product sitemaps every two hours: goBILDA at :00, ServoCity at :12, AndyMark at :24, REV at :36, and Pitsco at :48. Each run respects `robots.txt` and fetches at most 40 product pages, at no more than two requests per second. This keeps each run within [Cloudflare's 50-subrequest free-plan limit](https://developers.cloudflare.com/changelog/post/2026-02-11-subrequests-limit/).
 
-The owner-only actions and missing inputs are listed in [MORNING.md](MORNING.md). No secret belongs in chat or Git.
+**Parsing.** Each product page yields one record per purchasable SKU:
+- Shopify pages (AndyMark, Pitsco): from the page's variant list, with a variant-specific link.
+- BigCommerce family pages (goBILDA, ServoCity, REV): from their child rows.
+- Otherwise: from Product JSON-LD.
+
+A record must carry a real vendor SKU; none is derived from a name. A pack size is recorded only with its evidence, such as `variant label "25 Pack"`. Pages that are redirect stubs, lack product data, or lack a SKU are skipped and counted by reason. A page whose fetch fails holds the crawl position for up to three runs, then is skipped, so one bad page cannot stall a vendor.
+
+**Storage and publication.** Each run appends its records as one batch and updates the generation's SKU/name index, so a run costs about five KV writes regardless of catalog size. [Free Workers KV allows 1,000 writes per day](https://developers.cloudflare.com/kv/platform/limits/).
+- What a run writes becomes visible on the **next** run, two hours later. That gives KV time to propagate everywhere before any scan reads it.
+- The **first** crawl goes live in parts this way and is labeled partial until it finishes.
+- **Later** crawls build a new generation while the last complete one stays live. Scans switch to the new generation only when it is complete. The previous generation is kept for a day for rollback, then deleted in bounded steps.
+
+**Health.** The snapshot records success or failure on every run. `GET /api/catalog/health` and `node --experimental-strip-types scripts/ops-report.ts` report each vendor's state: published (complete or partial), building, failing, or never run. They also report progress, skipped pages, staleness, and the last error. Every scan carries the same health. The app warns when a catalog is unpublished, partial, stale, or failing, even if no line matched. A matched price is stale after `VENDOR_STALE_HOURS` (336, two weeks), which allows for a full refresh cycle.
+
+**Matching.** A scan tries exact SKUs first: the CAD part number in any format, then catalog-number-like tokens in the part name. A SKU found at one vendor is an exact match and forces Buy. The same SKU and product name at several vendors is also exact, because ServoCity resells goBILDA products under goBILDA SKUs; the best-stocked, then cheapest, seller is chosen and the others are named. A SKU that names different products at different vendors, or any name similarity, only produces a *possible* match. That match has no price until a person confirms it, and confirmations survive rescans and catalog refreshes. Pack size and price must also be verified for a line total; otherwise the line stays blank and out of the known subtotal.
 
 ## Onshape request budget
 
 Until the FTC Control Kit extension is public, the owner's Educator plan allows 2,500 Onshape API requests per year. The Worker counts every outbound Onshape request, including retries, and stores daily totals in KV. Each scan also reports its own count in `diagnostics.onshapeRequests`. Tests and CI use mock Onshape only. Run `node --experimental-strip-types scripts/ops-report.ts` for the recorded totals; development requests are logged in [docs/onshape-request-ledger.md](docs/onshape-request-ledger.md).
+
+The owner-only actions and missing inputs are listed in [MORNING.md](MORNING.md). No secret belongs in chat or Git.
 
 ## Control Point integration status
 

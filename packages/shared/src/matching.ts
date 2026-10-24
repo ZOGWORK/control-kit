@@ -12,8 +12,16 @@ export type VendorRecord = {
   stock: 'in' | 'out' | 'low' | 'unknown';
   stockQty: number | null;
   category: string;
-  updatedAt: string;
+  updatedAt: string; // When the product page was fetched; price and stock are as of this time.
   source: 'feed' | 'sitemap' | 'scrape';
+  /** Exact product text that established `packSize`, e.g. `variant label "25 Pack"`. Null when unverified. */
+  packEvidence?: string | null;
+  /** Which page structure produced the record. */
+  parser?: 'jsonld' | 'shopify-variant' | 'bigcommerce-variant';
+  /** Page that was fetched, when it differs from the canonical product `url`. */
+  sourceUrl?: string;
+  /** Catalog generation the record was published in. */
+  catalogVersion?: string;
 };
 export type MatchResult = { vendor: VendorRecord | null; confidence: number; status: 'unmatched' | 'possible' | 'confirmed' | 'exact'; reasons: string[] };
 
@@ -36,14 +44,37 @@ export function normalizeName(value: string): string {
     .join(' ');
 }
 
+/**
+ * SKU candidates from the explicit part number (trusted in any format, including numeric-only) and from name tokens.
+ * A name token counts only when it looks like a catalog number: letters with 3+ digits (REV-41-1600, am-5185a), or
+ * 2+ dash-separated digit groups totalling 8+ digits (goBILDA 5203-2402-0019). Bare numbers and dimensions do not.
+ */
 export function skuCandidates(name: string, partNumber?: string | null): string[] {
   const tokens = name.match(/\b[a-z0-9]+(?:[-_][a-z0-9]+)*\b/gi) ?? [];
-  const values = [partNumber ?? '', ...tokens.filter(token => /\d{3,}/.test(token) && /[a-z]/i.test(token) && !/^\d+(?:mm|cm|in|ft|kg|g|lb|oz)$/i.test(token))];
-  return [...new Set(values.filter(Boolean).map(value => normalizeSku(value)))];
+  const looksLikeSku = (token: string) => !/^\d+(?:\.\d+)?(?:mm|cm|in|ft|kg|g|lb|oz|rpm|v)$/i.test(token)
+    && ((/\d{3,}/.test(token) && /[a-z]/i.test(token)) || (/^\d+(?:[-_]\d+)+$/.test(token) && token.replace(/\D/g, '').length >= 8));
+  const values = [partNumber ?? '', ...tokens.filter(looksLikeSku)];
+  return [...new Set(values.filter(Boolean).map(value => normalizeSku(value)).filter(Boolean))];
 }
 
+/**
+ * A name score can only nominate a candidate. `confirmed` is reserved for a person's decision (MatchDecision),
+ * so a fuzzy match never reaches purchasing totals on its own, however high it scores.
+ */
 export function classifyMatchScore(score: number): MatchResult['status'] {
-  return score >= 0.72 ? 'confirmed' : score >= 0.50 ? 'possible' : 'unmatched';
+  return score >= 0.50 ? 'possible' : 'unmatched';
+}
+
+const numberTokens = (normalizedName: string) => new Set(normalizedName.split(' ').filter(token => /\d/.test(token)));
+/** Two listings name the same product only if their names agree and every size or number token matches (M3 is not M4). */
+function sameProductName(a: VendorRecord, b: VendorRecord) {
+  const left = numberTokens(a.normalizedName || normalizeName(a.name));
+  const right = numberTokens(b.normalizedName || normalizeName(b.name));
+  return left.size === right.size && [...left].every(token => right.has(token)) && candidateScore(a.name, b).score >= 0.5;
+}
+/** The matcher's own name score, for ranking catalog index entries before their records are read. */
+export function nameSimilarity(name: string, normalizedName: string) {
+  return candidateScore(name, { name: normalizedName, normalizedName } as VendorRecord).score;
 }
 
 function candidateScore(name: string, vendor: VendorRecord) {
@@ -66,9 +97,21 @@ function candidateScore(name: string, vendor: VendorRecord) {
 export function findBestMatch(line: { name: string; partNumber?: string | null }, candidates: VendorRecord[]): MatchResult {
   const skus = skuCandidates(line.name, line.partNumber);
   const exact = candidates.filter(vendor => skus.some(sku => normalizeSku(sku, vendor.vendorId) === vendor.normalizedSku));
-  if (exact.length) {
+  const exactVendors = new Set(exact.map(vendor => vendor.vendorId));
+  if (exactVendors.size === 1) {
     const vendor = exact.sort(preferStockThenPrice)[0];
-    return { vendor, confidence: 1, status: 'exact', reasons: ['exact normalized SKU'] };
+    const from = line.partNumber && normalizeSku(line.partNumber, vendor.vendorId) === vendor.normalizedSku ? 'part number' : 'part name';
+    return { vendor, confidence: 1, status: 'exact', reasons: [`exact SKU ${vendor.sku} from ${from}`] };
+  }
+  if (exactVendors.size > 1) {
+    const ranked = exact.sort(preferStockThenPrice);
+    const vendor = ranked[0];
+    // goBILDA products are also sold by ServoCity under the same SKU: one product, several sellers. Only when the
+    // product names disagree is the shared number ambiguous, and then a person must say which product it is.
+    const sameProduct = ranked.every(other => sameProductName(vendor, other));
+    const others = [...exactVendors].filter(id => id !== vendor.vendorId).join(', ');
+    if (sameProduct) return { vendor, confidence: 1, status: 'exact', reasons: [`exact SKU ${vendor.sku}; also sold by ${others}`] };
+    return { vendor, confidence: 0.9, status: 'possible', reasons: [`SKU ${vendor.sku} names different products at ${[...exactVendors].join(', ')}; confirm which one`] };
   }
   const ranked = candidates.map(vendor => ({ vendor, ...candidateScore(line.name, vendor) }));
   const eligible = ranked.filter(candidate => candidate.score >= 0.5);
