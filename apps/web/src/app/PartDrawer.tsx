@@ -38,7 +38,8 @@ function PartPicture({ kit, line }: { kit: ControlKit; line: BomLine }) {
     kit.partPicture(line, controller.signal).then(value => { url = value; setState({ url: value, error: null }); })
       .catch(error => { if (!controller.signal.aborted) setState({ url: null, error: error instanceof Error ? error.message : 'No picture' }); });
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
-  }, [line.bomLineKey]);
+    // A rescan can keep the same line key, so the picture follows the scan shown, not just the part.
+  }, [line.bomLineKey, kit.result?.scanId]);
   return <figure className="part-picture" aria-busy={!state.url && !state.error}>
     {state.url ? <img src={state.url} alt={`${line.name}, as modelled in Onshape`} /> : <span className="muted small">{state.error ?? 'Drawing the part…'}</span>}
   </figure>;

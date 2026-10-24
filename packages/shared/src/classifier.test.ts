@@ -76,6 +76,7 @@ describe('manufacturing disposition', () => {
     // Fasteners need no decision: they are listed as stock hardware, not suggested for Buy one by one.
     for (const name of ['5103 Gearbox Base Mounting Screw M3 x 5mm length SHCS)_91290A110', 'M4 x 0.7mm Locknut', 'Roller E-Clip', 'Button Head Screw M4 x 12'])
       expect(suggested(name, { documentId: 'library' })).toMatchObject({ disposition: 'hardware', reviewReason: null });
+    for (const name of ['Nut Holder', 'Screw Mount Bracket']) expect(suggested(name).disposition).toBe('review');
     expect(suggested('8mm REX Ball Bearing', { documentId: 'library' })).toMatchObject({ suggestedDisposition: 'buy', reviewReason: 'Looks like standard hardware: confirm it is bought' });
     expect(suggested('80 Tooth x 9mm HTD5 Belt').suggestedDisposition).toBe('buy');
     // Print wording still wins over hardware wording, and a plain plate still goes to 2D-cut review.

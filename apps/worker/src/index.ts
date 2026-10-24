@@ -262,7 +262,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!line) return reply({ error: 'This part is not in your latest scan.' }, 404);
     const ledger = new RequestLedger('preview');
     try {
-      const png = await linePreview(line, previewCacheKey(current.data.user.id, result, line, await lineKeyDigest(`${line.bomLineKey}|${line.purchasedAssembly ? 'assembly' : 'part'}`)), env.APP_STATE, onshapeFetcher(env, current, ledger, { remaining: 3 }), env.ONSHAPE_API_VERSION);
+      const png = await linePreview(line, previewCacheKey(current.data.user.id, result, line, await lineKeyDigest(`${line.bomLineKey}|${line.purchasedAssembly ? 'assembly' : 'part'}`)), env.APP_STATE, onshapeFetcher(env, current, ledger, { remaining: 3 }), env.ONSHAPE_API_VERSION, result.diagnostics?.revision);
       return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png', 'cache-control': 'private, max-age=3600' } });
     } catch (error) {
       if (error instanceof SessionExpiredError) return reply({ error: 'Reconnect Onshape.' }, 401);

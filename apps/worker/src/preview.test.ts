@@ -22,6 +22,9 @@ const png = btoa('PNG-BYTES');
 describe('part pictures', () => {
   it('asks Onshape for the part, or for a product listed as one unit its whole assembly, at the scanned revision', () => {
     expect(previewPath(part, 'v9')).toBe('/api/v9/parts/d/doc1/w/w1/e/ps1/partid/JHD/shadedviews?viewMatrix=isometric&pixelSize=0&outputWidth=480&outputHeight=320&configuration=len%3D10');
+    // With the scanned revision, a workspace part is drawn as it was scanned, not as edited since.
+    expect(previewPath(part, 'v9', { type: 'm', id: 'micro1' })).toMatch(/^\/api\/v9\/parts\/d\/doc1\/m\/micro1\/e\/ps1\/partid\/JHD\//);
+    expect(previewPath(motor, 'v9', { type: 'm', id: 'micro1' })).toMatch(/\/d\/gobilda\/v\/v9\//);
     expect(previewPath(motor, 'v9')).toBe('/api/v9/assemblies/d/gobilda/v/v9/e/motor/shadedviews?viewMatrix=isometric&pixelSize=0&outputWidth=480&outputHeight=320');
     expect(previewPath({ ...part, sourceType: null } as BomLine, 'v9')).toBeNull();
   });

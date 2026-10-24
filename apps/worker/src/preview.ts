@@ -6,11 +6,13 @@ const size = { outputWidth: '480', outputHeight: '320' };
 
 /**
  * Onshape's shaded-view request for one line, at the revision the scan read: the part itself, or for a product
- * listed as one unit, its whole assembly. Null when the line has no readable source revision.
+ * listed as one unit, its whole assembly. Null when the line has no readable source revision. A workspace part is drawn
+ * at the microversion the scan read (`scanned`), so an edit made after the scan cannot change its picture.
  */
-export function previewPath(line: BomLine, apiVersion: string) {
+export function previewPath(line: BomLine, apiVersion: string, scanned?: { type: 'v' | 'm'; id: string } | null) {
   if (!line.sourceType || !line.sourceId || (!line.purchasedAssembly && !line.partId)) return null;
-  const base = `/api/${apiVersion}/${line.purchasedAssembly || !line.partId ? 'assemblies' : 'parts'}/d/${encodeURIComponent(line.documentId)}/${line.sourceType}/${encodeURIComponent(line.sourceId)}/e/${encodeURIComponent(line.elementId)}`;
+  const [type, id] = line.sourceType === 'w' && scanned ? [scanned.type, scanned.id] : [line.sourceType, line.sourceId];
+  const base = `/api/${apiVersion}/${line.purchasedAssembly || !line.partId ? 'assemblies' : 'parts'}/d/${encodeURIComponent(line.documentId)}/${type}/${encodeURIComponent(id)}/e/${encodeURIComponent(line.elementId)}`;
   const query = new URLSearchParams({ viewMatrix: 'isometric', pixelSize: '0', ...size, ...(line.configuration && line.configuration !== 'default' ? { configuration: line.configuration } : {}) });
   return `${base}${line.purchasedAssembly ? '' : `/partid/${encodeURIComponent(line.partId!)}`}/shadedviews?${query}`;
 }
@@ -27,10 +29,10 @@ export function previewCacheKey(userId: string, result: ScanResult, line: BomLin
 export class PreviewUnavailableError extends Error {}
 
 /** PNG bytes for a line's picture, from the cache or one Onshape request. */
-export async function linePreview(line: BomLine, cacheKey: string, kv: Kv, fetchOnshape: FetchOnshape, apiVersion: string): Promise<Uint8Array> {
+export async function linePreview(line: BomLine, cacheKey: string, kv: Kv, fetchOnshape: FetchOnshape, apiVersion: string, scanned?: { type: 'v' | 'm'; id: string } | null): Promise<Uint8Array> {
   const cached = await kv.get(cacheKey);
   if (cached) return Uint8Array.from(atob(cached), char => char.charCodeAt(0));
-  const path = previewPath(line, apiVersion);
+  const path = previewPath(line, apiVersion, scanned);
   if (!path) throw new PreviewUnavailableError('This part has no readable source revision, so Onshape cannot draw it.');
   const response = await fetchOnshape(path, { headers: { accept: 'application/json' } });
   if (!response.ok) throw new PreviewUnavailableError(response.status === 403 || response.status === 404 ? 'Onshape would not draw this part; its document may not be shared with you.' : `Onshape could not draw this part (HTTP ${response.status}).`);

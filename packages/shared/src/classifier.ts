@@ -123,7 +123,8 @@ export function decideDisposition(line: BomLine, teamNumber: string | null, asse
   if (tagMatch) return { ...base, disposition: 'review', source: 'none', confidence: 'low', evidence: [...base.evidence, `team tags ${tagMatch.text} in name`], reviewReason: 'Team tags in the name disagree: choose one process' };
   if (line.material && printMaterial.test(line.material)) return { ...base, disposition: 'print', source: 'explicit-metadata', confidence: 'high', evidence: [...base.evidence, `print material ${line.material}`] };
   if (line.matchStatus === 'confirmed') return { ...base, disposition: 'buy', source: 'provenance', confidence: 'high' };
-  if (fastenerWords.test(line.name) && !printWords.test(text)) return { ...base, disposition: 'hardware', source: 'suggestion', confidence: 'medium', evidence: [...base.evidence, 'fastener wording in name'] };
+  // "Nut Holder" or "Screw Mount" is a part to make, so custom-part wording keeps a name with fastener words in Review.
+  if (fastenerWords.test(line.name) && !printWords.test(text) && !customWords.test(line.name)) return { ...base, disposition: 'hardware', source: 'suggestion', confidence: 'medium', evidence: [...base.evidence, 'fastener wording in name'] };
   if (provenance === 'standard-content') return { ...base, disposition: 'buy', source: 'provenance', confidence: 'high' };
   if (provenance === 'linked-library' && line.partNumber) return { ...base, disposition: 'buy', source: 'provenance', confidence: 'medium', evidence: [...base.evidence, 'library parts with a part number are usually purchased; no catalog match yet'] };
   // Everything below is a suggestion for a person to confirm.
