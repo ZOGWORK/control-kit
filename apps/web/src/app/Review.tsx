@@ -3,7 +3,7 @@ import { EmptyState } from '../components/arc/empty-state/empty-state';
 import SegmentedControl from '../components/arc/segmented-control/segmented-control';
 import type { ControlKit } from './useControlKit';
 import { reviewQueue, shortLabel, vendorLabel, type QueueKind } from './model';
-import { Button, PartMeta } from './bits';
+import { Button, PartMeta, Thumbnail } from './bits';
 
 type Filter = 'all' | QueueKind;
 const page = 25;
@@ -42,8 +42,8 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
         const busy = kit.pending === line.bomLineKey;
         const locked = Boolean(kit.pending) || !kit.result!.scanId;
         return <div key={line.bomLineKey} className="row">
-          <div className="row-main">
-            <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><span>{line.name}</span></button>
+            <div className="row-main">
+            <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><Thumbnail line={line} /><span>{line.name}</span></button>
             <PartMeta line={line} />
             <span className="muted small">{kind === 'match' ? `Possible match: ${vendorLabel[line.vendor!.vendorId]} ${line.vendor!.sku}, ${line.vendor!.name}` : line.reviewReason}</span>
           </div>

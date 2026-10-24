@@ -344,6 +344,6 @@ export default {
   },
   scheduled(event: { cron: string }, env: Env, context: { waitUntil(promise: Promise<unknown>): void }) {
     const vendor = cronVendors[event.cron];
-    if (vendor) context.waitUntil(runVendor(vendor, env.VENDOR_CATALOG));
+    if (vendor) context.waitUntil(runVendor(vendor, env.VENDOR_CATALOG, fetch, { feedFreshHours: Number(env.VENDOR_STALE_HOURS ?? 336) }));
   },
 };

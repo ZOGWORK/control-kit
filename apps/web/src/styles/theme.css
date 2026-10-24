@@ -231,3 +231,9 @@ button.row:hover { background: var(--ck-raised); }
 .part-picture { margin: 0; display: grid; place-items: center; min-height: 180px; border: 1px solid var(--border); border-radius: 12px; background: #f4f4f5; overflow: hidden; }
 .part-picture img { display: block; width: 100%; height: auto; max-height: 260px; object-fit: contain; }
 .part-picture .muted { color: #52525b; padding: 12px; text-align: center; }
+
+.thumb { margin: 0; flex: none; display: grid; place-items: center; background: #f4f4f5; border-radius: 8px; overflow: hidden; }
+.thumb.thumb-row { display: inline-grid; width: 32px; height: 32px; margin-right: 8px; vertical-align: middle; }
+.thumb.thumb-large { width: 100%; max-width: 240px; padding: 8px; gap: 6px; }
+.thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.thumb.thumb-large figcaption { color: #52525b; }

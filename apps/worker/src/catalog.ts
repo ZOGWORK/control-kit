@@ -1,4 +1,4 @@
-import { findBestMatch, nameSimilarity, normalizeName, normalizeSku, rankVendorAlternatives, recalculatePurchasing, skuCandidates, type CatalogHealth, type MatchDecision, type ScanResult, type VendorHealth, type VendorId, type VendorRecord } from '@control-kit/shared';
+import { findBestMatch, findLibraryMapping, libraryMapKey, nameSimilarity, normalizeName, normalizeSku, rankVendorAlternatives, recalculatePurchasing, skuCandidates, type CatalogHealth, type LibraryMapping, type MatchDecision, type ScanResult, type VendorHealth, type VendorId, type VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
 import { batchKey, indexKey, pointerKey, snapshotKey, type CatalogPointer, type IndexEntry, type VendorSnapshot } from './vendor-ingest';
 
@@ -130,9 +130,20 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
     }
     return found;
   };
+  // Library mappings (a parts library's part → vendor SKU), one KV read per linked document; none exist until a library provides them.
+  const mappings = new Map<string, Promise<LibraryMapping[]>>();
+  const mappingsFor = (documentId: string) => {
+    let found = mappings.get(documentId);
+    if (!found) {
+      found = read(kv, libraryMapKey(documentId), cache, signal).then(raw => { try { const value = JSON.parse(raw ?? '[]') as unknown; return Array.isArray(value) ? value as LibraryMapping[] : []; } catch { return []; } });
+      mappings.set(documentId, found);
+    }
+    return found;
+  };
   const jobs = result.lines.map(async line => {
     if (signal?.aborted) throw signal.reason;
     const wanted: Array<[VendorIndex, number]> = [];
+    const mapping = line.documentId !== result.documentId ? findLibraryMapping(await mappingsFor(line.documentId), line) : null;
     const skus = skuCandidates(line.name, line.partNumber);
     for (const index of catalogs) {
       for (const sku of skus) { const position = index.bySku.get(normalizeSku(sku, index.vendor)); if (position !== undefined) wanted.push([index, position]); }
@@ -144,7 +155,12 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
       const record = (await batch(index, number)).get(sku);
       if (record) candidates.set(`${record.vendorId}:${record.normalizedSku}`, record);
     }
-    const match = findBestMatch(line, [...candidates.values()]);
+    // A library mapping names the vendor and the SKU together, so that exact product wins over any same number elsewhere.
+    const mappedIndex = mapping ? catalogs.find(index => index.vendor === mapping.vendorId) : undefined;
+    const mappedPosition = mappedIndex ? mappedIndex.bySku.get(normalizeSku(mapping!.sku, mapping!.vendorId)) : undefined;
+    const mapped = mappedIndex && mappedPosition !== undefined ? (await batch(mappedIndex, mappedIndex.entries[mappedPosition][2])).get(mappedIndex.entries[mappedPosition][0]) ?? null : null;
+    const match = mapped ? { vendor: mapped, confidence: 1, status: 'exact' as const, reasons: [`SKU ${mapping!.sku} from ${mapping!.library} part mapping`] }
+      : findBestMatch(line, [...candidates.values()]);
     line.vendor = match.vendor;
     line.matchConfidence = match.confidence;
     line.matchStatus = match.status;
@@ -158,6 +174,9 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
       }
     }
     line.alternatives = rankVendorAlternatives(line.name, line.vendor, [...candidates.values()]);
+    if (mapped) line.libraryMatch = { library: mapping!.library, attribution: mapping!.attribution };
+    // Only licensed images ever reach a line: a library's own image first, then one from an official vendor feed.
+    line.thumbnail = mapping?.image ?? line.vendor?.image ?? null;
   });
   await Promise.all(jobs);
   // Health is diagnostic: a failed read leaves it absent rather than failing a scan whose BOM is complete.

@@ -1,16 +1,16 @@
 export const productName = 'Control Kit';
-export { classifyMatchScore, findBestMatch, nameSimilarity, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates } from './matching';
+export { classifyMatchScore, findBestMatch, findLibraryMapping, libraryMapKey, nameSimilarity, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates } from './matching';
 export { applyClassificationChoice, classificationIdentity, classifyLine, classifyScan, decideDisposition, dispositionLabel, dispositions, parseOverride, printCategory, purchasedAssemblyReason } from './classifier';
 import { purchasedAssemblyReason } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, Confidence, Disposition, DispositionSource, Provenance, UserSettings } from './classifier';
-export type { VendorId, VendorRecord, MatchResult } from './matching';
+export type { Attribution, LibraryMapping, LicensedImage, VendorId, VendorRecord, MatchResult } from './matching';
 export { buildControlPointPayload, MockControlPointAdapter } from './control-point';
 export type { ControlPointAdapter, ControlPointBomPayload } from './control-point';
 export { checkStep, exportManifest, stepDispositions, stepFileName, wantsStep } from './step';
 export type { ExportPart, StepCheck } from './step';
 export { bomColumns, bomIdentity, bomProperties, bomText, flagMissingSources, mergeBom } from './bom';
 export type { BillOfMaterials, BomHeader, BomItemSource, BomProperties, BomReconciliation, BomRow } from './bom';
-import type { VendorRecord } from './matching';
+import type { Attribution, LicensedImage, VendorRecord } from './matching';
 import type { BomProperties, BomReconciliation } from './bom';
 import type { Confidence, Disposition, DispositionSource, Provenance } from './classifier';
 
@@ -27,7 +27,11 @@ export type BomLine = { bomLineKey: string; name: string; description: string | 
   /** Workspace or version a file export can read this part from; Onshape's translation endpoint takes no microversion. */
   exportSource?: { type: 'w' | 'v'; id: string } | null;
   /** Set when a subassembly is listed as one bought product instead of its internal parts. */
-  purchasedAssembly?: { parts: number; reason: string } | null };
+  purchasedAssembly?: { parts: number; reason: string } | null;
+  /** Set when a parts library's mapping supplied the SKU, with the library's credit. */
+  libraryMatch?: { library: string; attribution: Attribution } | null;
+  /** A licensed picture of the product (library or vendor feed). Empty until a source grants permission. */
+  thumbnail?: LicensedImage | null };
 /** Why a line lacks data. Codes are stable for UI, export, and diagnostics; the user-facing text lives in `metadataIssueText`. */
 export type MetadataIssueCode = 'unresolved-subassembly' | 'unresolved-reference' | 'source-revision-unavailable' | 'not-in-bom' | 'bom-unavailable';
 export type MetadataIssue = { code: MetadataIssueCode; httpStatus: number | null };

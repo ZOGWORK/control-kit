@@ -27,22 +27,26 @@ export const feedUrl = (vendor: VendorId, page: number) => `${vendorSources[vend
  * The replaced generation is kept for a day for rollback, then deleted in bounded steps.
  */
 export const pointerKey = (vendor: VendorId) => `cat:${vendor}:pointer`;
-const crawlKey = (vendor: VendorId) => `cat:${vendor}:crawl`;
+export const crawlKey = (vendor: VendorId) => `cat:${vendor}:crawl`;
 const urlsKey = (vendor: VendorId, gen: string, sitemap: number) => `cat:${vendor}:gen:${gen}:urls:${sitemap}`;
 export const batchKey = (vendor: VendorId, gen: string, batch: number) => `cat:${vendor}:gen:${gen}:batch:${batch}`;
 export const indexKey = (vendor: VendorId, gen: string) => `cat:${vendor}:gen:${gen}:index`;
+export const manifestKey = (vendor: VendorId, gen: string) => `cat:${vendor}:gen:${gen}:manifest`;
 export const snapshotKey = (vendor: VendorId) => `vendor:${vendor}:__snapshot__`;
 const legacyKeys = (vendor: VendorId) => [`vendor:${vendor}:__cursor__`, `vendor:${vendor}:__lastgood__`, `vendor:${vendor}:__retired__`];
 
 /** `batches` is how many batches readers may use; index entries for later batches are not yet published. */
-export type CatalogPointer = { gen: string; complete: boolean; records: number; batches?: number; publishedAt: string; completedAt: string | null; skipped?: Partial<Record<SkipReason, number>>; previous: { gen: string; batches: number; deleteAfter: number; deleted: number } | null };
+/** `source` is absent for cron crawls; `official-feed` marks a catalog loaded from a vendor's own feed, which the cron leaves alone while fresh. */
+export type CatalogPointer = { gen: string; complete: boolean; records: number; batches?: number; publishedAt: string; completedAt: string | null; source?: 'crawl' | 'official-feed'; skipped?: Partial<Record<SkipReason, number>>; previous: { gen: string; batches: number; deleteAfter: number; deleted: number } | null;
+  /** Older generations still awaiting deletion (from publishing twice within a day, or an abandoned crawl), retired like `previous`. */
+  retiring?: Array<{ gen: string; batches: number; deleteAfter: number; deleted: number }> };
 /** `previousBatch` keeps a re-listed SKU readable from its older batch until the newer batch is published. */
 export type IndexEntry = [normalizedSku: string, normalizedName: string, batch: number, previousBatch?: number];
 export type SkipReason = 'redirect-stub' | 'no-product-data' | 'no-sku' | 'robots-disallowed' | 'off-vendor-url' | 'fetch-failed';
 type Crawl = { gen: string; startedAt: string; sitemaps: string[]; sitemapIndex: number; urlCount: number; urlIndex: number; batches: number; records: number; skipped: Partial<Record<SkipReason, number>>; skipSamples: Array<{ reason: SkipReason; url: string }>; failing: { url: string; runs: number } | null; done?: boolean };
 /** Crawl position, copied into the snapshot so health checks never read crawl or index keys. */
 export type CrawlProgress = { phase: 'fetch'; sitemapsDone: number; sitemapsTotal: number; pagesDoneInSitemap: number; pagesInSitemap: number; recordsCollected: number };
-export type VendorSnapshot = { status: 'ok' | 'failed'; updatedAt: string | null; lastRunAt: string; recordCount: number; source: 'sitemap'; version: string | null; complete?: boolean; inProgress?: boolean; error?: string;
+export type VendorSnapshot = { status: 'ok' | 'failed'; updatedAt: string | null; lastRunAt: string; recordCount: number; source: 'sitemap' | 'official-feed'; version: string | null; complete?: boolean; inProgress?: boolean; error?: string;
   progress?: CrawlProgress | null; skipped?: Partial<Record<SkipReason, number>> };
 export type VendorRun = { vendor: VendorId; source: 'sitemap'; fetched: number; upserted: number; skipped: number; durationMs: number; complete: boolean };
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
@@ -203,7 +207,7 @@ export function parseProductPage(vendor: VendorId, pageUrl: string, html: string
   return records.length ? { records: [...new Map(records.map(record => [record.normalizedSku, record])).values()], skip: null } : { records: [], skip: 'no-sku' };
 }
 
-function allowedUrl(vendor: VendorId, url: string) {
+export function allowedUrl(vendor: VendorId, url: string) {
   try { const parsed = new URL(url); return parsed.protocol === 'https:' && parsed.hostname === new URL(vendorSources[vendor].origin).hostname && !parsed.username && !parsed.password; }
   catch { return false; }
 }
@@ -226,21 +230,51 @@ const json = async <T>(kv: Kv, key: string): Promise<T | null> => {
 class VendorFetchError extends Error {}
 
 /** Deletes a replaced generation after its grace period, at most `budget` keys per run. Never touches the live one. */
-async function retirePrevious(vendor: VendorId, kv: Kv, pointer: CatalogPointer, budget: number) {
-  const previous = pointer.previous;
-  if (!previous) return 0;
-  // A manual rollback that points back at the old generation must not then delete it.
-  if (previous.gen === pointer.gen) { pointer.previous = null; return 0; }
-  if (previous.deleteAfter > Date.now()) return 0;
-  const keys = [indexKey(vendor, previous.gen), ...Array.from({ length: previous.batches }, (_, batch) => batchKey(vendor, previous.gen, batch))];
-  let deleted = 0;
-  while (previous.deleted < keys.length && deleted < budget) { await kv.delete(keys[previous.deleted]); previous.deleted++; deleted++; }
+type Retiring = NonNullable<CatalogPointer['previous']>;
+/** The live generation and the one kept for rollback are never queued for deletion or deleted through `retiring`. */
+const isProtected = (pointer: CatalogPointer, gen: string) => gen === pointer.gen || gen === pointer.previous?.gen;
+/** Queues a generation for deletion unless it is protected or already queued. */
+function queueRetirement(pointer: CatalogPointer, gen: string, batches: number) {
+  if (isProtected(pointer, gen) || pointer.retiring?.some(entry => entry.gen === gen)) return;
+  pointer.retiring = [...(pointer.retiring ?? []), { gen, batches, deleteAfter: Date.now(), deleted: 0 }];
+}
+/** Deletes one replaced generation once its grace period is over, at most `budget` keys; true when it is gone. */
+async function retireGeneration(vendor: VendorId, kv: Kv, pointer: CatalogPointer, entry: Retiring, budget: { left: number }) {
+  // A manual rollback that points back at an old generation must not then delete it.
+  if (entry.gen === pointer.gen) return true;
+  if (entry.deleteAfter > Date.now()) return false;
+  const keys = [indexKey(vendor, entry.gen), manifestKey(vendor, entry.gen), ...Array.from({ length: entry.batches }, (_, batch) => batchKey(vendor, entry.gen, batch))];
+  while (entry.deleted < keys.length && budget.left > 0) { await kv.delete(keys[entry.deleted]); entry.deleted++; budget.left--; }
+  if (entry.deleted < keys.length) return false;
   // URL lists are small and few; they are removed with the last batch.
-  if (previous.deleted >= keys.length) {
-    for (let sitemap = 0; sitemap < 32; sitemap++) { const key = urlsKey(vendor, previous.gen, sitemap); if (await kv.get(key) === null) break; await kv.delete(key); }
-    pointer.previous = null;
+  for (let sitemap = 0; sitemap < 32; sitemap++) { const key = urlsKey(vendor, entry.gen, sitemap); if (await kv.get(key) === null) break; await kv.delete(key); }
+  return true;
+}
+/** Retires `previous` and every generation in `retiring`, at most `limit` key deletions per run. Never touches the live one. */
+async function retirePrevious(vendor: VendorId, kv: Kv, pointer: CatalogPointer, limit: number) {
+  const budget = { left: limit };
+  if (pointer.previous && await retireGeneration(vendor, kv, pointer, pointer.previous, budget)) pointer.previous = null;
+  const remaining: Retiring[] = [];
+  // An entry for a generation that became protected again (rolled back, or now the rollback copy) is dropped, not deleted.
+  for (const entry of pointer.retiring ?? []) if (!isProtected(pointer, entry.gen) && !await retireGeneration(vendor, kv, pointer, entry, budget)) remaining.push(entry);
+  pointer.retiring = remaining.length ? remaining : undefined;
+  return limit - budget.left;
+}
+/**
+ * A crawl that finds a different live generation than it started with (an official feed or one-time load was published
+ * meanwhile) stops: its batches are queued for deletion instead of saving its position, so it can never come back.
+ */
+async function abandonIfReplaced(vendor: VendorId, kv: Kv, startedOn: string | null, crawl: { gen: string; batches: number }) {
+  const raw = await kv.get(pointerKey(vendor));
+  const live = raw ? JSON.parse(raw) as CatalogPointer : null;
+  if ((live?.gen ?? null) === startedOn) return false;
+  if (live && !isProtected(live, crawl.gen)) {
+    queueRetirement(live, crawl.gen, crawl.batches);
+    await kv.put(pointerKey(vendor), JSON.stringify(live));
   }
-  return deleted;
+  await kv.delete(crawlKey(vendor));
+  console.log(JSON.stringify({ vendor, abandoned: crawl.gen, live: live?.gen ?? null }));
+  return true;
 }
 
 /**
@@ -249,7 +283,7 @@ async function retirePrevious(vendor: VendorId, kv: Kv, pointer: CatalogPointer,
  * barrier that lets KV propagate the batch and index to every location before any reader is pointed at them.
  * Parse problems skip the page with a reason; network failures stop the run after saving what was fetched.
  */
-export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; maxFeedPages?: number; maxRequests?: number; minRequestMs?: number; retireAfterMs?: number; now?: () => Date } = {}): Promise<VendorRun> {
+export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; maxFeedPages?: number; maxRequests?: number; feedFreshHours?: number; minRequestMs?: number; retireAfterMs?: number; now?: () => Date } = {}): Promise<VendorRun> {
   const started = Date.now();
   const now = options.now ?? (() => new Date());
   const maxProducts = Math.max(1, Math.min(options.maxProducts ?? 40, 500));
@@ -323,7 +357,22 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
   };
   try {
     if (!pointer) for (const key of legacyKeys(vendor)) if (await kv.get(key) !== null) await kv.delete(key);
-    if (pointer?.previous) { await retirePrevious(vendor, kv, pointer, 20); await savePointer(pointer); }
+    // A catalog from the vendor's own feed is better than any crawl; crawling resumes only once that feed goes stale.
+    const feedAge = pointer?.source === 'official-feed' ? Date.now() - Date.parse(pointer.completedAt ?? pointer.publishedAt) : Infinity;
+    if (pointer && feedAge < (options.feedFreshHours ?? 336) * 3600000) {
+      if (crawl) {
+        queueRetirement(pointer, crawl.gen, crawl.batches);
+        crawl = null;
+        await kv.delete(crawlKey(vendor));
+      }
+      await retirePrevious(vendor, kv, pointer, 20);
+      await savePointer(pointer);
+      await kv.put(snapshotKey(vendor), JSON.stringify({ status: 'ok', updatedAt: pointer.completedAt ?? pointer.publishedAt, lastRunAt: now().toISOString(), recordCount: pointer.records, source: 'official-feed', version: pointer.gen, complete: true, skipped: pointer.skipped ?? {} } satisfies VendorSnapshot));
+      const summary: VendorRun = { vendor, source: 'sitemap', fetched: 0, upserted: 0, skipped: 0, durationMs: Date.now() - started, complete: true };
+      console.log(JSON.stringify({ ...summary, published, officialFeed: true }));
+      return summary;
+    }
+    if (pointer?.previous || pointer?.retiring?.length) { await retirePrevious(vendor, kv, pointer, 20); await savePointer(pointer); }
     // Publish what earlier runs wrote.
     if (crawl && crawl.batches > 0) {
       const firstCrawl = !pointer || pointer.gen === crawl.gen;
@@ -408,6 +457,10 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
         collected.push(...page.records.filter(record => allowedUrl(vendor, record.url)));
       }
     }
+    if (await abandonIfReplaced(vendor, kv, pointer?.gen ?? null, crawl)) {
+      const summary: VendorRun = { vendor, source: 'sitemap', fetched, upserted: 0, skipped: skippedNow, durationMs: Date.now() - started, complete: false };
+      return summary;
+    }
     await flush();
     if (crawl.sitemapIndex >= crawl.sitemaps.length && crawl.urlIndex >= crawl.urlCount) {
       if (!crawl.records) {
@@ -425,6 +478,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     console.log(JSON.stringify({ ...summary, published }));
     return summary;
   } catch (cause) {
+    if (crawl && await abandonIfReplaced(vendor, kv, pointer?.gen ?? null, crawl)) crawl = null;
     if (crawl) {
       // Pages fetched before the failure are kept: their records are written before the advanced position is saved.
       try { await flush(); } catch (flushError) { console.error(JSON.stringify({ vendor, flushFailed: flushError instanceof Error ? flushError.name : 'unknown' })); throw cause; }
