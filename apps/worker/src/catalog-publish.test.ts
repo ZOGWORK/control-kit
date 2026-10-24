@@ -3,6 +3,7 @@ import { aggregateAssembly, type LibraryMapping, type VendorRecord } from '@cont
 import type { Kv } from './index';
 import { enrichScan, clearCatalogMemoryCache } from './catalog';
 import { manifestKey, publishStaged, spotCheck, stageCatalog, validateStaged } from './catalog-publish';
+const later = (iso: string, seconds = 70) => new Date(Date.parse(iso) + seconds * 1000);
 import { normalizeFeedRows, parseCsv, parseJsonFeed } from './feed-import';
 import { crawlKey, pointerKey, runVendor, snapshotKey, type CatalogPointer } from './vendor-ingest';
 
@@ -45,13 +46,15 @@ describe('staged catalog publish', () => {
     const live: CatalogPointer = { gen: 'old', complete: false, records: 70, batches: 2, publishedAt: at, completedAt: null, previous: null };
     await kv.put(pointerKey('gobilda'), JSON.stringify(live));
     await kv.put(crawlKey('gobilda'), '{"gen":"old"}');
-    const manifest = await stageCatalog('gobilda', records(120), kv, { source: 'official-feed', gen: 'feed1', batchSize: 50 });
+    const manifest = await stageCatalog('gobilda', records(120), kv, { source: 'official-feed', gen: 'feed1', batchSize: 50, now: new Date(at) });
     expect(manifest).toMatchObject({ records: 120, batches: 3, source: 'official-feed' });
     expect(JSON.parse(kv.values.get(pointerKey('gobilda'))!).gen).toBe('old');
     const check = await validateStaged('gobilda', kv, 'feed1', { expectSkus: ['100000000005', '999999999999'] });
     expect(check).toMatchObject({ ok: false, records: 120, missingSkus: ['999999999999'] });
     expect((await validateStaged('gobilda', kv, 'feed1', { expectSkus: ['100000000005'] })).ok).toBe(true);
-    const pointer = await publishStaged('gobilda', kv, 'feed1', { now: new Date(at) });
+    // Too soon after staging, other KV locations may not have the batches yet.
+    await expect(publishStaged('gobilda', kv, 'feed1', { now: later(at, 10) })).rejects.toThrow('publish after 65s');
+    const pointer = await publishStaged('gobilda', kv, 'feed1', { now: later(at) });
     expect(pointer).toMatchObject({ gen: 'feed1', complete: true, records: 120, batches: 3, source: 'official-feed', previous: { gen: 'old', batches: 2, deleted: 0 } });
     expect(kv.values.has(crawlKey('gobilda'))).toBe(false);
     expect(JSON.parse(kv.values.get(snapshotKey('gobilda'))!)).toMatchObject({ status: 'ok', complete: true, recordCount: 120, source: 'official-feed', version: 'feed1' });
@@ -88,16 +91,60 @@ describe('staged catalog publish', () => {
   });
 });
 
+describe('generation bookkeeping', () => {
+  const records = (count: number) => normalizeFeedRows('gobilda', Array.from({ length: count }, (_, n) => ({ sku: `1000-0000-${String(n).padStart(4, '0')}`, name: `Part ${n}`, price: '1.00', url: 'https://www.gobilda.com/p/' })), at).records;
+  it('keeps every replaced generation queued for deletion when publishing twice in a day, including an unfinished crawl', async () => {
+    const kv = new MemoryKv();
+    await kv.put(pointerKey('gobilda'), JSON.stringify({ gen: 'crawl0', complete: true, records: 5, batches: 1, publishedAt: at, completedAt: at, previous: { gen: 'older', batches: 3, deleteAfter: Date.parse(at) + 3600000, deleted: 0 } }));
+    await kv.put(crawlKey('gobilda'), JSON.stringify({ gen: 'refresh', batches: 4 }));
+    await stageCatalog('gobilda', records(10), kv, { source: 'official-feed', gen: 'f1', now: new Date(at) });
+    const first = await publishStaged('gobilda', kv, 'f1', { now: later(at) });
+    expect(first.previous?.gen).toBe('crawl0');
+    expect(first.retiring?.map(entry => entry.gen)).toEqual(['older', 'refresh']);
+    await stageCatalog('gobilda', records(10), kv, { source: 'official-feed', gen: 'f2', now: new Date(at) });
+    const second = await publishStaged('gobilda', kv, 'f2', { now: later(at, 140) });
+    expect(second.previous?.gen).toBe('f1');
+    expect(second.retiring?.map(entry => entry.gen)).toEqual(['older', 'refresh', 'crawl0']);
+  });
+  it('stops a crawl that was running when a feed went live, so it can never replace the feed', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const kv = new MemoryKv();
+    await kv.put(pointerKey('gobilda'), JSON.stringify({ gen: 'crawl0', complete: false, records: 0, batches: 0, publishedAt: at, completedAt: null, previous: null }));
+    await stageCatalog('gobilda', records(10), kv, { source: 'official-feed', gen: 'feed1', now: new Date(at) });
+    // The feed is published while this crawl run is fetching its pages.
+    let published = false;
+    const fetcher = async (url: string) => {
+      if (url.endsWith('/robots.txt')) return new Response('User-agent: *\nAllow: /');
+      if (url.endsWith('/xmlsitemap.php')) return new Response('<sitemapindex><sitemap><loc>https://www.gobilda.com/xmlsitemap.php?type=products&amp;page=1</loc></sitemap></sitemapindex>');
+      if (url.includes('type=products')) return new Response('<urlset><url><loc>https://www.gobilda.com/a/</loc></url></urlset>');
+      if (!published) { published = true; await publishStaged('gobilda', kv, 'feed1', { now: later(at) }); }
+      return new Response(`<script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name: 'A', sku: '1000-0000-9999', offers: { price: '1', priceCurrency: 'USD' } })}</script>`);
+    };
+    await runVendor('gobilda', kv, fetcher, { minRequestMs: 0 });
+    const pointer = JSON.parse(kv.values.get(pointerKey('gobilda'))!) as CatalogPointer;
+    expect(pointer.gen).toBe('feed1');
+    expect(kv.values.has(crawlKey('gobilda'))).toBe(false);
+    expect(pointer.retiring?.length).toBe(1);
+    vi.restoreAllMocks();
+  });
+});
+
 describe('library part mappings', () => {
   it('turns a library mapping into an exact SKU match with credit, and shows only licensed images', async () => {
     clearCatalogMemoryCache();
     const kv = new MemoryKv();
     const feed = normalizeFeedRows('gobilda', parseCsv(csv), at).records;
-    await stageCatalog('gobilda', feed, kv, { source: 'official-feed', gen: 'g1' });
-    await publishStaged('gobilda', kv, 'g1');
+    await stageCatalog('gobilda', feed, kv, { source: 'official-feed', gen: 'g1', now: new Date(at) });
+    await publishStaged('gobilda', kv, 'g1', { now: later(at) });
+    // The same number at another vendor must not win over the product the library named.
+    await stageCatalog('servocity', normalizeFeedRows('servocity', [{ sku: '1121-0010-0264', name: 'Different product', price: '1', url: 'https://www.servocity.com/x/' }], at).records, kv, { source: 'official-feed', gen: 's1', now: new Date(at) });
+    await publishStaged('servocity', kv, 's1', { now: later(at) });
     const attribution = { source: 'FTC Parts Library', license: 'used with permission', credit: 'FTC Parts Library' };
-    const mapping: LibraryMapping = { library: 'FTC Parts Library', documentId: 'lib-doc', elementId: 'channels', partId: 'JHD', vendorId: 'gobilda', sku: '1121-0010-0264', attribution, image: { url: 'https://library.example/1121.png', attribution } };
-    await kv.put('library-map:lib-doc', JSON.stringify([mapping]));
+    const mapping: LibraryMapping = { library: 'FTC Parts Library', documentId: 'lib-doc', partId: 'JHD', vendorId: 'gobilda', sku: '1121-0010-0264', attribution, image: { url: 'https://library.example/1121.png', attribution } };
+    // An element-wide default must not beat the part's own mapping.
+    const broad: LibraryMapping = { library: 'FTC Parts Library', documentId: 'lib-doc', elementId: 'channels', vendorId: 'gobilda', sku: '2802-0004-0012', attribution };
+    await kv.put('library-map:lib-doc', JSON.stringify([broad, mapping]));
     const result = aggregateAssembly({ rootAssembly: { instances: [
       { id: 'a', name: 'Channel', type: 'Part', documentId: 'lib-doc', elementId: 'channels', partId: 'JHD', documentVersion: 'v1' },
       { id: 'b', name: 'Other part', type: 'Part', documentId: 'lib-doc', elementId: 'channels', partId: 'XYZ', documentVersion: 'v1' },
@@ -106,9 +153,10 @@ describe('library part mappings', () => {
     const channel = result.lines.find(line => line.partId === 'JHD')!;
     expect(channel).toMatchObject({ matchStatus: 'exact', libraryMatch: { library: 'FTC Parts Library' }, thumbnail: { url: 'https://library.example/1121.png' } });
     expect(channel.vendor?.sku).toBe('1121-0010-0264');
-    expect(channel.matchReasons).toContain('SKU from FTC Parts Library part mapping');
+    expect(channel.matchReasons).toEqual(['SKU 1121-0010-0264 from FTC Parts Library part mapping']);
     const other = result.lines.find(line => line.partId === 'XYZ')!;
-    expect(other).toMatchObject({ matchStatus: 'unmatched', thumbnail: null });
-    expect(other.libraryMatch).toBeUndefined();
+    // The other part in that element falls back to the element-wide mapping, without an image.
+    expect(other).toMatchObject({ matchStatus: 'exact', thumbnail: null });
+    expect(other.vendor?.sku).toBe('2802-0004-0012');
   });
 });

@@ -42,9 +42,8 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
         const busy = kit.pending === line.bomLineKey;
         const locked = Boolean(kit.pending) || !kit.result!.scanId;
         return <div key={line.bomLineKey} className="row">
-          <Thumbnail line={line} />
-          <div className="row-main">
-            <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><span>{line.name}</span></button>
+            <div className="row-main">
+            <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><Thumbnail line={line} /><span>{line.name}</span></button>
             <PartMeta line={line} />
             <span className="muted small">{kind === 'match' ? `Possible match: ${vendorLabel[line.vendor!.vendorId]} ${line.vendor!.sku}, ${line.vendor!.name}` : line.reviewReason}</span>
           </div>

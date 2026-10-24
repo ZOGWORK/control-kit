@@ -22,7 +22,7 @@ export function LineCost({ line }: { line: BomLine }) {
 export function Thumbnail({ line, size = 'row' }: { line: BomLine; size?: 'row' | 'large' }) {
   const image = line.thumbnail;
   if (!image) return null;
-  return <figure className={`thumb ${size}`} title={`Image: ${image.attribution.credit} (${image.attribution.license})`}>
+  return <figure className={`thumb thumb-${size}`} title={`Image: ${image.attribution.credit} (${image.attribution.license})`}>
     <img src={image.url} alt="" loading="lazy" referrerPolicy="no-referrer" />
     {size === 'large' && <figcaption className="muted small">{image.attribution.url ? <a className="link" href={image.attribution.url} target="_blank" rel="noopener noreferrer">{image.attribution.credit}</a> : image.attribution.credit}, {image.attribution.license}</figcaption>}
   </figure>;

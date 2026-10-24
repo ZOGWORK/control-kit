@@ -1,6 +1,10 @@
 import { type VendorId, type VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
-import { batchKey, crawlKey, indexKey, pointerKey, snapshotKey, type CatalogPointer, type IndexEntry, type SkipReason, type VendorSnapshot } from './vendor-ingest';
+import { batchKey, crawlKey, indexKey, manifestKey, pointerKey, snapshotKey, type CatalogPointer, type IndexEntry, type SkipReason, type VendorSnapshot } from './vendor-ingest';
+
+export { manifestKey };
+/** KV can take about 60 seconds to reach every location; a staged generation is published only after that. */
+export const propagationMs = 65000;
 
 /**
  * Staged catalogs: one path for any complete set of records, whether a one-time crawl or an official vendor feed.
@@ -10,7 +14,6 @@ import { batchKey, crawlKey, indexKey, pointerKey, snapshotKey, type CatalogPoin
  */
 export type CatalogSource = 'crawl' | 'official-feed';
 export type StagedCatalog = { vendor: VendorId; gen: string; source: CatalogSource; records: number; batches: number; stagedAt: string; skipped: Partial<Record<SkipReason, number>>; rejected: number; note: string | null };
-export const manifestKey = (vendor: VendorId, gen: string) => `cat:${vendor}:gen:${gen}:manifest`;
 const json = async <T>(kv: Kv, key: string): Promise<T | null> => { const raw = await kv.get(key); if (!raw) return null; try { return JSON.parse(raw) as T; } catch { return null; } };
 
 export async function stageCatalog(vendor: VendorId, records: VendorRecord[], kv: Kv, options: { source: CatalogSource; gen?: string; batchSize?: number; skipped?: StagedCatalog['skipped']; rejected?: number; note?: string; now?: Date } ) {
@@ -68,8 +71,16 @@ export async function publishStaged(vendor: VendorId, kv: Kv, gen: string, optio
   const live = await json<CatalogPointer>(kv, pointerKey(vendor));
   if (live?.gen === gen) return live;
   const now = (options.now ?? new Date()).toISOString();
+  const age = Date.parse(now) - Date.parse(manifest.stagedAt);
+  if (age < propagationMs) throw new Error(`${vendor}: staged ${Math.round(age / 1000)}s ago; publish after ${propagationMs / 1000}s so every KV location has the staged batches`);
+  // Every generation that loses its place is queued for deletion: the live one as \`previous\`, an older previous and an
+  // unfinished crawl in \`retiring\`. Nothing is dropped untracked.
+  const crawl = await json<{ gen: string; batches: number }>(kv, crawlKey(vendor));
+  const retiring = [...(live?.retiring ?? []), ...(live?.previous && live.previous.gen !== gen ? [live.previous] : []),
+    ...(crawl && crawl.gen !== live?.gen && crawl.gen !== gen ? [{ gen: crawl.gen, batches: crawl.batches, deleteAfter: Date.parse(now), deleted: 0 }] : [])];
   const pointer: CatalogPointer = { gen, complete: true, records: manifest.records, batches: manifest.batches, publishedAt: now, completedAt: now, skipped: manifest.skipped, source: manifest.source,
-    previous: live ? { gen: live.gen, batches: live.batches ?? 0, deleteAfter: Date.parse(now) + (options.retireAfterMs ?? 24 * 3600000), deleted: 0 } : null };
+    previous: live ? { gen: live.gen, batches: live.batches ?? 0, deleteAfter: Date.parse(now) + (options.retireAfterMs ?? 24 * 3600000), deleted: 0 } : null,
+    ...(retiring.length ? { retiring } : {}) };
   await kv.delete(crawlKey(vendor));
   await kv.put(pointerKey(vendor), JSON.stringify(pointer));
   const snapshot: VendorSnapshot = { status: 'ok', updatedAt: now, lastRunAt: now, recordCount: manifest.records, source: manifest.source === 'official-feed' ? 'official-feed' : 'sitemap', version: gen, complete: true, skipped: manifest.skipped };

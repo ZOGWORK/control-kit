@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeSku, type VendorId, type VendorRecord } from '../packages/shared/src/index';
-import { publishStaged, spotCheck, stageCatalog, validateStaged } from '../apps/worker/src/catalog-publish';
+import { propagationMs, publishStaged, spotCheck, stageCatalog, validateStaged } from '../apps/worker/src/catalog-publish';
 import { normalizeFeedRows, parseCsv, parseJsonFeed, type FeedField } from '../apps/worker/src/feed-import';
 import { batchKey, pointerKey, type CatalogPointer } from '../apps/worker/src/vendor-ingest';
 import type { Kv } from '../apps/worker/src/index';
@@ -64,8 +64,8 @@ async function validate(gen: string) {
     const good = checks.filter(check => check.skuOnPage && check.priceOnPage).length;
     for (const check of checks.filter(item => !item.skuOnPage || !item.priceOnPage)) console.log(`  DIFF ${check.sku} $${check.price} ${check.skuOnPage ? '' : '[sku not on page]'} ${check.priceOnPage ? '' : '[price not on page]'} ${check.url}`);
     console.log(`  spot checks: ${good}/${checks.length} match the vendor's page`);
-    // More than one mismatch in twenty is a parsing or mapping problem, not a price change between fetches.
-    spotOk = good >= checks.length - Math.max(1, Math.floor(checks.length / 20));
+    // More than one mismatch in twenty is a parsing or mapping problem, not a price change between fetches; none at all never passes.
+    spotOk = good > 0 && checks.length - good <= Math.floor(checks.length / 20);
   }
   return result.ok && spotOk;
 }
@@ -99,6 +99,9 @@ if (mode === 'stage') {
 } else if (mode === 'publish') {
   if (!await validate(flag('gen')!)) { console.log('Not published: validation failed. The live catalog is unchanged.'); process.exitCode = 1; }
   else {
+    const manifest = JSON.parse(await kv.get(`cat:${vendor}:gen:${flag('gen')}:manifest`) ?? 'null') as { stagedAt: string } | null;
+    const wait = manifest ? propagationMs - (Date.now() - Date.parse(manifest.stagedAt)) : 0;
+    if (wait > 0) { console.log(`Waiting ${Math.ceil(wait / 1000)}s for the staged keys to reach every KV location…`); await new Promise(resolve => setTimeout(resolve, wait)); }
     const pointer = await publishStaged(vendor, kv, flag('gen')!);
     kv.flush();
     console.log(`${vendor}: gen ${pointer.gen} is live (${pointer.records} records, ${pointer.source ?? 'crawl'}); previous ${pointer.previous?.gen ?? 'none'} kept until ${pointer.previous ? new Date(pointer.previous.deleteAfter).toISOString() : '-'}`);

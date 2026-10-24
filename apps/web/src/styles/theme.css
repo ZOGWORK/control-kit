@@ -233,7 +233,7 @@ button.row:hover { background: var(--ck-raised); }
 .part-picture .muted { color: #52525b; padding: 12px; text-align: center; }
 
 .thumb { margin: 0; flex: none; display: grid; place-items: center; background: #f4f4f5; border-radius: 8px; overflow: hidden; }
-.thumb.row { width: 40px; height: 40px; }
-.thumb.large { width: 100%; max-width: 240px; padding: 8px; gap: 6px; }
+.thumb.thumb-row { display: inline-grid; width: 32px; height: 32px; margin-right: 8px; vertical-align: middle; }
+.thumb.thumb-large { width: 100%; max-width: 240px; padding: 8px; gap: 6px; }
 .thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.thumb.large figcaption { color: #52525b; }
+.thumb.thumb-large figcaption { color: #52525b; }

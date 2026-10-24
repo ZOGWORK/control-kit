@@ -15,7 +15,7 @@ export const libraryMapKey = (documentId: string) => `library-map:${documentId}`
 export function findLibraryMapping(mappings: LibraryMapping[], line: { documentId: string; elementId: string; partId: string | null; configuration: string | null }) {
   const fits = mappings.filter(mapping => mapping.documentId === line.documentId && (!mapping.elementId || mapping.elementId === line.elementId)
     && (!mapping.partId || mapping.partId === line.partId) && (!mapping.configuration || mapping.configuration === line.configuration));
-  const rank = (mapping: LibraryMapping) => Number(Boolean(mapping.configuration)) + Number(Boolean(mapping.partId)) * 2 + Number(Boolean(mapping.elementId)) * 4;
+  const rank = (mapping: LibraryMapping) => Number(Boolean(mapping.partId)) * 4 + Number(Boolean(mapping.configuration)) * 2 + Number(Boolean(mapping.elementId));
   return fits.sort((a, b) => rank(b) - rank(a))[0] ?? null;
 }
 export type VendorRecord = {
