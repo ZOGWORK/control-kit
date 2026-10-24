@@ -1,4 +1,23 @@
 export type VendorId = 'gobilda' | 'servocity' | 'andymark' | 'rev' | 'pitsco';
+/** Who provided data or an image, under what terms, and the credit to show. */
+export type Attribution = { source: string; license: string; credit: string; url?: string | null };
+/** An image Control Kit may show because its owner allowed it; never built from a scraped URL. */
+export type LicensedImage = { url: string; attribution: Attribution };
+/**
+ * A parts library's statement that one of its parts is a vendor product (for example an FTC Parts Library or
+ * FRCDesign insert). Keyed by the library part's document and element, optionally narrowed by part and configuration.
+ * Stored in VENDOR_CATALOG at `library-map:{documentId}` as a list.
+ */
+export type LibraryMapping = { library: string; documentId: string; elementId?: string | null; partId?: string | null; configuration?: string | null;
+  vendorId: VendorId; sku: string; productUrl?: string | null; image?: LicensedImage | null; attribution: Attribution };
+export const libraryMapKey = (documentId: string) => `library-map:${documentId}`;
+/** The most specific mapping for a part: part and configuration, then part, then the whole element or document. */
+export function findLibraryMapping(mappings: LibraryMapping[], line: { documentId: string; elementId: string; partId: string | null; configuration: string | null }) {
+  const fits = mappings.filter(mapping => mapping.documentId === line.documentId && (!mapping.elementId || mapping.elementId === line.elementId)
+    && (!mapping.partId || mapping.partId === line.partId) && (!mapping.configuration || mapping.configuration === line.configuration));
+  const rank = (mapping: LibraryMapping) => Number(Boolean(mapping.configuration)) + Number(Boolean(mapping.partId)) * 2 + Number(Boolean(mapping.elementId)) * 4;
+  return fits.sort((a, b) => rank(b) - rank(a))[0] ?? null;
+}
 export type VendorRecord = {
   vendorId: VendorId;
   sku: string;
@@ -17,7 +36,9 @@ export type VendorRecord = {
   /** Exact product text that established `packSize`, e.g. `variant label "25 Pack"`. Null when unverified. */
   packEvidence?: string | null;
   /** Which page structure produced the record. */
-  parser?: 'jsonld' | 'shopify-variant' | 'bigcommerce-variant' | 'shopify-feed';
+  parser?: 'jsonld' | 'shopify-variant' | 'bigcommerce-variant' | 'shopify-feed' | 'official-feed';
+  /** A product image, only from a source that granted permission to show it (an official feed or library). */
+  image?: LicensedImage | null;
   /** Page that was fetched, when it differs from the canonical product `url`. */
   sourceUrl?: string;
   /** Catalog generation the record was published in. */

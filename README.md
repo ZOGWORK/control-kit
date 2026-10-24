@@ -109,6 +109,27 @@ A rate-limited request (HTTP 429) is retried twice after the vendor's `Retry-Aft
 
 A record must carry a real vendor SKU; none is derived from a name. A pack size is recorded only with its evidence, such as `variant label "25 Pack"`. Pages that are redirect stubs, lack product data, or lack a SKU are skipped and counted by reason. A page whose fetch fails holds the crawl position for up to three runs, then is skipped, so one bad page cannot stall a vendor.
 
+**Official feeds and one-time loads.** A vendor's own catalog feed (CSV or JSON with SKU, name, price, product URL, and ideally stock and pack quantity) replaces the crawl for that vendor through the same records and the same staged publish:
+
+```bash
+npx tsx scripts/catalog-load.ts stage --vendor gobilda --feed goBILDA-feed.csv
+npx tsx scripts/catalog-load.ts validate --vendor gobilda --gen <gen> --expect 1121-0010-0264,1309-0016-4008 --spot 20
+npx tsx scripts/catalog-load.ts publish --vendor gobilda --gen <gen> --expect 1121-0010-0264,1309-0016-4008 --spot 20
+```
+
+- `stage` writes a new catalog generation that no scan reads yet. Column names are matched by common spellings, and `--map sku="Product Code"` sets any of them. Rows without a SKU, a name, or a product URL on the vendor's site are rejected and counted.
+- A pack size from the feed counts as verified, since the vendor's own data is the evidence.
+- `publish` runs validation again and refuses unless:
+  - every batch reads back;
+  - the catalog is not more than 20% smaller than a complete live one;
+  - every `--expect` SKU is present;
+  - the `--spot` sample matches the vendor's own pages.
+- The live generation is kept for a day for rollback.
+- While a published official feed is fresher than `VENDOR_STALE_HOURS`, the hourly crawl leaves that vendor alone. When the feed goes stale, crawling resumes as the fallback.
+- `--crawl <dump>` stages a complete local crawl the same way.
+
+**Library mappings and images.** A parts library's part → vendor SKU mapping (for example the FTC Parts Library or FRCDesign) lives in VENDOR_CATALOG at `library-map:{documentId}` as a list of `LibraryMapping`. A mapped part matches exactly through the same SKU rules, with the library credited in its match reasons. Product images are shown only from a source that granted permission (`LicensedImage` with its attribution), in a thumbnail slot that renders nothing until one exists. No library mapping or image is loaded yet.
+
 **Storage and publication.** Each run appends its records as one batch and updates the generation's SKU/name index, so a run costs about five KV writes regardless of catalog size. [Free Workers KV allows 1,000 writes per day](https://developers.cloudflare.com/kv/platform/limits/).
 - What a run writes becomes visible on the **next** run, an hour later. That gives KV time to propagate everywhere before any scan reads it.
 - The **first** crawl goes live in parts this way and is labeled partial until it finishes.

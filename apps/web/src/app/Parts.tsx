@@ -5,7 +5,7 @@ import SegmentedControl from '../components/arc/segmented-control/segmented-cont
 import { Select } from '../components/arc/select/select';
 import type { ControlKit } from './useControlKit';
 import { filterParts, isMake, type PartFilter, type PartSort } from './model';
-import { Button, DispositionChip, LineCost, PartMeta } from './bits';
+import { Button, DispositionChip, LineCost, PartMeta, Thumbnail } from './bits';
 
 const page = 50;
 
@@ -33,6 +33,7 @@ export function Parts({ kit, open }: { kit: ControlKit; open: (key: string) => v
     {filter === 'suppressed' && <p className="muted small">Suppressed parts are not counted in quantities or purchasing.</p>}
     <section className="panel">
       <div className="rows">{rows.slice(0, shown).map(line => <button key={line.bomLineKey} type="button" className={`row ${line.suppressed ? 'dim' : ''}`} onClick={() => open(line.bomLineKey)}>
+        <Thumbnail line={line} />
         <span className="row-main"><span className="row-title"><span>{line.name}</span></span><PartMeta line={line} />
           {line.metadataIssue && !line.suppressed && <span className="small" style={{ color: 'var(--ck-warning)' }}>{line.missingMetadataReason}</span>}</span>
         <span className="row-aside"><LineCost line={line} /><DispositionChip line={line} /></span>

@@ -27,7 +27,7 @@ export const feedUrl = (vendor: VendorId, page: number) => `${vendorSources[vend
  * The replaced generation is kept for a day for rollback, then deleted in bounded steps.
  */
 export const pointerKey = (vendor: VendorId) => `cat:${vendor}:pointer`;
-const crawlKey = (vendor: VendorId) => `cat:${vendor}:crawl`;
+export const crawlKey = (vendor: VendorId) => `cat:${vendor}:crawl`;
 const urlsKey = (vendor: VendorId, gen: string, sitemap: number) => `cat:${vendor}:gen:${gen}:urls:${sitemap}`;
 export const batchKey = (vendor: VendorId, gen: string, batch: number) => `cat:${vendor}:gen:${gen}:batch:${batch}`;
 export const indexKey = (vendor: VendorId, gen: string) => `cat:${vendor}:gen:${gen}:index`;
@@ -35,14 +35,15 @@ export const snapshotKey = (vendor: VendorId) => `vendor:${vendor}:__snapshot__`
 const legacyKeys = (vendor: VendorId) => [`vendor:${vendor}:__cursor__`, `vendor:${vendor}:__lastgood__`, `vendor:${vendor}:__retired__`];
 
 /** `batches` is how many batches readers may use; index entries for later batches are not yet published. */
-export type CatalogPointer = { gen: string; complete: boolean; records: number; batches?: number; publishedAt: string; completedAt: string | null; skipped?: Partial<Record<SkipReason, number>>; previous: { gen: string; batches: number; deleteAfter: number; deleted: number } | null };
+/** `source` is absent for cron crawls; `official-feed` marks a catalog loaded from a vendor's own feed, which the cron leaves alone while fresh. */
+export type CatalogPointer = { gen: string; complete: boolean; records: number; batches?: number; publishedAt: string; completedAt: string | null; source?: 'crawl' | 'official-feed'; skipped?: Partial<Record<SkipReason, number>>; previous: { gen: string; batches: number; deleteAfter: number; deleted: number } | null };
 /** `previousBatch` keeps a re-listed SKU readable from its older batch until the newer batch is published. */
 export type IndexEntry = [normalizedSku: string, normalizedName: string, batch: number, previousBatch?: number];
 export type SkipReason = 'redirect-stub' | 'no-product-data' | 'no-sku' | 'robots-disallowed' | 'off-vendor-url' | 'fetch-failed';
 type Crawl = { gen: string; startedAt: string; sitemaps: string[]; sitemapIndex: number; urlCount: number; urlIndex: number; batches: number; records: number; skipped: Partial<Record<SkipReason, number>>; skipSamples: Array<{ reason: SkipReason; url: string }>; failing: { url: string; runs: number } | null; done?: boolean };
 /** Crawl position, copied into the snapshot so health checks never read crawl or index keys. */
 export type CrawlProgress = { phase: 'fetch'; sitemapsDone: number; sitemapsTotal: number; pagesDoneInSitemap: number; pagesInSitemap: number; recordsCollected: number };
-export type VendorSnapshot = { status: 'ok' | 'failed'; updatedAt: string | null; lastRunAt: string; recordCount: number; source: 'sitemap'; version: string | null; complete?: boolean; inProgress?: boolean; error?: string;
+export type VendorSnapshot = { status: 'ok' | 'failed'; updatedAt: string | null; lastRunAt: string; recordCount: number; source: 'sitemap' | 'official-feed'; version: string | null; complete?: boolean; inProgress?: boolean; error?: string;
   progress?: CrawlProgress | null; skipped?: Partial<Record<SkipReason, number>> };
 export type VendorRun = { vendor: VendorId; source: 'sitemap'; fetched: number; upserted: number; skipped: number; durationMs: number; complete: boolean };
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
@@ -203,7 +204,7 @@ export function parseProductPage(vendor: VendorId, pageUrl: string, html: string
   return records.length ? { records: [...new Map(records.map(record => [record.normalizedSku, record])).values()], skip: null } : { records: [], skip: 'no-sku' };
 }
 
-function allowedUrl(vendor: VendorId, url: string) {
+export function allowedUrl(vendor: VendorId, url: string) {
   try { const parsed = new URL(url); return parsed.protocol === 'https:' && parsed.hostname === new URL(vendorSources[vendor].origin).hostname && !parsed.username && !parsed.password; }
   catch { return false; }
 }
@@ -249,7 +250,7 @@ async function retirePrevious(vendor: VendorId, kv: Kv, pointer: CatalogPointer,
  * barrier that lets KV propagate the batch and index to every location before any reader is pointed at them.
  * Parse problems skip the page with a reason; network failures stop the run after saving what was fetched.
  */
-export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; maxFeedPages?: number; maxRequests?: number; minRequestMs?: number; retireAfterMs?: number; now?: () => Date } = {}): Promise<VendorRun> {
+export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; maxFeedPages?: number; maxRequests?: number; feedFreshHours?: number; minRequestMs?: number; retireAfterMs?: number; now?: () => Date } = {}): Promise<VendorRun> {
   const started = Date.now();
   const now = options.now ?? (() => new Date());
   const maxProducts = Math.max(1, Math.min(options.maxProducts ?? 40, 500));
@@ -350,6 +351,14 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     }
     // A Shopify vendor's crawl started before the feed (a sitemap position) is dropped and restarted as a feed generation.
     if (vendorSources[vendor].feed && crawl && !crawl.sitemaps[0]?.includes('/products.json')) crawl = null;
+    // A catalog from the vendor's own feed is better than any crawl; crawling resumes only once that feed goes stale.
+    const feedAge = pointer?.source === 'official-feed' ? Date.now() - Date.parse(pointer.completedAt ?? pointer.publishedAt) : Infinity;
+    if (!crawl && feedAge < (options.feedFreshHours ?? 336) * 3600000) {
+      await kv.put(snapshotKey(vendor), JSON.stringify({ status: 'ok', updatedAt: pointer!.completedAt ?? pointer!.publishedAt, lastRunAt: now().toISOString(), recordCount: pointer!.records, source: 'official-feed', version: pointer!.gen, complete: true, skipped: pointer!.skipped ?? {} } satisfies VendorSnapshot));
+      const summary: VendorRun = { vendor, source: 'sitemap', fetched: 0, upserted: 0, skipped: 0, durationMs: Date.now() - started, complete: true };
+      console.log(JSON.stringify({ ...summary, published, officialFeed: true }));
+      return summary;
+    }
     if (!crawl && pointer?.previous) {
       // The replaced generation is still awaiting deletion; a new refresh would overwrite that record and leak its keys.
       await writeSnapshot('ok');

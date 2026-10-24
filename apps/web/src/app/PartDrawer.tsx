@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { dispositions, dispositionLabel, type BomLine } from '@control-kit/shared';
 import { Alert } from '../components/arc/alert/alert';
-import { Button } from './bits';
+import { Button, Thumbnail } from './bits';
 import { Drawer, DrawerContent, useDrawerItem } from '../components/arc/drawer/drawer';
 import type { ControlKit } from './useControlKit';
 import { money, vendorLabel, vendorLookup } from './model';
@@ -81,9 +81,10 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
     <section className="stack" aria-labelledby="vendor">
       <h3 id="vendor">Vendor</h3>
       {vendor ? <>
+        <Thumbnail line={line} size="large" />
         <dl className="facts">
           <dt>Product</dt><dd><a className="link" href={vendor.url} target="_blank" rel="noopener noreferrer">{vendorLabel[vendor.vendorId]} {vendor.sku} <ExternalLink aria-hidden size={11} /></a><br /><span className="muted small">{vendor.name}</span></dd>
-          <dt>Match</dt><dd>{matchLabel[line.matchStatus]}{line.matchReasons.length ? <span className="muted small"><br />{line.matchReasons.join('; ')}</span> : null}</dd>
+          <dt>Match</dt><dd>{matchLabel[line.matchStatus]}{line.libraryMatch && <span className="muted small"> (part mapping from {line.libraryMatch.attribution.credit})</span>}{line.matchReasons.length ? <span className="muted small"><br />{line.matchReasons.join('; ')}</span> : null}</dd>
           <dt>Pack</dt><dd>{vendor.packSizeVerified && vendor.packSize ? `${vendor.packSize} per pack (${vendor.packEvidence ?? 'from the product page'})` : 'Unknown, so no total'}</dd>
           <dt>Price</dt><dd>{vendor.priceUsd === null ? 'Unknown' : `${money(vendor.priceUsd)} per pack`}{line.packsToOrder !== null && line.lineTotalUsd !== null ? `; ${line.packsToOrder} pack${line.packsToOrder === 1 ? '' : 's'} = ${money(line.lineTotalUsd)}` : ''}</dd>
           <dt>Stock</dt><dd>{vendor.stock === 'unknown' ? 'Unknown' : vendor.stock === 'in' ? 'In stock' : vendor.stock === 'low' ? 'Low stock' : 'Out of stock'}<span className="muted small"> as of {new Date(vendor.updatedAt).toLocaleDateString()}</span></dd>

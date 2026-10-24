@@ -15,6 +15,19 @@ export function LineCost({ line }: { line: BomLine }) {
   return <span className="muted small">{line.vendor.priceUsd === null ? 'no price' : !line.vendor.packSizeVerified ? 'pack size unknown' : 'not priced'}</span>;
 }
 
+/**
+ * A licensed product picture (from a parts library or an official vendor feed) with its credit. Renders nothing until a
+ * source has granted permission, so rows never show a scraped image or an empty box.
+ */
+export function Thumbnail({ line, size = 'row' }: { line: BomLine; size?: 'row' | 'large' }) {
+  const image = line.thumbnail;
+  if (!image) return null;
+  return <figure className={`thumb ${size}`} title={`Image: ${image.attribution.credit} (${image.attribution.license})`}>
+    <img src={image.url} alt="" loading="lazy" referrerPolicy="no-referrer" />
+    {size === 'large' && <figcaption className="muted small">{image.attribution.url ? <a className="link" href={image.attribution.url} target="_blank" rel="noopener noreferrer">{image.attribution.credit}</a> : image.attribution.credit}, {image.attribution.license}</figcaption>}
+  </figure>;
+}
+
 /** The facts under a part's name: quantity, its identifying number, and material. */
 export function PartMeta({ line }: { line: BomLine }) {
   const id = line.vendor && (line.matchStatus === 'exact' || line.matchStatus === 'confirmed') ? line.vendor.sku : line.partNumber;
