@@ -1,6 +1,6 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
 import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from './scan';
-import { applyMatchDecision, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { applyMatchDecision, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings, type VendorId } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
@@ -299,6 +299,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   return reply({ error: 'Not found' }, 404);
 }
+/** Each vendor crawls hourly, 12 minutes apart. Must match `[triggers] crons` in wrangler.toml (a test checks). */
+export const cronVendors: Record<string, VendorId> = { '0 * * * *': 'gobilda', '12 * * * *': 'servocity', '24 * * * *': 'andymark', '36 * * * *': 'rev', '48 * * * *': 'pitsco' };
+
 export default {
   async fetch(request: Request, env: Env) {
     const origin = request.headers.get('origin');
@@ -316,7 +319,7 @@ export default {
     return result;
   },
   scheduled(event: { cron: string }, env: Env, context: { waitUntil(promise: Promise<unknown>): void }) {
-    const vendor = ({ '0 */2 * * *': 'gobilda', '12 */2 * * *': 'servocity', '24 */2 * * *': 'andymark', '36 */2 * * *': 'rev', '48 */2 * * *': 'pitsco' } as const)[event.cron as '0 */2 * * *'];
+    const vendor = cronVendors[event.cron];
     if (vendor) context.waitUntil(runVendor(vendor, env.VENDOR_CATALOG));
   },
 };

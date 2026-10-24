@@ -17,7 +17,7 @@ export type VendorRecord = {
   /** Exact product text that established `packSize`, e.g. `variant label "25 Pack"`. Null when unverified. */
   packEvidence?: string | null;
   /** Which page structure produced the record. */
-  parser?: 'jsonld' | 'shopify-variant' | 'bigcommerce-variant';
+  parser?: 'jsonld' | 'shopify-variant' | 'bigcommerce-variant' | 'shopify-feed';
   /** Page that was fetched, when it differs from the canonical product `url`. */
   sourceUrl?: string;
   /** Catalog generation the record was published in. */

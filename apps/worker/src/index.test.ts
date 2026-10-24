@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import worker, { type Env, type Kv } from './index';
+import worker, { cronVendors, type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
 import { aggregateAssembly, classificationIdentity, type VendorId } from '@control-kit/shared';
 import { clearCatalogMemoryCache } from './catalog';
@@ -17,6 +17,14 @@ const env = { APP_STATE: new MemoryKv(), VENDOR_CATALOG: new MemoryKv(), ONSHAPE
 const call = (path: string, cookie?: string) => worker.fetch(new Request(`http://localhost:8787${path}`, { headers: { origin: env.WEB_ORIGIN, ...(cookie ? { cookie } : {}) } }), env);
 beforeEach(() => vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => mock.handle(new Request(input, init))));
 afterAll(() => vi.unstubAllGlobals());
+
+describe('vendor crons', () => {
+  it('runs every vendor from a cron that wrangler.toml schedules', () => {
+    const crons = JSON.parse(readFileSync(new URL('../../../wrangler.toml', import.meta.url), 'utf8').match(/^crons = (\[.*\])$/m)![1]) as string[];
+    expect(crons.sort()).toEqual(Object.keys(cronVendors).sort());
+    expect(new Set(Object.values(cronVendors)).size).toBe(5);
+  });
+});
 
 describe('Onshape OAuth and session against mock Onshape', () => {
   it('removes accidental whitespace from configured OAuth credentials', async () => {

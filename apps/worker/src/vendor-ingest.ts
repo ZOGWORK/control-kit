@@ -1,13 +1,18 @@
 import { normalizeName, normalizeSku, type VendorId, type VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
 
-export const vendorSources: Record<VendorId, { origin: string; sitemap: string }> = {
+/**
+ * `feed` vendors are Shopify stores whose public `/products.json` lists 250 products with every variant's SKU, price, and
+ * availability per request, so a whole catalog takes a handful of requests instead of one page fetch per product.
+ */
+export const vendorSources: Record<VendorId, { origin: string; sitemap: string; feed?: boolean }> = {
   gobilda: { origin: 'https://www.gobilda.com', sitemap: 'https://www.gobilda.com/xmlsitemap.php' },
   servocity: { origin: 'https://www.servocity.com', sitemap: 'https://www.servocity.com/xmlsitemap.php' },
-  andymark: { origin: 'https://andymark.com', sitemap: 'https://andymark.com/sitemap.xml' },
+  andymark: { origin: 'https://andymark.com', sitemap: 'https://andymark.com/sitemap.xml', feed: true },
   rev: { origin: 'https://www.revrobotics.com', sitemap: 'https://www.revrobotics.com/xmlsitemap.php' },
-  pitsco: { origin: 'https://www.pitsco.com', sitemap: 'https://www.pitsco.com/sitemap.xml' },
+  pitsco: { origin: 'https://www.pitsco.com', sitemap: 'https://www.pitsco.com/sitemap.xml', feed: true },
 };
+export const feedUrl = (vendor: VendorId, page: number) => `${vendorSources[vendor].origin}/products.json?limit=250&page=${page}`;
 
 /*
  * Catalog storage, per vendor, in VENDOR_CATALOG. Every run costs a handful of KV writes, whatever the catalog size:
@@ -132,6 +137,40 @@ function bigCommerceVariants(html: string, pageUrl: string, title: string): Draf
 
 export type ParsedPage = { records: VendorRecord[]; skip: SkipReason | null };
 
+type FeedProduct = { title?: string; handle?: string; product_type?: string; variants?: Array<{ id?: number; title?: string; sku?: string | null; price?: string | number; available?: boolean }> };
+/**
+ * One page of a Shopify `/products.json` feed. Each variant with a SKU becomes a record; its price is the store's USD
+ * price for one purchasable unit, and pack size is verified only from explicit wording, as on product pages.
+ * `empty` marks the page past the last product, which ends the crawl.
+ */
+export function parseShopifyFeed(vendor: VendorId, body: string, updatedAt: string): { records: VendorRecord[]; skippedProducts: number; empty: boolean } {
+  let products: FeedProduct[];
+  try { products = (JSON.parse(body) as { products?: FeedProduct[] }).products ?? []; } catch { throw new VendorFetchError('Vendor product feed was not JSON'); }
+  const origin = vendorSources[vendor].origin;
+  let skippedProducts = 0;
+  const records = products.flatMap(product => {
+    const title = decodeHtml((product.title ?? '').trim());
+    if (!title || !product.handle) { skippedProducts++; return []; }
+    const variants = product.variants ?? [];
+    const drafts = variants.flatMap((variant): VendorRecord[] => {
+      const sku = typeof variant.sku === 'string' ? variant.sku.trim() : '';
+      if (!sku) return [];
+      const label = variant.title && variant.title !== 'Default Title' ? variant.title : '';
+      const url = new URL(`/products/${encodeURIComponent(product.handle!)}`, origin);
+      if (variants.length > 1 && variant.id !== undefined) url.searchParams.set('variant', String(variant.id));
+      const name = label ? `${title} (${label})` : title;
+      const record: VendorRecord = { vendorId: vendor, sku, normalizedSku: normalizeSku(sku, vendor), name, normalizedName: normalizeName(name),
+        url: url.toString(), priceUsd: usd(variant.price, 'USD'), stock: variant.available === true ? 'in' : variant.available === false ? 'out' : 'unknown', stockQty: null,
+        category: product.product_type?.trim().toLowerCase() || 'uncategorized', updatedAt, source: 'feed', parser: 'shopify-feed',
+        ...(packFromText(label) ? pack(label, 'variant label') : pack(title, 'product name')) };
+      return /^[A-Z0-9]+$/.test(record.normalizedSku) ? [record] : [];
+    });
+    if (!drafts.length) skippedProducts++;
+    return drafts;
+  });
+  return { records, skippedProducts, empty: products.length === 0 };
+}
+
 /**
  * Turns one vendor product page into records. Variant rows win over the page-level Product node because they carry
  * each SKU's own price and pack label. A record needs a real vendor SKU; none is ever derived from the name.
@@ -207,11 +246,13 @@ async function retirePrevious(vendor: VendorId, kv: Kv, pointer: CatalogPointer,
  * barrier that lets KV propagate the batch and index to every location before any reader is pointed at them.
  * Parse problems skip the page with a reason; network failures stop the run after saving what was fetched.
  */
-export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; minRequestMs?: number; retireAfterMs?: number; now?: () => Date } = {}): Promise<VendorRun> {
+export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; maxFeedPages?: number; minRequestMs?: number; retireAfterMs?: number; now?: () => Date } = {}): Promise<VendorRun> {
   const started = Date.now();
   const now = options.now ?? (() => new Date());
   const maxProducts = Math.max(1, Math.min(options.maxProducts ?? 40, 500));
   const minRequestMs = options.minRequestMs ?? 500;
+  // Each feed page is a large JSON document (about 1.5 MB for AndyMark); four keep one run's parsing modest.
+  const maxFeedPages = Math.max(1, Math.min(options.maxFeedPages ?? 4, 20));
   const previousSnapshot = await json<VendorSnapshot>(kv, snapshotKey(vendor));
   let pointer = await json<CatalogPointer>(kv, pointerKey(vendor));
   let crawl = await json<Crawl>(kv, crawlKey(vendor));
@@ -221,9 +262,16 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
     if (wait > 0) await sleep(wait);
     lastRequest = Date.now();
     let response: Response;
-    try { response = await fetcher(url, { headers: { 'user-agent': userAgent, accept: 'text/html,application/xml,text/xml;q=0.9' }, signal: AbortSignal.timeout(15000) }); }
-    catch (cause) { throw new VendorFetchError(`Vendor request failed (${cause instanceof Error ? cause.name : 'error'})`); }
-    if (response.status === 429) { await sleep(Math.min(Number(response.headers.get('retry-after')) * 1000 || 1000, 5000)); throw new VendorFetchError('Vendor returned HTTP 429'); }
+    // A 429 is retried twice after the vendor's Retry-After (at most 10 s) before the run gives up.
+    for (let attempt = 0; ; attempt++) {
+      try { response = await fetcher(url, { headers: { 'user-agent': userAgent, accept: 'text/html,application/json,application/xml,text/xml;q=0.9' }, signal: AbortSignal.timeout(15000) }); }
+      catch (cause) { throw new VendorFetchError(`Vendor request failed (${cause instanceof Error ? cause.name : 'error'})`); }
+      if (response.status !== 429) break;
+      if (attempt >= 2) throw new VendorFetchError('Vendor returned HTTP 429');
+      const after = Number(response.headers.get('retry-after') ?? NaN);
+      await sleep(Math.min(Number.isFinite(after) && after >= 0 ? after * 1000 : 2000, 10000));
+      lastRequest = Date.now();
+    }
     if (!response.ok) throw new VendorFetchError(`Vendor returned HTTP ${response.status}`);
     return response.text();
   };
@@ -292,40 +340,55 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
       return summary;
     }
     const robots = await fetchText(`${vendorSources[vendor].origin}/robots.txt`);
-    if (!crawl) {
-      const root = await fetchText(vendorSources[vendor].sitemap);
-      const sitemaps = sitemapLocations(root).filter(url => /(?:type=products|sitemap_products)/i.test(url) && allowedUrl(vendor, url));
-      if (!sitemaps.length) throw new Error('No public product sitemap found');
-      crawl = { gen: crypto.randomUUID().slice(0, 8), startedAt: now().toISOString(), sitemaps, sitemapIndex: 0, urlCount: 0, urlIndex: 0, batches: 0, records: 0, skipped: {}, skipSamples: [], failing: null, done: false };
-    }
-    let urls: string[] = crawl.sitemapIndex > 0 ? await json<string[]>(kv, urlsKey(vendor, crawl.gen, crawl.sitemapIndex - 1)) ?? [] : [];
-    while (fetched < maxProducts) {
-      if (crawl.urlIndex >= crawl.urlCount) {
-        if (crawl.sitemapIndex >= crawl.sitemaps.length) break;
-        const xml = await fetchText(crawl.sitemaps[crawl.sitemapIndex]);
-        urls = sitemapLocations(xml).filter(url => allowedUrl(vendor, url) && (!['andymark', 'pitsco'].includes(vendor) || new URL(url).pathname.startsWith('/products/')));
-        await kv.put(urlsKey(vendor, crawl.gen, crawl.sitemapIndex), JSON.stringify(urls));
-        crawl.sitemapIndex++; crawl.urlIndex = 0; crawl.urlCount = urls.length;
-        continue;
+    if (vendorSources[vendor].feed) {
+      if (!robotsAllows(robots, '/products.json')) throw new Error('robots.txt disallows the product feed');
+      // Feed crawl state: urlIndex counts pages read, and sitemapIndex becomes 1 at the first empty page, which ends the crawl.
+      crawl ??= { gen: crypto.randomUUID().slice(0, 8), startedAt: now().toISOString(), sitemaps: [feedUrl(vendor, 1)], sitemapIndex: 0, urlCount: 1, urlIndex: 0, batches: 0, records: 0, skipped: {}, skipSamples: [], failing: null, done: false };
+      for (let pages = 0; pages < maxFeedPages && crawl.sitemapIndex < 1; pages++) {
+        const page = crawl.urlIndex + 1;
+        const feed = parseShopifyFeed(vendor, await fetchText(feedUrl(vendor, page)), now().toISOString());
+        fetched++;
+        if (feed.empty) { crawl.sitemapIndex = 1; crawl.urlCount = crawl.urlIndex; break; }
+        for (let n = 0; n < feed.skippedProducts; n++) skip('no-sku', feedUrl(vendor, page));
+        collected.push(...feed.records);
+        crawl.urlIndex = page; crawl.urlCount = page + 1;
       }
-      const url = urls[crawl.urlIndex];
-      if (!url) { crawl.urlIndex = crawl.urlCount; continue; }
-      if (!robotsAllows(robots, new URL(url).pathname)) { skip('robots-disallowed', url); crawl.urlIndex++; continue; }
-      let html: string;
-      try { html = await fetchText(url); }
-      catch (cause) {
-        if (!(cause instanceof VendorFetchError)) throw cause;
-        crawl.failing = crawl.failing?.url === url ? { url, runs: crawl.failing.runs + 1 } : { url, runs: 1 };
-        if (crawl.failing.runs < maxFailingRuns) throw cause;
-        skip('fetch-failed', url); crawl.failing = null; crawl.urlIndex++; fetched++;
-        continue;
+    } else {
+      if (!crawl) {
+        const root = await fetchText(vendorSources[vendor].sitemap);
+        const sitemaps = sitemapLocations(root).filter(url => /(?:type=products|sitemap_products)/i.test(url) && allowedUrl(vendor, url));
+        if (!sitemaps.length) throw new Error('No public product sitemap found');
+        crawl = { gen: crypto.randomUUID().slice(0, 8), startedAt: now().toISOString(), sitemaps, sitemapIndex: 0, urlCount: 0, urlIndex: 0, batches: 0, records: 0, skipped: {}, skipSamples: [], failing: null, done: false };
       }
-      fetched++;
-      crawl.urlIndex++;
-      if (crawl.failing?.url === url) crawl.failing = null;
-      const page = parseProductPage(vendor, url, html, now().toISOString());
-      if (page.skip) { skip(page.skip, url); continue; }
-      collected.push(...page.records.filter(record => allowedUrl(vendor, record.url)));
+      let urls: string[] = crawl.sitemapIndex > 0 ? await json<string[]>(kv, urlsKey(vendor, crawl.gen, crawl.sitemapIndex - 1)) ?? [] : [];
+      while (fetched < maxProducts) {
+        if (crawl.urlIndex >= crawl.urlCount) {
+          if (crawl.sitemapIndex >= crawl.sitemaps.length) break;
+          const xml = await fetchText(crawl.sitemaps[crawl.sitemapIndex]);
+          urls = sitemapLocations(xml).filter(url => allowedUrl(vendor, url) && (!['andymark', 'pitsco'].includes(vendor) || new URL(url).pathname.startsWith('/products/')));
+          await kv.put(urlsKey(vendor, crawl.gen, crawl.sitemapIndex), JSON.stringify(urls));
+          crawl.sitemapIndex++; crawl.urlIndex = 0; crawl.urlCount = urls.length;
+          continue;
+        }
+        const url = urls[crawl.urlIndex];
+        if (!url) { crawl.urlIndex = crawl.urlCount; continue; }
+        if (!robotsAllows(robots, new URL(url).pathname)) { skip('robots-disallowed', url); crawl.urlIndex++; continue; }
+        let html: string;
+        try { html = await fetchText(url); }
+        catch (cause) {
+          if (!(cause instanceof VendorFetchError)) throw cause;
+          crawl.failing = crawl.failing?.url === url ? { url, runs: crawl.failing.runs + 1 } : { url, runs: 1 };
+          if (crawl.failing.runs < maxFailingRuns) throw cause;
+          skip('fetch-failed', url); crawl.failing = null; crawl.urlIndex++; fetched++;
+          continue;
+        }
+        fetched++;
+        crawl.urlIndex++;
+        if (crawl.failing?.url === url) crawl.failing = null;
+        const page = parseProductPage(vendor, url, html, now().toISOString());
+        if (page.skip) { skip(page.skip, url); continue; }
+        collected.push(...page.records.filter(record => allowedUrl(vendor, record.url)));
+      }
     }
     await flush();
     if (crawl.sitemapIndex >= crawl.sitemaps.length && crawl.urlIndex >= crawl.urlCount) {
