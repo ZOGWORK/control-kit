@@ -38,11 +38,11 @@ export function printCategory(name: string) {
 
 /** Process vocabulary, matched as whole words only. */
 const processWords: Record<Exclude<Disposition, 'review'>, string> = {
-  print: '3dp|3d[ -]?print(?:ed|ing)?|print(?:ed)?|fdm|sla|sls|additive',
-  cnc: 'cnc|mill(?:ed|ing)?|machin(?:ed|ing)|lathe|turn(?:ed|ing)',
-  'cut-2d': 'laser(?:[ -]?cut)?|water[ -]?jet|router|2d[ -]?cut|plasma(?:[ -]?cut)?|dxf',
-  buy: 'buy|purchased?|cots|off[ -]the[ -]shelf',
-  fabricate: 'weld(?:ed|ing)?|bent|bend|sheet[ -]?metal|fabricat(?:ed|ion)|hand[ -]?made',
+  print: '3dp|3d[ -]?print(?:ed|ing|s)?|print(?:ed|ing|s)?|fdm|sla|sls|additive(?:[ -]manufactur(?:ed|ing))?',
+  cnc: 'cnc(?:[ -](?:machin(?:ed|ing)|mill(?:ed|ing)?))?|mill(?:ed|ing|s)?|machin(?:ed|ing)|lathe[sd]?|turn(?:ed|ing)',
+  'cut-2d': 'laser(?:[ -]?cut(?:s|ting)?|ed|ing)?|water[ -]?jet(?:s|ted|ting)?|rout(?:er|ed|ing)|2d[ -]?cut(?:s|ting)?|plasma(?:[ -]?cut(?:s|ting)?)?|dxf',
+  buy: 'buy|bought|purchas(?:e|ed|ing)|cots|off[ -]the[ -]shelf',
+  fabricate: 'weld(?:ed|ing|s)?|bent|bend(?:ing|s)?|sheet[ -]?metal|fabricat(?:e|ed|es|ing|ion)|hand[ -]?made',
 };
 /** Team-written process markers in a name: a complete bracketed tag ("[3DP]", "(CNC)", "{laser}") or "#word". */
 const tagged = (Object.entries(processWords) as Array<[Disposition, string]>).map(([disposition, words]) =>

@@ -48,6 +48,10 @@ describe('manufacturing disposition', () => {
     expect(process('Printed then machined')).toMatchObject({ disposition: 'review' });
     expect(process('Printed then machined').reviewReason).toContain('more than one process');
     expect(process('Turnkey').dispositionSource).not.toBe('explicit-metadata');
+    expect(['Printing', '3D Printing', 'Prints', 'Additive manufacturing'].map(value => process(value).disposition)).toEqual(['print', 'print', 'print', 'print']);
+    expect(['Machining', 'CNC milling', 'Lathed', 'Turning'].map(value => process(value).disposition)).toEqual(['cnc', 'cnc', 'cnc', 'cnc']);
+    expect(['Laser cutting', 'Waterjetted', 'Routed', 'Plasma cutting'].map(value => process(value).disposition)).toEqual(['cut-2d', 'cut-2d', 'cut-2d', 'cut-2d']);
+    expect(['Bending', 'Welding', 'Fabrication', 'Purchased', 'Bought'].map(value => process(value).disposition)).toEqual(['fabricate', 'fabricate', 'fabricate', 'buy', 'buy']);
   });
   it('uses a print material or a BOM process column as explicit metadata', () => {
     const pla = line('Sensor mount'); pla.material = 'PLA';
