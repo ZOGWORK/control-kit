@@ -93,6 +93,20 @@ PR 3 (Onshape inventory through the BOM):
 - **Diagnostics.** `diagnostics.bom` reports rows, matched lines, lines without a row, rows without a line, and quantity mismatches, plus each column's id, `propertyName`, and sample value type, without any part data. A live scan therefore shows whether the mapping above fits real BOMs. `diagnostics.revision` and `diagnostics.cache` record what was read.
 - **Allowance.** Onshape counts only 2xx/3xx responses against the 2,500-request allowance, so the ledger now reports `billable` separately from `total`. A 402 ends the scan with an explicit annual-allowance message.
 
+PR 4 (manufacturing model):
+- **Fields.** `classifier.ts` replaces the keyword score with `decideDisposition`. Each line carries:
+  - `disposition`: `buy`, `print`, `cnc`, `cut-2d`, `fabricate`, or `review`;
+  - `dispositionSource`: `manual`, `exact-sku`, `explicit-metadata`, `provenance`, `suggestion`, or `none`;
+  - `dispositionConfidence` and `dispositionEvidence`;
+  - `reviewReason` and `suggestedDisposition`;
+  - `provenance`: `vendor-catalog`, `standard-content`, `linked-library`, `team-design`, or `unknown`.
+- **Precedence.** Manual, then exact SKU (Buy), then explicit metadata (BOM `process` column, complete bracketed or `#` team tags, print materials, all matched as whole words; values naming two processes go to review), then provenance (standard content, a linked library part with a part number, a confirmed match), then suggestion, then none. Suggestions and no-evidence cases are always `review`; heuristics never decide alone. A manual override on an exact-SKU part keeps the SKU and adds an "exception" evidence line.
+- **Legacy view.** `classification` (`commercial`/`printed`/`unknown`) is still derived from the disposition for the export code that reads it, until the UI/Excel rework. `classificationScore` is always 0 now. The print export selects only `disposition === 'print'`, so name-only print suggestions are no longer exported until confirmed.
+- **Shared overrides.** The current choice is stored per document at `disposition:{documentId}:{sha256(identity)}` as `{ disposition, by, byId, at }`, last write wins. KV has no atomic read-modify-write, so every change is also written to its own never-overwritten key, `disposition-change:{documentId}:{hash}:{at}:{uuid}`, kept for a year; concurrent saves therefore never erase history. Clearing a choice stores `disposition: null`.
+  - A write needs the writer's own `scan:{userId}:{scanId}` for the same document, which proves Onshape access.
+  - The pre-rework per-user `override:{userId}:{documentId}:{hash}` keys (`commercial`/`printed`) are read as a fallback via `parseOverride` and deleted when the part is set again.
+  - The BOM merge now also maps a `process` column (`process`, `manufacturing`, `makebuy`, …).
+
 ## Tuning, tests, and release
 
 Match normalization, thresholds, and alternative ranking are in `packages/shared/src/matching.ts`; exact SKU still forces Commercial absent manual override. Print scoring thresholds and mechanism folders are in `packages/shared/src/classifier.ts`. Vendor stale hours and cron schedule are in `wrangler.toml`; catalog crawl batch limits are in `apps/worker/src/vendor-ingest.ts`. Scan request flow, source cache, and backoff are in `apps/worker/src/scan.ts`; BOM column mapping is in `packages/shared/src/bom.ts`; STL export bounds are in `apps/worker/src/stl-zip.ts`. Change these with fixture tests and record any changed data shape here.

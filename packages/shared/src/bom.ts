@@ -11,7 +11,9 @@ export type BomRow = { rowId?: string; indentLevel?: number; headerIdToValue?: R
 export type BillOfMaterials = { name?: string; headers?: BomHeader[]; rows?: BomRow[]; bomSource?: { document?: { name?: string }; element?: { name?: string; configuration?: string }; documentMicroversion?: { id?: string } } };
 
 /** BOM fields Control Kit uses. A missing field is null, never an empty string. */
-export type BomProperties = { name: string | null; partNumber: string | null; description: string | null; vendor: string | null; material: string | null; quantity: number | null };
+export type BomProperties = { name: string | null; partNumber: string | null; description: string | null; vendor: string | null; material: string | null; quantity: number | null;
+  /** A team-kept manufacturing/process column, when the BOM template has one. */
+  process: string | null };
 type Field = keyof BomProperties;
 const fieldAliases: Record<Field, string[]> = {
   name: ['name', 'partname'],
@@ -20,6 +22,7 @@ const fieldAliases: Record<Field, string[]> = {
   vendor: ['vendor', 'supplier', 'manufacturer'],
   material: ['material'],
   quantity: ['quantity', 'qty'],
+  process: ['process', 'manufacturing', 'manufacturingprocess', 'manufacturingmethod', 'fabrication', 'makebuy', 'makeorbuy'],
 };
 const compact = (value: string | undefined) => (value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -49,7 +52,7 @@ export function bomText(value: unknown): string | null {
 export function bomProperties(row: BomRow, columns: Partial<Record<Field, string>>): BomProperties {
   const cell = (field: Field) => (columns[field] ? bomText(row.headerIdToValue?.[columns[field]!]) : null);
   const quantity = Number(cell('quantity'));
-  return { name: cell('name'), partNumber: cell('partNumber'), description: cell('description'), vendor: cell('vendor'), material: cell('material'), quantity: Number.isFinite(quantity) && cell('quantity') !== null ? quantity : null };
+  return { name: cell('name'), partNumber: cell('partNumber'), description: cell('description'), vendor: cell('vendor'), material: cell('material'), process: cell('process'), quantity: Number.isFinite(quantity) && cell('quantity') !== null ? quantity : null };
 }
 
 /** "default" and an absent configuration name the same thing; the definition and BOM do not always agree on which. */
