@@ -1,0 +1,229 @@
+/* Control Kit theme: the Control apps' graphite + volt palette (shared with Control Scout and Control Point),
+   with Arc's foundation tokens mapped onto it so Arc components render in the same language. */
+@import "../components/arc/foundation.css";
+
+@font-face { font-family: "Inter"; font-weight: 100 900; font-style: normal; font-display: swap; src: url("/fonts/Inter.woff2") format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-weight: 300 700; font-style: normal; font-display: swap; src: url("/fonts/SpaceGrotesk.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 400; font-style: normal; font-display: swap; src: url("/fonts/JetBrainsMono.woff2") format("woff2"); }
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  /* Control palette */
+  --ck-bg: #0a0a0b;
+  --ck-card: #111113;
+  --ck-raised: #141416;
+  --ck-muted: #18181b;
+  --ck-text: #f4f4f5;
+  --ck-text-muted: #a1a1aa;
+  --ck-line: #ffffff14;
+  --ck-line-strong: #ffffff24;
+  --ck-volt: #ffc700;
+  --ck-volt-hover: #ffd633;
+  --ck-volt-ink: #231a00;
+  --ck-volt-soft: #ffc7001f;
+  --ck-info: #38bdf8;
+  --ck-success: #34d399;
+  --ck-warning: #fb923c;
+  --ck-danger: #f43f5e;
+  --ck-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --ck-display: "Space Grotesk", "Inter", sans-serif;
+  --ck-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* Arc foundation, mapped onto the palette */
+  --background: var(--ck-bg);
+  --surface: var(--ck-card);
+  --surface-raised: var(--ck-raised);
+  --surface-muted: var(--ck-muted);
+  --foreground: var(--ck-text);
+  --text-secondary: color-mix(in srgb, var(--ck-text) 78%, var(--ck-text-muted));
+  --text-muted: var(--ck-text-muted);
+  --border: var(--ck-line);
+  --border-subtle: var(--ck-line);
+  --border-strong: var(--ck-line-strong);
+  --accent: var(--ck-volt);
+  --accent-strong: var(--ck-volt-hover);
+  --accent-subtle: var(--ck-volt-soft);
+  --accent-foreground: var(--ck-volt-ink);
+  --success: var(--ck-success);
+  --warning: var(--ck-warning);
+  --danger: var(--ck-danger);
+  --font-body: var(--ck-sans);
+  --font-display: var(--ck-display);
+  --radius-control: 0.625rem;
+  --shadow-resting: 0 1px 2px rgb(0 0 0 / 0.25);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--ck-bg);
+  color: var(--ck-text);
+  font: 14px/1.5 var(--ck-sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { font-family: var(--ck-display); font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+h1 { font-size: 1.375rem; line-height: 1.2; }
+h2 { font-size: 1.0625rem; }
+h3 { font-size: 0.9375rem; }
+p { margin: 0; }
+a { color: inherit; }
+::selection { background: var(--ck-volt); color: var(--ck-volt-ink); }
+.num { font-family: var(--ck-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--ck-text-muted); }
+.small { font-size: 12px; }
+.link { color: var(--ck-volt); text-decoration: none; }
+.link:hover { text-decoration: underline; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- Shell ---------- */
+.shell { min-height: 100%; display: grid; grid-template-columns: 1fr; }
+.sidebar { display: none; }
+.main { min-width: 0; display: flex; flex-direction: column; }
+.content { width: 100%; max-width: 1080px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; align-content: start; }
+
+/* Top bar: assembly identity and the scan action; sits above the content on every width. */
+.topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  background: color-mix(in srgb, var(--ck-bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--ck-line); }
+.topbar-title { min-width: 0; flex: 1; }
+.topbar-title h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar-title p { font-size: 12px; color: var(--ck-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.brand-mark { width: 28px; height: 28px; flex-shrink: 0; }
+
+/* Narrow (the Onshape side panel): a scrollable row of section tabs under the top bar. */
+.tabs { position: sticky; top: 57px; z-index: 4; display: flex; gap: 4px; padding: 8px 12px; overflow-x: auto; scrollbar-width: none;
+  background: var(--ck-bg); border-bottom: 1px solid var(--ck-line); }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; padding: 6px 10px; border-radius: 999px; border: 1px solid transparent;
+  background: none; color: var(--ck-text-muted); font: 500 13px var(--ck-sans); cursor: pointer; }
+.tab:hover { color: var(--ck-text); background: var(--ck-muted); }
+.tab[aria-current="page"] { color: var(--ck-volt-ink); background: var(--ck-volt); }
+.count { font: 12px var(--ck-mono); color: inherit; opacity: 0.8; }
+
+/* Desktop: Control Scout's sidebar. */
+@media (min-width: 900px) {
+  .shell { grid-template-columns: 232px minmax(0, 1fr); }
+  .sidebar { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; height: 100vh; padding: 14px 10px;
+    border-right: 1px solid var(--ck-line); background: var(--ck-bg); }
+  .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; font-family: var(--ck-display); font-weight: 600; font-size: 15px; }
+  .sidebar-group { margin-top: 10px; padding: 0 10px 4px; font-size: 12px; color: var(--ck-text-muted); }
+  .nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px; background: none;
+    color: var(--ck-text-muted); font: 500 13.5px var(--ck-sans); text-align: left; cursor: pointer; }
+  .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .nav-item:hover { color: var(--ck-text); background: var(--ck-muted); }
+  .nav-item[aria-current="page"] { color: var(--ck-text); background: var(--ck-muted); box-shadow: inset 2px 0 0 var(--ck-volt); }
+  .nav-item .count { margin-left: auto; }
+  .nav-item .count.attention { color: var(--ck-volt); opacity: 1; }
+  .sidebar-foot { margin-top: auto; display: grid; gap: 4px; padding-top: 10px; border-top: 1px solid var(--ck-line); }
+  .tabs { display: none; }
+  .topbar .brand-mark { display: none; }
+  .content { padding: 24px 28px 40px; gap: 20px; }
+}
+
+/* ---------- Surfaces ---------- */
+.panel { background: var(--ck-card); border: 1px solid var(--ck-line); border-radius: 14px; }
+.panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 14px 16px; }
+.panel-head p { font-size: 13px; color: var(--ck-text-muted); margin-top: 2px; }
+.panel-body { padding: 0 16px 16px; }
+.panel-head + .rows { border-top: 1px solid var(--ck-line); }
+.section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.section-head p { color: var(--ck-text-muted); font-size: 13px; margin-top: 2px; max-width: 60ch; }
+
+/* KPI tiles, as on Control Scout: label, then a large figure, then context. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; }
+.tile { display: grid; gap: 2px; padding: 14px; text-align: left; background: var(--ck-card); border: 1px solid var(--ck-line); border-radius: 14px; color: inherit; font: inherit; }
+button.tile { cursor: pointer; }
+button.tile:hover { border-color: var(--ck-line-strong); background: var(--ck-raised); }
+.tile-label { font-size: 12.5px; color: var(--ck-text-muted); }
+.tile-value { font: 600 1.75rem/1.15 var(--ck-display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.tile-context { font-size: 12px; color: var(--ck-text-muted); }
+.tile.attention .tile-value { color: var(--ck-volt); }
+.tile.incomplete .tile-value { color: var(--ck-text-muted); }
+
+/* Rows: one list primitive for the queue, parts, buy list, and make list. */
+.rows { display: grid; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 11px 16px; border-bottom: 1px solid var(--ck-line); }
+.row:last-child { border-bottom: 0; }
+.row-main { min-width: 0; display: grid; gap: 3px; }
+.row-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 500; }
+.row-title > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--ck-text-muted); }
+.row-aside { display: flex; align-items: center; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+button.row { width: 100%; text-align: left; background: none; border-left: 0; border-right: 0; border-top: 0; color: inherit; font: inherit; cursor: pointer; }
+button.row:hover { background: var(--ck-raised); }
+.row.dim { opacity: 0.6; }
+@media (max-width: 520px) {
+  .row { grid-template-columns: 1fr; }
+  .row-aside { justify-content: flex-start; }
+}
+
+/* Disposition chips: color carries meaning. Buy is blue, make is volt, review is orange. */
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; font: 500 12px var(--ck-sans); white-space: nowrap;
+  background: var(--ck-muted); color: var(--ck-text); border: 1px solid var(--ck-line); }
+.chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ck-text-muted); }
+.chip.buy::before { background: var(--ck-info); }
+.chip.make::before { background: var(--ck-volt); }
+.chip.review { color: var(--ck-warning); border-color: color-mix(in srgb, var(--ck-warning) 35%, transparent); background: color-mix(in srgb, var(--ck-warning) 10%, transparent); }
+.chip.review::before { background: var(--ck-warning); }
+.chip.suppressed::before { background: transparent; border: 1px solid var(--ck-text-muted); }
+
+/* Step list on the overview: what to do next, each with its own action. */
+.step { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--ck-line); }
+.step:last-child { border-bottom: 0; }
+.step-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: var(--ck-muted); color: var(--ck-text-muted); }
+.step-icon svg { width: 16px; height: 16px; }
+.step-icon.attention { color: var(--ck-volt); background: var(--ck-volt-soft); }
+.step-icon.warning { color: var(--ck-warning); background: color-mix(in srgb, var(--ck-warning) 14%, transparent); }
+.step-icon.done { color: var(--ck-success); background: color-mix(in srgb, var(--ck-success) 14%, transparent); }
+@media (max-width: 520px) { .step { grid-template-columns: auto minmax(0, 1fr); } .step > :last-child { grid-column: 2; justify-self: start; } }
+
+/* Vendor catalog status strip. */
+.vendors { display: flex; flex-wrap: wrap; gap: 6px; }
+.vendor { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--ck-line); font-size: 12.5px; }
+.vendor .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ck-text-muted); }
+.vendor.published .dot { background: var(--ck-success); }
+.vendor.partial .dot { background: var(--ck-volt); }
+.vendor.failing .dot { background: var(--ck-danger); }
+
+/* Toolbar above lists. */
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.toolbar > :first-child { flex: 1 1 220px; }
+
+/* Money and quantity columns. */
+.figures { display: flex; gap: 14px; align-items: baseline; font-size: 13px; }
+.figures .num { color: var(--ck-text); }
+.subtotal { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--ck-line); font-size: 13px; }
+
+/* Detail drawer content. */
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; font-size: 13px; }
+.facts dt { color: var(--ck-text-muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.evidence { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; color: var(--text-secondary); }
+.stack { display: grid; gap: 14px; }
+.inline-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.center-page { min-height: 100%; display: grid; place-items: center; padding: 24px; }
+.center-card { width: min(440px, 100%); display: grid; gap: 16px; padding: 24px; }
+.center-card .brand { display: flex; align-items: center; gap: 10px; font-family: var(--ck-display); font-weight: 600; font-size: 17px; }
+
+/* Small pieces used across views. */
+.link-button { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.link-button:hover span { text-decoration: underline; text-decoration-color: var(--ck-line-strong); text-underline-offset: 3px; }
+.field { display: grid; gap: 6px; font-size: 13px; }
+.text-input { height: var(--control-height-md, 2.5rem); padding: 0 12px; border-radius: var(--radius-control); border: 1px solid var(--ck-line-strong);
+  background: var(--ck-muted); color: var(--ck-text); font: 14px var(--ck-sans); }
+.text-input[aria-invalid="true"] { border-color: var(--ck-danger); }
+@media (min-width: 900px) { .settings-narrow { display: none !important; } }
+/* Volt primary buttons (see Button in app/bits.tsx). */
+.btn-volt { --foreground: var(--ck-volt); --background: var(--ck-volt-ink); }
+/* In the narrow Onshape panel, tiles stay readable but take less height. */
+@media (max-width: 520px) {
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .tile { padding: 10px 12px; }
+  .tile-value { font-size: 1.375rem; }
+  .content { padding: 12px; gap: 12px; }
+  .panel-head { padding: 12px; }
+  .row, .step { padding: 10px 12px; }
+}

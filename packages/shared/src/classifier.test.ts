@@ -67,6 +67,20 @@ describe('manufacturing disposition', () => {
     expect(classify(line('Hub', { documentId: 'ftc-library', partNumber: '1309-0016-0006' }))).toMatchObject({ disposition: 'buy', provenance: 'linked-library', dispositionConfidence: 'medium' });
     expect(classify(line('Mystery bracket', { documentId: 'ftc-library' }))).toMatchObject({ disposition: 'review', provenance: 'linked-library' });
   });
+  it('suggests Buy for vendor part numbers and standard hardware in names, from the live HORS scan', () => {
+    const suggested = (name: string, extra: Partial<AssemblyInstance> = {}) => classify(line(name, extra));
+    expect(suggested('2302 Series Aluminum, MOD 0.8, Hub Mount Gear (14mm Bore, 48 Tooth)')).toMatchObject({ disposition: 'review', suggestedDisposition: 'buy', dispositionSource: 'suggestion' });
+    expect(suggested('2106-4008-0560', { documentId: 'library' })).toMatchObject({ suggestedDisposition: 'buy', reviewReason: "Name includes a goBILDA/ServoCity part number (2106-4008-0560): confirm it's bought" });
+    expect(suggested('5103 Gearbox Base Mounting Screw M3 x 5mm length SHCS)_91290A110', { documentId: 'library' }).suggestedDisposition).toBe('buy');
+    expect(suggested('M4 x 0.7mm Locknut', { documentId: 'library' })).toMatchObject({ suggestedDisposition: 'buy', reviewReason: 'Looks like standard hardware: confirm it is bought' });
+    expect(suggested('Roller E-Clip', { documentId: 'library' }).suggestedDisposition).toBe('buy');
+    expect(suggested('80 Tooth x 9mm HTD5 Belt').suggestedDisposition).toBe('buy');
+    // Print wording still wins over hardware wording, and a plain plate still goes to 2D-cut review.
+    expect(suggested('Printed bearing holder').suggestedDisposition).toBe('print');
+    expect(suggested('Inner Plate').suggestedDisposition).toBe('cut-2d');
+    // A suggestion never decides: nothing here is Buy until a person or a catalog match says so.
+    expect(suggested('M4 x 0.7mm Locknut').disposition).toBe('review');
+  });
   it('asks a person about a possible vendor match instead of buying it', () => {
     const value = line('96mm wheel');
     value.matchStatus = 'possible'; value.vendor = vendor('3606-0014-0096');

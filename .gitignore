@@ -9,3 +9,6 @@ playwright-report/
 test-results/
 work/
 *.tsbuildinfo
+
+# Local env files (may name private fixture paths)
+*.local
