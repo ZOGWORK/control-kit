@@ -141,6 +141,42 @@ function bigCommerceVariants(html: string, pageUrl: string, title: string): Draf
 
 export type ParsedPage = { records: VendorRecord[]; skip: SkipReason | null };
 
+/**
+ * Vendors whose stores name every multi-unit product as one ("25 Pack" in the name or variant label, or a "-PK4" SKU),
+ * so a product without that wording is sold as one unit. Checked across each full catalog on 2026-10-24: goBILDA (1,993
+ * records) and REV (278) had no fastener or hardware product without pack wording that was not a single unit. ServoCity
+ * is not here: it sells packs like "6-32 Socket Head Machine Screw" without wording, stating the pack in a product field.
+ */
+const labelsEveryPack: VendorId[] = ['gobilda', 'rev'];
+/**
+ * Pack evidence beyond the product's own wording, strongest first: a "Pack Info" product field (ServoCity), a "-PKn" SKU
+ * suffix (REV), then the single-unit convention above. Records that already carry wording-based evidence are unchanged.
+ */
+export function applyPackEvidence(record: VendorRecord, packInfo: string | null = null): VendorRecord {
+  if (record.packSizeVerified) return record;
+  const field = packInfo ? packFromText(packInfo) : null;
+  if (field) return { ...record, packSize: field.size, packSizeVerified: true, packEvidence: `product field "Pack Info: ${packInfo}"` };
+  const suffix = record.sku.match(/-PK(\d{1,4})$/i);
+  if (suffix && Number(suffix[1]) > 0) return { ...record, packSize: Number(suffix[1]), packSizeVerified: true, packEvidence: `SKU suffix "${suffix[0].slice(1)}"` };
+  if (labelsEveryPack.includes(record.vendorId)) return { ...record, packSize: 1, packSizeVerified: true, packEvidence: 'sold individually: no pack wording, and this vendor names every multi-unit product' };
+  return record;
+}
+/**
+ * A BigCommerce product custom field such as `{"name":"Pack Info","value":"25 Pack"}`, which pages embed as JSON, often
+ * inside an escaped string. Each small object that mentions a pack is parsed, so spacing and key order do not matter.
+ */
+function packInfoField(html: string) {
+  const text = html.replace(/\\"/g, '"');
+  for (const [candidate] of text.matchAll(/\{[^{}]{0,300}\}/g)) {
+    if (!/pack/i.test(candidate)) continue;
+    try {
+      const field = JSON.parse(candidate) as { name?: unknown; value?: unknown };
+      if (typeof field.name === 'string' && /^pack (?:info|qty|quantity|size)$/i.test(field.name.trim()) && typeof field.value === 'string' && field.value.trim()) return field.value.trim();
+    } catch { /* Not a JSON object; keep looking. */ }
+  }
+  return null;
+}
+
 type FeedProduct = { title?: string; handle?: string; product_type?: string; variants?: Array<{ id?: number; title?: string; sku?: string | null; price?: string | number; available?: boolean }> };
 /**
  * One page of a Shopify `/products.json` feed. Each variant with a SKU becomes a record; its price is the store's USD
@@ -202,7 +238,9 @@ export function parseProductPage(vendor: VendorId, pageUrl: string, html: string
     });
   }
   if (!drafts.length) return { records: [], skip: nodes.length || title ? 'no-sku' : 'no-product-data' };
-  const records = drafts.map(draft => ({ ...draft, vendorId: vendor, normalizedSku: normalizeSku(draft.sku, vendor), normalizedName: normalizeName(draft.name), category: draft.category ?? category, updatedAt, source: 'sitemap' as const }))
+  // A page-level "Pack Info" field describes the page's product, so it only applies when the page has one record.
+  const packInfo = drafts.length === 1 ? packInfoField(html) : null;
+  const records = drafts.map(draft => applyPackEvidence({ ...draft, vendorId: vendor, normalizedSku: normalizeSku(draft.sku, vendor), normalizedName: normalizeName(draft.name), category: draft.category ?? category, updatedAt, source: 'sitemap' as const }, packInfo))
     .filter(record => /^[A-Z0-9]+$/.test(record.normalizedSku));
   return records.length ? { records: [...new Map(records.map(record => [record.normalizedSku, record])).values()], skip: null } : { records: [], skip: 'no-sku' };
 }

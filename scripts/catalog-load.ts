@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { normalizeSku, type VendorId, type VendorRecord } from '../packages/shared/src/index';
 import { propagationMs, publishStaged, spotCheck, stageCatalog, validateStaged } from '../apps/worker/src/catalog-publish';
 import { normalizeFeedRows, parseCsv, parseJsonFeed, type FeedField } from '../apps/worker/src/feed-import';
-import { batchKey, pointerKey, type CatalogPointer } from '../apps/worker/src/vendor-ingest';
+import { applyPackEvidence, batchKey, pointerKey, type CatalogPointer } from '../apps/worker/src/vendor-ingest';
 import type { Kv } from '../apps/worker/src/index';
 
 const [mode, ...rest] = process.argv.slice(2);
@@ -88,7 +88,8 @@ if (mode === 'stage') {
     const dump = JSON.parse(readFileSync(flag('crawl')!, 'utf8')) as Record<string, string>;
     const pointer = JSON.parse(dump[pointerKey(vendor)] ?? 'null') as CatalogPointer | null;
     if (!pointer?.complete) throw new Error('The crawl dump has no complete catalog');
-    records = Array.from({ length: pointer.batches ?? 0 }, (_, batch) => JSON.parse(dump[batchKey(vendor, pointer.gen, batch)] ?? '[]') as VendorRecord[]).flat();
+    // Records crawled before pack evidence rules existed get the same SKU-suffix and single-unit evidence as a fresh crawl.
+    records = Array.from({ length: pointer.batches ?? 0 }, (_, batch) => JSON.parse(dump[batchKey(vendor, pointer.gen, batch)] ?? '[]') as VendorRecord[]).flat().map(record => applyPackEvidence(record));
     source = 'crawl'; skipped = pointer.skipped ?? {};
   } else throw new Error('stage needs --feed <file> or --crawl <dump>');
   const manifest = await stageCatalog(vendor, records, kv, { source, rejected, skipped, note: flag('note') });
