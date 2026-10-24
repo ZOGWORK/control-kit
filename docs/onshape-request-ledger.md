@@ -9,10 +9,13 @@ Since PR 1, the Worker also counts every outbound Onshape request it sends, incl
 | When (UTC) | Counter | Source |
 |---|---|---|
 | Before 2026-10-24 | 16, read *during* a HORS scan, not after | Owner, from the prior session |
-| — | *pending:* to be read before the next live call | Onshape Developer page |
+| 2026-10-24 ~18:05 | **98 / 2,500** (personal account, day 46 of 365), before any rework live call | Onshape Developer page (My account → Developer), read by the agent in the owner's session |
 
 ## Development requests
 
 | Date | PR | Requests | Purpose | Result |
 |---|---|---|---|---|
 | 2026-10-24 | PR 1 | 0 | Baseline diagnosis used repository code and production KV only | — |
+| 2026-10-24 | PR 3/4 check | 4 (all 2xx) | OAuth connect (1 session info), then one HORS scan: microversion, definition, BOM | Scan matched Onshape BOM: 180/193 lines, 0 quantity mismatches. See [hors-live-scan-2026-10-24.md](hors-live-scan-2026-10-24.md). Expected counter: 102 |
+
+The owner said on 2026-10-24 not to ration live requests ("use as much as u want"); every request is still logged here.

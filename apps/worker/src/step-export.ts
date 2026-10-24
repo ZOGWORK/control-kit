@@ -9,7 +9,9 @@ import { SessionExpiredError } from './scan';
  * Per part: 1 translation start + its status polls + 1 download, all counted in the request ledger.
  */
 export type JobPart = ExportPart & { documentId: string; elementId: string; exportSource: { type: 'w' | 'v'; id: string } | null; translationId: string | null; resultDocumentId: string | null; startedAt: number | null };
-export type ExportJob = { jobId: string; documentId: string; scanId: string; assemblyName: string; documentName?: string; revision: { type: 'v' | 'm'; id: string } | null; scannedAt: string; createdAt: string; parts: JobPart[] };
+export type ExportJob = { jobId: string; documentId: string; scanId: string; assemblyName: string; documentName?: string; revision: { type: 'v' | 'm'; id: string } | null; scannedAt: string; createdAt: string; parts: JobPart[];
+  /** Where the next poll resumes among running translations. */
+  cursor?: number };
 type FetchOnshape = (path: string, init?: RequestInit) => Promise<Response>;
 /** Public view of a job: no Onshape IDs beyond what the user's own scan already showed. */
 export const jobSummary = (job: ExportJob) => ({ jobId: job.jobId, assemblyName: job.assemblyName, documentName: job.documentName, revision: job.revision, scannedAt: job.scannedAt, createdAt: job.createdAt,
@@ -36,17 +38,36 @@ export function createExportJob(result: ScanResult, jobId: string, now = new Dat
 
 const failure = (status: number) => status === 402 ? "Onshape's annual API allowance is used up" : status === 403 || status === 404 ? 'No access to this part in Onshape' : `Onshape returned HTTP ${status}`;
 
-/** Advances a job within `budget` Onshape requests. Returns the job, mutated in place; the caller persists it. */
-export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetchOnshape: FetchOnshape, apiVersion: string, budget = 30, now = () => Date.now()) {
-  let spent = 0;
+/** Thrown by a budgeted fetcher once the request budget is spent; the work it would have done waits for the next poll. */
+export class BudgetExhaustedError extends Error {}
+/** Outbound Onshape requests one poll may still send. Shared with the fetcher, so its 429 retries count too. */
+export type RequestBudget = { remaining: number };
+/** Wraps a fetcher so every request it sends, including retries made through it, spends the shared budget. */
+export const budgeted = (fetchOnshape: FetchOnshape, budget: RequestBudget): FetchOnshape => async (path, init) => {
+  if (budget.remaining <= 0) throw new BudgetExhaustedError();
+  budget.remaining--;
+  return fetchOnshape(path, init);
+};
+
+/**
+ * Advances a job until the request budget is spent. `fetchOnshape` must spend `budget` for every request it sends
+ * (see `budgeted`, or the Worker's `onshapeFetcher`). Pending parts start first, since Onshape translates them in
+ * parallel; running parts are then polled from a cursor that rotates between calls, so no part waits behind the
+ * same thirty every time. Returns the job, mutated in place; the caller persists it.
+ */
+export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetchOnshape: FetchOnshape, apiVersion: string, budget: RequestBudget = { remaining: 30 }, now = () => Date.now()) {
   const encode = encodeURIComponent;
-  for (const [index, part] of job.parts.entries()) {
-    if (spent >= budget) break;
+  const pending = job.parts.flatMap((part, index) => part.state === 'pending' ? [index] : []);
+  const running = job.parts.flatMap((part, index) => part.state === 'translating' ? [index] : []);
+  const start = running.length ? (job.cursor ?? 0) % running.length : 0;
+  let polled = 0;
+  for (const index of [...pending, ...running.slice(start), ...running.slice(0, start)]) {
+    if (budget.remaining <= 0) break;
+    const part = job.parts[index];
     try {
       if (part.state === 'pending') {
         const { type, id } = part.exportSource!;
         // Onshape PartStudio/createPartStudioTranslation (OAuth2Read): STEP, one part, its configuration, not stored in the document.
-        spent++;
         const response = await fetchOnshape(`/api/${apiVersion}/partstudios/d/${encode(part.documentId)}/${type}/${encode(id)}/e/${encode(part.elementId)}/translations`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ formatName: 'STEP', partIds: part.partId, ...(part.configuration && part.configuration !== 'default' ? { configuration: part.configuration } : {}), storeInDocument: false, notifyUser: false, flattenAssemblies: false }) });
@@ -56,9 +77,8 @@ export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetc
         Object.assign(part, { state: 'translating', translationId: started.id, startedAt: now() });
         continue;
       }
-      if (part.state !== 'translating') continue;
+      polled++;
       if (now() - (part.startedAt ?? 0) > translationTimeoutMs) { Object.assign(part, { state: 'failed', error: 'STEP translation did not finish within 5 minutes' }); continue; }
-      spent++;
       const status = await fetchOnshape(`/api/${apiVersion}/translations/${encode(part.translationId!)}`);
       if (!status.ok) { Object.assign(part, { state: 'failed', error: failure(status.status) }); continue; }
       const value = await status.json() as { requestState?: string; failureReason?: string; resultExternalDataIds?: string[]; resultDocumentId?: string; documentId?: string };
@@ -66,8 +86,6 @@ export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetc
       if (value.requestState !== 'DONE') continue;
       const externalId = value.resultExternalDataIds?.[0];
       if (!externalId) { Object.assign(part, { state: 'failed', error: 'Onshape finished without a STEP file' }); continue; }
-      if (spent >= budget) continue;
-      spent++;
       const file = await fetchOnshape(`/api/${apiVersion}/documents/d/${encode(value.resultDocumentId ?? value.documentId ?? part.documentId)}/externaldata/${encode(externalId)}`);
       if (!file.ok) { Object.assign(part, { state: 'failed', error: `STEP download failed: ${failure(file.status)}` }); continue; }
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -77,10 +95,13 @@ export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetc
       await kv.put(fileKey(userId, job.jobId, index), new TextDecoder().decode(bytes), { expirationTtl: 3600 });
       Object.assign(part, { state: 'ready', error: null, units: check.units, nameMatches: check.nameMatches, bytes: bytes.byteLength });
     } catch (error) {
+      // An exhausted budget leaves this part as it was for the next poll.
+      if (error instanceof BudgetExhaustedError) break;
       // Session expiry and cancellation belong to the whole request; anything else fails only this part.
       if (error instanceof SessionExpiredError || (error instanceof Error && error.name === 'AbortError')) throw error;
       Object.assign(part, { state: 'failed', error: 'Could not reach Onshape for this part' });
     }
   }
+  job.cursor = running.length ? (start + polled) % running.length : 0;
   return job;
 }

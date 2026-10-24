@@ -121,4 +121,8 @@ test('STEP export polls the job, zips ready files with a manifest, and shows fai
   await page.route('**/api/exports/11111111-1111-4111-8111-111111111111', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...job(true, 'failed'), parts: parts('failed').map(item => ({ ...item, state: 'failed', error: 'Deliberate failure' })) }) }));
   await page.getByRole('button', { name: 'Download STEP files' }).click();
   await expect(page.getByRole('alert')).toContainText('No STEP file could be exported (2 parts failed).');
+  // The reasons and links stay visible even though no ZIP was made.
+  const notice = page.getByRole('status').filter({ hasText: 'STEP export failed for some parts' });
+  await expect(notice).toContainText('Guide: Deliberate failure');
+  await expect(notice).toContainText('No ZIP was made');
 });

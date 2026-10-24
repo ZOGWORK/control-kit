@@ -35,8 +35,10 @@ export function checkStep(text: string, expectedName: string): StepCheck {
   const unit = text.match(/SI_UNIT\s*\(\s*(?:\.(MILLI|CENTI)\.|\$|\*)\s*,\s*\.METRE\.\s*\)/i);
   const inch = /CONVERSION_BASED_UNIT\s*\(\s*'INCH'/i.test(text);
   const productNames = [...text.matchAll(/PRODUCT\s*\(\s*'((?:[^']|'')*)'/g)].map(match => match[1].replace(/''/g, "'"));
-  const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
-  return { ok: true, units: inch ? 'in' : unit ? unitNames[(unit[1] ?? '').toUpperCase()] ?? null : null, productNames, nameMatches: productNames.some(name => normalize(name) === normalize(expectedName) || normalize(name).includes(normalize(expectedName))) };
+  // Keep letters and digits in every script; an empty name can never count as a match.
+  const normalize = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const expected = normalize(expectedName);
+  return { ok: true, units: inch ? 'in' : unit ? unitNames[(unit[1] ?? '').toUpperCase()] ?? null : null, productNames, nameMatches: expected.length > 0 && productNames.some(name => normalize(name).includes(expected)) };
 }
 
 export type ExportPart = { lineKey: string; name: string; qty: number; disposition: Disposition; partId: string | null; configuration: string | null; sourceUrl: string; fileName: string;

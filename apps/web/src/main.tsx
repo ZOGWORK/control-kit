@@ -29,6 +29,7 @@ function App() {
   const [downloading, setDownloading] = useState(false);
   const [printFailures, setPrintFailures] = useState<{ name: string; reason: string; url: string }[]>([]);
   const [exportProgress, setExportProgress] = useState<{ ready: number; failed: number; total: number } | null>(null);
+  const [failuresInZip, setFailuresInZip] = useState(false);
   const [excelFailed, setExcelFailed] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
   const excelLock = useRef(false);
@@ -164,22 +165,36 @@ function App() {
       type Job = { jobId: string; done: boolean; error?: string; assemblyName: string; documentName?: string; revision?: { type: string; id: string } | null; scannedAt: string; parts: ExportPart[] };
       const read = async (response: Response) => { const body = await response.json() as Job; if (!response.ok) throw Error(body.error ?? 'STEP export failed. Try again.'); return body; };
       let job = await read(await fetch(`${workerUrl}/api/exports`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ documentId: result.documentId, scanId: result.scanId }) }));
+      // The Worker fails each translation after 5 minutes, so a large export always ends. The app only gives up when
+      // nothing has changed for 3 minutes, or after 30 minutes overall.
       const started = Date.now();
+      let lastChange = Date.now();
+      let previous = '';
       while (!job.done) {
-        setExportProgress({ ready: job.parts.filter(part => part.state === 'ready').length, failed: job.parts.filter(part => part.state === 'failed').length, total: job.parts.length });
-        if (Date.now() - started > 6 * 60000) throw Error('STEP export is taking too long. Try again.');
+        const ready = job.parts.filter(part => part.state === 'ready').length;
+        const failed = job.parts.filter(part => part.state === 'failed').length;
+        const signature = job.parts.map(part => part.state).join();
+        if (signature !== previous) { previous = signature; lastChange = Date.now(); }
+        setExportProgress({ ready, failed, total: job.parts.length });
+        if (Date.now() - lastChange > 3 * 60000 || Date.now() - started > 30 * 60000) throw Error('STEP export stopped making progress. Try again.');
         await new Promise(resolve => setTimeout(resolve, 2000));
         job = await read(await fetch(`${workerUrl}/api/exports/${job.jobId}`, { credentials: 'include' }));
       }
+      // One failed download fails only that part; the others are still zipped.
       const files: Record<number, string> = {};
       for (const [index, part] of job.parts.entries()) {
         if (part.state !== 'ready') continue;
-        const response = await fetch(`${workerUrl}/api/exports/${job.jobId}/files/${index}`, { credentials: 'include' });
-        if (response.ok) files[index] = await response.text();
+        try {
+          const response = await fetch(`${workerUrl}/api/exports/${job.jobId}/files/${index}`, { credentials: 'include' });
+          if (response.ok) files[index] = await response.text();
+        } catch { /* Reported below as "File was not downloaded". */ }
       }
+      const failures = job.parts.filter((part, index) => part.state === 'failed' || (part.state === 'ready' && files[index] === undefined))
+        .map(part => ({ name: part.name, reason: part.error ?? 'File was not downloaded', url: part.sourceUrl }));
+      // Shown before the ZIP is built, so an export where every part failed still lists each reason and link.
+      setPrintFailures(failures);
+      setFailuresInZip(failures.length < job.parts.length);
       const zip = buildStepZip({ ...job, files });
-      setPrintFailures(job.parts.filter((part, index) => part.state === 'failed' || (part.state === 'ready' && files[index] === undefined))
-        .map(part => ({ name: part.name, reason: part.error ?? 'File was not downloaded', url: part.sourceUrl })));
       saveFile(zip.bytes, zip.filename, 'application/zip');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'STEP export failed. Try again.');
@@ -233,7 +248,7 @@ function App() {
       {result && !progress && <><section className="stats"><div><strong>{result.stats.uniqueLines}</strong><span>Unique lines</span></div><div><strong>{result.stats.totalInstances}</strong><span>Active instances</span></div><div><strong>{result.stats.totalCostUsd === null ? '—' : `$${result.stats.totalCostUsd.toFixed(2)}`}</strong><span>Known purchasing total</span></div><div><strong>{result.stats.printedLines}</strong><span>Printed lines</span></div><div><strong>{result.suppressed.reduce((n, line) => n + line.qty, 0)}</strong><span>Suppressed</span></div><div><strong>{result.missingMetadata.length}</strong><span>Missing metadata</span></div></section>
         <div className="row"><button onClick={downloadExcel} disabled={exportingExcel}>{exportingExcel ? 'Preparing Excel…' : 'Download Excel BOM'}</button><button onClick={downloadStep} disabled={downloading || !result.scanId || !result.lines.some(wantsStep)}>{downloading ? (exportProgress ? `Exporting STEP files… ${exportProgress.ready + exportProgress.failed} of ${exportProgress.total}` : 'Starting STEP export…') : 'Download STEP files'}</button><span className="muted">STEP files for parts set to 3D print, CNC, 2D cut, or other fabrication, with a manifest of sources and failures.</span></div>
         {excelFailed && <div className="alert" role="status">Excel export failed. <button onClick={downloadCsv}>Download CSV instead</button></div>}
-        {printFailures.length > 0 && <div className="alert" role="status"><strong>STEP export failed for some parts</strong><ul>{printFailures.map(item => <li key={`${item.name}:${item.reason}`}>{item.name}: {item.reason} <a href={item.url} target="_blank" rel="noreferrer">Open in Onshape</a></li>)}</ul><p>These parts are listed in MANIFEST.txt in the ZIP with their Onshape links.</p></div>}
+        {printFailures.length > 0 && <div className="alert" role="status"><strong>STEP export failed for some parts</strong><ul>{printFailures.map(item => <li key={`${item.name}:${item.reason}`}>{item.name}: {item.reason} <a href={item.url} target="_blank" rel="noreferrer">Open in Onshape</a></li>)}</ul>{failuresInZip ? <p>These parts are also listed in MANIFEST.txt in the ZIP.</p> : <p>No ZIP was made because no part exported.</p>}</div>}
         {result.vendorDataUpdatedAt && <p className="muted">Vendor data checked {new Date(result.vendorDataUpdatedAt).toLocaleString()}</p>}
         {result.catalogHealth && <CatalogWarning health={result.catalogHealth} />}
         {result.stats.staleVendorData && <div className="alert" role="status">Some used vendor data is stale or its latest refresh failed. Check prices and stock before ordering.</div>}
