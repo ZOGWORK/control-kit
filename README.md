@@ -18,6 +18,20 @@ pnpm build
 
 For local development, run `pnpm --filter @control-kit/web dev` and `pnpm --filter @control-kit/worker dev` in separate terminals. Copy `.env.example` into local configuration, enter OAuth credentials only in Worker secrets or untracked `.dev.vars`, and replace placeholder KV namespace IDs before deployment. Never put credentials in the web build.
 
+## The app
+
+Control Kit shares Control Scout's look: graphite surfaces, a volt yellow accent, Inter and Space Grotesk type, and [Arc](https://uiarc.dev) components themed to that palette (`apps/web/src/styles/theme.css`). It is organized around what a team does after a scan:
+
+- **Overview**: totals for parts, Buy, Make, and Needs review; a known subtotal labeled with how many lines are priced; next steps, each with the action that resolves it; downloads; vendor catalog status.
+- **Review**: only the parts that need a person. Possible vendor matches come first, then suggestions, then open questions. Each part says why it is there and offers the likely answer as one click, and **Accept all** saves every suggestion in the group.
+- **Parts**: every part, filterable by Buy, Make, Review, or Suppressed, searchable by name, part number, or SKU. A part opens a drawer with its evidence, vendor product, Onshape source, and the choice of how it is obtained.
+- **Buy list**: confirmed vendor products grouped by vendor, with packs and prices; parts to buy without a match are listed separately with what they need.
+- **Make**: prints and fabricated parts by process, with the STEP export and its per-part results.
+
+On desktop the sections sit in a sidebar; in the narrow Onshape right panel they become a scrollable row of tabs under a compact header. Settings (team number, sign-out) open in a drawer.
+
+To review the UI without Onshape or secrets, run `pnpm --filter @control-kit/web fixture` and open `http://localhost:5173/?documentId=fixture&workspaceOrVersion=w&workspaceOrVersionId=w1&elementId=e1`. A local stand-in API (`apps/web/fixture-api.ts`) serves the synthetic robot fixture. To review a real scan, save its result JSON outside Git and name it in an untracked `apps/web/.env.fixture.local` as `CK_FIXTURE=../../work/your-scan.json`.
+
 ## M1 mock OAuth
 
 Run `pnpm --filter @control-kit/worker mock` to start mock Onshape on `http://localhost:8788`. Use untracked `apps/worker/.dev.vars` for `ONSHAPE_OAUTH_CLIENT_ID=mock-id`, `ONSHAPE_OAUTH_CLIENT_SECRET=mock-secret`, `ONSHAPE_OAUTH_REDIRECT_URI=http://localhost:8787/oauth/redirect`, and a base64-encoded random 32-byte `SESSION_ENCRYPTION_KEY`. In separate terminals, run the web dev command above and start the Worker with these local overrides (from the repository root):

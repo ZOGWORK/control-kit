@@ -58,6 +58,17 @@ function explicitMatch(value: string, patterns: ReadonlyArray<readonly [RegExp, 
 const printMaterial = /\b(?:pla|petg|abs|asa|tpu|nylon|pa12|pa-cf|onyx|resin|cf-?pla|cf-?nylon)\b/i;
 const printWords = /\b(?:print(?:ed)?|3[ -]?d[ -]?print(?:ed)?|stl|fdm)\b/i;
 const flatWords = /\b(?:plate|panel|sheet|gusset|side\s*plate)\b/i;
+/**
+ * Vendor part numbers and product naming in a part's name: goBILDA/ServoCity 1234-5678-9012 and "1234 Series",
+ * REV-12-3456, AndyMark am-1234, and McMaster-Carr 91290A110. Strong hints that the part is bought, but only a
+ * catalog match verifies it, so they suggest rather than decide.
+ */
+const vendorNumbers: Array<[RegExp, string]> = [
+  [/\b\d{4}-\d{4}-\d{4}\b/, 'goBILDA/ServoCity part number'], [/\bREV-\d{2}-\d{4}\b/i, 'REV part number'], [/\bam-\d{3,5}[a-z]?\b/i, 'AndyMark part number'],
+  [/\b\d{4,5}A\d{2,4}\b/, 'McMaster-Carr part number'], [/\b\d{4} Series\b/i, 'goBILDA/ServoCity product name'],
+];
+/** Off-the-shelf hardware: fasteners, bearings, belts, retaining rings, and metric thread sizes like "M4 x 0.7". */
+const hardwareWords = /\b(?:screws?|bolts?|(?:lock)?nuts?|washers?|e-?clips?|snap\s*rings?|retaining\s*rings?|bearings?|bushings?|belts?|rivets?|shaft\s*collars?|set\s*screws?|shcs|bhcs|fhcs|standoffs?|motors?|servos?|gearbox(?:es)?)\b|\bM\d(?:\.\d)?\s*x\s*\d/i;
 const customWords = /\b(?:custom|bracket|mount|spacer|adapter|holder|guide|cover)\b/i;
 
 type Decision = { disposition: Disposition; source: DispositionSource; confidence: Confidence; provenance: Provenance; evidence: string[]; suggestion: Disposition | null; reviewReason: string | null };
@@ -97,6 +108,11 @@ export function decideDisposition(line: BomLine, teamNumber: string | null, asse
   const team = teamNumber && new RegExp(`(?<!\\d)${teamNumber}(?!\\d)`).test(line.name) ? `team number ${teamNumber} in name` : null;
   if (line.matchStatus === 'possible') return { ...base, disposition: 'review', source: 'suggestion', confidence: 'low', suggestion: 'buy', reviewReason: `Possible vendor match ${line.vendor?.sku ?? ''}: confirm it or choose how this part is made`.replace('  ', ' ') };
   if (printWords.test(text)) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'medium', suggestion: 'print', evidence: [...base.evidence, 'print wording in name', ...(team ? [team] : [])], reviewReason: 'Name says it is printed; confirm 3D print' };
+  for (const [pattern, label] of vendorNumbers) {
+    const found = text.match(pattern);
+    if (found) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'medium', suggestion: 'buy', evidence: [...base.evidence, `${label} "${found[0]}" in name`], reviewReason: `Name includes a ${label} (${found[0]}): confirm it's bought` };
+  }
+  if (hardwareWords.test(text)) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'medium', suggestion: 'buy', evidence: [...base.evidence, 'standard hardware wording in name'], reviewReason: 'Looks like standard hardware: confirm it is bought' };
   if (flatWords.test(text) && provenance !== 'linked-library') return { ...base, disposition: 'review', source: 'suggestion', confidence: 'low', suggestion: 'cut-2d', evidence: [...base.evidence, 'flat-part wording in name', ...(team ? [team] : [])], reviewReason: 'Looks like a custom plate: choose 2D cut, CNC, or 3D print' };
   if (provenance === 'team-design' && (customWords.test(text) || team)) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'low', suggestion: 'print', evidence: [...base.evidence, ...(team ? [team] : ['custom-part wording in name'])], reviewReason: 'Team-designed part: choose how it is made' };
   if (provenance === 'linked-library') return { ...base, disposition: 'review', source: 'none', confidence: 'low', reviewReason: 'Library part without a part number: add its vendor SKU or choose a disposition' };
