@@ -11,7 +11,7 @@ ONSHAPE_API_VERSION = "v9"
 ONSHAPE_OAUTH_BASE = "https://oauth.onshape.com"
 WEB_ORIGIN = "https://control-kit.pages.dev"
 ONSHAPE_OAUTH_REDIRECT_URI = "https://control-kit.control-kit-worker.workers.dev/oauth/redirect"
-VENDOR_STALE_HOURS = "24"
+VENDOR_STALE_HOURS = "336"
 SCAN_TARGET_MS = "10000"
 
 [[kv_namespaces]]
@@ -23,4 +23,4 @@ binding = "APP_STATE"
 id = "c3ef1ad4a11a47f1899c2b63e7a0c3b6"
 
 [triggers]
-crons = ["0 */6 * * *", "12 */6 * * *", "24 */6 * * *", "36 */6 * * *", "48 */6 * * *"]
+crons = ["0 */2 * * *", "12 */2 * * *", "24 */2 * * *", "36 */2 * * *", "48 */2 * * *"]

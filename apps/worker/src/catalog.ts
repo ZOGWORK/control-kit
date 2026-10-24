@@ -1,6 +1,6 @@
 import { findBestMatch, normalizeName, normalizeSku, rankVendorAlternatives, recalculatePurchasing, skuCandidates, type CatalogHealth, type MatchDecision, type ScanResult, type VendorHealth, type VendorId, type VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
-import type { VendorSnapshot } from './vendor-ingest';
+import { batchKey, indexKey, pointerKey, snapshotKey, type CatalogPointer, type IndexEntry, type VendorSnapshot } from './vendor-ingest';
 
 const vendors: VendorId[] = ['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'];
 const memory = new Map<string, { value: string | null; expires: number }>();
@@ -34,19 +34,21 @@ const read = async (kv: Kv, key: string, cache: Map<string, Promise<string | nul
   return cache.get(key)!;
 };
 
-export function clearCatalogMemoryCache() { memory.clear(); }
+export function clearCatalogMemoryCache() { memory.clear(); indexes.clear(); }
 
-/** Reads only snapshot and pointer keys (two per vendor), never the cursor or records. */
-export async function catalogHealth(kv: Kv, staleHours = 24, signal?: AbortSignal, cache = new Map<string, Promise<string | null>>()): Promise<CatalogHealth> {
+/** Reads only the five snapshot keys; never crawl state, indexes, or records. */
+export async function catalogHealth(kv: Kv, staleHours = 336, signal?: AbortSignal, cache = new Map<string, Promise<string | null>>()): Promise<CatalogHealth> {
   const health = await Promise.all(vendors.map(async (vendorId): Promise<VendorHealth> => {
-    const [pointer, raw] = await Promise.all([read(kv, `vendor:${vendorId}:__lastgood__`, cache, signal), read(kv, `vendor:${vendorId}:__snapshot__`, cache, signal)]);
+    const raw = await read(kv, snapshotKey(vendorId), cache, signal);
     let snapshot: VendorSnapshot | null = null;
     try { snapshot = raw ? JSON.parse(raw) as VendorSnapshot : null; } catch { /* Treated as never run. */ }
+    const published = Boolean(snapshot?.version);
     const lastRunFailed = snapshot?.status === 'failed';
     const updated = snapshot?.updatedAt ? Date.parse(snapshot.updatedAt) : NaN;
-    const state = pointer ? 'published' : lastRunFailed ? 'failing' : snapshot ? 'building' : 'never-run';
-    return { vendorId, state, recordCount: pointer ? snapshot?.recordCount ?? 0 : 0, updatedAt: pointer ? snapshot?.updatedAt ?? null : null, lastRunAt: snapshot?.lastRunAt ?? null,
-      stale: Boolean(pointer) && (!Number.isFinite(updated) || Date.now() - updated > staleHours * 3600000), lastRunFailed, error: lastRunFailed ? snapshot?.error ?? 'Unknown ingestion error' : null,
+    const state = published ? 'published' : lastRunFailed ? 'failing' : snapshot ? 'building' : 'never-run';
+    return { vendorId, state, complete: published && snapshot?.complete === true, recordCount: published ? snapshot?.recordCount ?? 0 : 0, updatedAt: published ? snapshot?.updatedAt ?? null : null, lastRunAt: snapshot?.lastRunAt ?? null,
+      stale: published && (!Number.isFinite(updated) || Date.now() - updated > staleHours * 3600000), lastRunFailed, error: lastRunFailed ? snapshot?.error ?? 'Unknown ingestion error' : null,
+      skipped: snapshot?.skipped ?? {},
       progress: snapshot?.progress ? { sitemapsDone: snapshot.progress.sitemapsDone, sitemapsTotal: snapshot.progress.sitemapsTotal, pagesDoneInSitemap: snapshot.progress.pagesDoneInSitemap, pagesInSitemap: snapshot.progress.pagesInSitemap, recordsCollected: snapshot.progress.recordsCollected } : null };
   }));
   return { checkedAt: new Date().toISOString(), vendors: health };
@@ -56,7 +58,7 @@ function isVendorRecord(value: unknown): value is VendorRecord {
   if (!value || typeof value !== 'object') return false;
   const record = value as Partial<VendorRecord>;
   return vendors.includes(record.vendorId as VendorId) && typeof record.name === 'string' && record.name.length > 0
-    && typeof record.normalizedName === 'string' && typeof record.normalizedSku === 'string' && record.normalizedSku.length > 0
+    && typeof record.normalizedName === 'string' && typeof record.normalizedSku === 'string' && /^[A-Z0-9]+$/.test(record.normalizedSku)
     && typeof record.sku === 'string' && typeof record.url === 'string' && /^https:\/\//.test(record.url)
     && (record.priceUsd === null || (typeof record.priceUsd === 'number' && Number.isFinite(record.priceUsd) && record.priceUsd >= 0))
     && ['in', 'out', 'low', 'unknown'].includes(record.stock ?? '')
@@ -65,35 +67,77 @@ function isVendorRecord(value: unknown): value is VendorRecord {
     && typeof record.category === 'string' && typeof record.updatedAt === 'string' && ['feed', 'sitemap', 'scrape'].includes(record.source ?? '');
 }
 
-export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null> = async () => null, signal?: AbortSignal, staleHours = 24) {
+/** One vendor's published index, parsed once per isolate per generation size. */
+type VendorIndex = { vendor: VendorId; gen: string; bySku: Map<string, number>; byToken: Map<string, number[]>; entries: IndexEntry[] };
+const indexes = new Map<string, { value: VendorIndex; expires: number }>();
+const tokensOf = (name: string) => [...new Set(normalizeName(name).split(' ').filter(token => token.length > 2))];
+async function vendorIndex(kv: Kv, vendor: VendorId, cache: Map<string, Promise<string | null>>, signal?: AbortSignal): Promise<VendorIndex | null> {
+  const rawPointer = await read(kv, pointerKey(vendor), cache, signal);
+  let pointer: CatalogPointer | null = null;
+  try { pointer = rawPointer ? JSON.parse(rawPointer) as CatalogPointer : null; } catch { /* No usable catalog. */ }
+  if (!pointer?.gen) return null;
+  const cacheKey = `${vendor}:${pointer.gen}:${pointer.records}`;
+  const cached = indexes.get(cacheKey);
+  if (cached && cached.expires > Date.now()) return cached.value;
+  let entries: IndexEntry[] = [];
+  try {
+    const parsed: unknown = JSON.parse(await read(kv, indexKey(vendor, pointer.gen), cache, signal) ?? '[]');
+    // Entries that are not [sku, name, batch] are dropped one by one rather than failing the scan.
+    if (Array.isArray(parsed)) entries = parsed.filter((entry): entry is IndexEntry => Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string' && Number.isInteger(entry[2]));
+  } catch { /* A malformed index is a miss. */ }
+  const value: VendorIndex = { vendor, gen: pointer.gen, bySku: new Map(), byToken: new Map(), entries };
+  entries.forEach(([sku, name], position) => {
+    value.bySku.set(sku, position);
+    for (const token of tokensOf(name)) { const list = value.byToken.get(token); if (list) list.push(position); else value.byToken.set(token, [position]); }
+  });
+  if (indexes.size > 20) indexes.clear();
+  indexes.set(cacheKey, { value, expires: Date.now() + 60000 });
+  return value;
+}
+
+/** Name candidates are ranked on the index's normalized names so only the few best need their batch read. */
+function nameCandidates(index: VendorIndex, name: string, limit = 8): number[] {
+  const tokens = tokensOf(name).slice(0, 6);
+  const shared = new Map<number, number>();
+  for (const token of tokens) for (const position of index.byToken.get(token) ?? []) shared.set(position, (shared.get(position) ?? 0) + 1);
+  return [...shared.entries()].map(([position, count]) => {
+    const size = new Set(index.entries[position][1].split(' ')).size;
+    return [position, count / (tokens.length + size - count)] as const;
+  }).sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, limit).map(([position]) => position);
+}
+
+export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null> = async () => null, signal?: AbortSignal, staleHours = 336) {
   const cache = new Map<string, Promise<string | null>>();
-  const versions = new Map(await Promise.all(vendors.map(async vendor => [vendor, await read(kv, `vendor:${vendor}:__lastgood__`, cache, signal)] as const)));
-  const recordKey = (vendor: VendorId, sku: string) => versions.get(vendor) ? `vendor-version:${vendor}:${versions.get(vendor)}:${sku}` : `vendor:${vendor}:${sku}`;
+  const catalogs = (await Promise.all(vendors.map(vendor => vendorIndex(kv, vendor, cache, signal)))).filter((value): value is VendorIndex => Boolean(value));
+  const batches = new Map<string, Promise<Map<string, VendorRecord>>>();
+  const batch = (index: VendorIndex, number: number) => {
+    const key = batchKey(index.vendor, index.gen, number);
+    let found = batches.get(key);
+    if (!found) {
+      found = read(kv, key, cache, signal).then(raw => {
+        const records = new Map<string, VendorRecord>();
+        try { for (const value of JSON.parse(raw ?? '[]') as unknown[]) if (isVendorRecord(value)) records.set(value.normalizedSku, value); } catch { /* A malformed batch is a miss. */ }
+        return records;
+      });
+      batches.set(key, found);
+    }
+    return found;
+  };
   const jobs = result.lines.map(async line => {
     if (signal?.aborted) throw signal.reason;
-    const keys: string[] = [];
-    for (const sku of skuCandidates(line.name, line.partNumber)) for (const vendor of vendors) keys.push(recordKey(vendor, normalizeSku(sku, vendor)));
-    const tokens = [...new Set(normalizeName(line.name).split(' ').filter(token => token.length > 2))].slice(0, 4);
-    for (const token of tokens) {
-      for (const vendor of vendors) {
-        const indexKey = versions.get(vendor) ? `vendor-index-version:${vendor}:${versions.get(vendor)}:${token}` : `vendor-index:${token}`;
-        const value = await read(kv, indexKey, cache, signal);
-        if (value) {
-          try { for (const id of JSON.parse(value) as string[]) {
-            const [candidateVendor, sku] = id.split(':');
-            if (candidateVendor === vendor && /^[A-Z0-9]+$/.test(sku)) keys.push(recordKey(vendor, sku));
-          } } catch { /* A malformed index is a cache miss, not a failed scan. */ }
-        }
-      }
+    const wanted: Array<[VendorIndex, number]> = [];
+    const skus = skuCandidates(line.name, line.partNumber);
+    for (const index of catalogs) {
+      for (const sku of skus) { const position = index.bySku.get(normalizeSku(sku, index.vendor)); if (position !== undefined) wanted.push([index, position]); }
+      for (const position of nameCandidates(index, line.name)) wanted.push([index, position]);
     }
-    const uniqueKeys = [...new Set(keys)];
-    const candidates: VendorRecord[] = [];
-    for (let offset = 0; offset < uniqueKeys.length; offset += 20) {
-      if (signal?.aborted) throw signal.reason;
-      const raw = await Promise.all(uniqueKeys.slice(offset, offset + 20).map(key => read(kv, key, cache, signal)));
-      for (const value of raw) if (value) { try { const parsed: unknown = JSON.parse(value); if (isVendorRecord(parsed)) candidates.push(parsed); } catch { /* Ignore malformed catalog records. */ } }
+    const candidates = new Map<string, VendorRecord>();
+    for (const [index, position] of wanted) {
+      const [sku, , number] = index.entries[position];
+      const record = (await batch(index, number)).get(sku);
+      if (record) candidates.set(`${record.vendorId}:${record.normalizedSku}`, record);
     }
-    const match = findBestMatch(line, candidates);
+    const match = findBestMatch(line, [...candidates.values()]);
     line.vendor = match.vendor;
     line.matchConfidence = match.confidence;
     line.matchStatus = match.status;
@@ -106,9 +150,8 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
         if (choice.status === 'rejected') line.vendor = null;
       }
     }
-    line.alternatives = rankVendorAlternatives(line.name, line.vendor, candidates);
+    line.alternatives = rankVendorAlternatives(line.name, line.vendor, [...candidates.values()]);
   });
-  // KV is not a network scrape, but keep in-flight gets bounded at 20 per batch and results deterministic.
   await Promise.all(jobs);
   // Health is diagnostic: a failed read leaves it absent rather than failing a scan whose BOM is complete.
   try { result.catalogHealth = await catalogHealth(kv, staleHours, signal, cache); }
@@ -116,23 +159,12 @@ export async function enrichScan(result: ScanResult, kv: Kv, getDecision: (key: 
     if (signal?.aborted) throw error;
     console.error('Catalog health read failed', error instanceof Error ? error.name : 'unknown');
   }
-  const used = [...new Set(result.lines.map(line => line.vendor?.vendorId).filter((id): id is VendorId => Boolean(id)))];
-  const unreadable = new Set<VendorId>();
-  const snapshots = await Promise.all(used.map(async vendor => {
-    let value: string | null;
-    try { value = await read(kv, `vendor:${vendor}:__snapshot__`, cache, signal); }
-    catch (error) { if (signal?.aborted) throw error; unreadable.add(vendor); return null; }
-    if (!value) return null;
-    try { return JSON.parse(value) as VendorSnapshot; } catch { return null; }
-  }));
-  const matchingSnapshot = (vendor: VendorId, index: number) => snapshots[index]?.version === versions.get(vendor) ? snapshots[index] : null;
-  const timestamps = used.map((vendor, index) => matchingSnapshot(vendor, index)?.updatedAt ?? result.lines.find(line => line.vendor?.vendorId === vendor)?.vendor?.updatedAt ?? null).filter((value): value is string => Boolean(value));
-  result.vendorDataUpdatedAt = timestamps.length ? timestamps.sort()[0] : null;
-  result.stats.staleVendorData = used.some((vendor, index) => {
-    const snapshot = matchingSnapshot(vendor, index);
-    const updatedAt = snapshot?.updatedAt ?? result.lines.find(line => line.vendor?.vendorId === vendor)?.vendor?.updatedAt;
-    // A snapshot that could not be read cannot vouch for freshness, so the vendor is reported stale.
-    return unreadable.has(vendor) || Boolean(snapshots[index] && !snapshot) || snapshot?.status === 'failed' || !updatedAt || !Number.isFinite(Date.parse(updatedAt)) || Date.now() - Date.parse(updatedAt) > staleHours * 3600000;
-  });
+  // Price and stock are as of each matched record's fetch, so the oldest one dates the whole result.
+  const fetched = result.lines.map(line => line.vendor?.updatedAt).filter((value): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value)));
+  result.vendorDataUpdatedAt = fetched.length ? [...fetched].sort()[0] : null;
+  const used = new Set(result.lines.map(line => line.vendor?.vendorId).filter((id): id is VendorId => Boolean(id)));
+  result.stats.staleVendorData = fetched.some(value => Date.now() - Date.parse(value) > staleHours * 3600000)
+    || (!result.catalogHealth && used.size > 0)
+    || Boolean(result.catalogHealth?.vendors.some(vendor => used.has(vendor.vendorId) && (vendor.stale || vendor.lastRunFailed)));
   return recalculatePurchasing(result);
 }

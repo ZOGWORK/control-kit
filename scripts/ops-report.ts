@@ -24,11 +24,12 @@ const get = (namespace: string, key: string): string | null => {
 
 console.log('Vendor catalogs');
 for (const vendor of vendors) {
-  const pointer = get(catalog, `vendor:${vendor}:__lastgood__`);
-  let snapshot: { lastRunAt?: string; status?: string; recordCount?: number; error?: string; progress?: { pagesDoneInSitemap: number; pagesInSitemap: number; sitemapsDone: number; sitemapsTotal: number; recordsCollected: number } } | null = null;
+  let snapshot: { lastRunAt?: string; status?: string; recordCount?: number; error?: string; version?: string | null; complete?: boolean; skipped?: Record<string, number>; progress?: { pagesDoneInSitemap: number; pagesInSitemap: number; sitemapsDone: number; sitemapsTotal: number; recordsCollected: number } } | null = null;
   try { snapshot = JSON.parse(get(catalog, `vendor:${vendor}:__snapshot__`) ?? 'null'); } catch { /* reported as missing */ }
   const progress = snapshot?.progress ? ` pages ${snapshot.progress.pagesDoneInSitemap}/${snapshot.progress.pagesInSitemap} in sitemap ${snapshot.progress.sitemapsDone + 1}/${snapshot.progress.sitemapsTotal}, ${snapshot.progress.recordsCollected} records collected` : '';
-  console.log(`  ${vendor.padEnd(10)} ${pointer ? 'published' : 'unpublished'} | last run ${snapshot?.lastRunAt ?? 'never'} ${snapshot?.status ?? ''} | records ${snapshot?.recordCount ?? 0}${progress}${snapshot?.error ? ` | error: ${snapshot.error}` : ''}`);
+  const state = snapshot?.version ? (snapshot.complete ? 'published' : 'published (partial)') : 'unpublished';
+  const skipped = snapshot?.skipped && Object.keys(snapshot.skipped).length ? ` | skipped ${JSON.stringify(snapshot.skipped)}` : '';
+  console.log(`  ${vendor.padEnd(10)} ${state} | last run ${snapshot?.lastRunAt ?? 'never'} ${snapshot?.status ?? ''} | records ${snapshot?.recordCount ?? 0}${progress}${skipped}${snapshot?.error ? ` | error: ${snapshot.error}` : ''}`);
 }
 
 console.log(`\nOnshape requests recorded by the Worker (last ${days} days)`);

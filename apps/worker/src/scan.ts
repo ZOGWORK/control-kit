@@ -43,7 +43,7 @@ export async function loadClassificationOverrides(lines: BomLine[], getOverride:
   return overrides;
 }
 
-export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 24, settings: UserSettings = { teamNumber: null }, getOverride: (line: BomLine, signal?: AbortSignal) => Promise<ClassificationOverride | null> = async () => null, onResult?: (result: ScanResult) => Promise<void>,
+export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 336, settings: UserSettings = { teamNumber: null }, getOverride: (line: BomLine, signal?: AbortSignal) => Promise<ClassificationOverride | null> = async () => null, onResult?: (result: ScanResult) => Promise<void>,
   requests?: { summary(): OnshapeRequestSummary; finish(): Promise<unknown> }): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
