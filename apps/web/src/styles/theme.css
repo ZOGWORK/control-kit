@@ -237,3 +237,8 @@ button.row:hover { background: var(--ck-raised); }
 .thumb.thumb-large { width: 100%; max-width: 240px; padding: 8px; gap: 6px; }
 .thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .thumb.thumb-large figcaption { color: #52525b; }
+
+.row.focused { background: color-mix(in srgb, var(--ck-volt) 8%, transparent); box-shadow: inset 3px 0 0 var(--ck-volt); }
+.keys-hint { padding: 8px 16px 0; }
+.keys-hint kbd { font-family: var(--font-mono, monospace); font-size: 11px; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; margin: 0 2px; }
+@media (max-width: 520px) { .keys-hint { display: none; } }
