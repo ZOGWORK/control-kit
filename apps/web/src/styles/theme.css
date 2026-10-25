@@ -144,7 +144,13 @@ button.tile:hover { border-color: var(--ck-line-strong); background: var(--ck-ra
 .tile.incomplete .tile-value { color: var(--ck-text-muted); }
 
 /* Rows: one list primitive for the queue, parts, buy list, and make list. */
-.rows { display: grid; }
+.rows { display: grid; container-type: inline-size; }
+/* Inside Onshape's panel the viewport is the panel, so Review rows stack by the list's own width: the part name and
+   its reason get the full width, and the actions wrap below instead of squeezing the name. */
+@container (max-width: 1000px) {
+  .rows .row.review-row { grid-template-columns: 1fr; }
+  .rows .review-row .row-aside { justify-content: flex-start; }
+}
 .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 11px 16px; border-bottom: 1px solid var(--ck-line); }
 .row:last-child { border-bottom: 0; }
 .row-main { min-width: 0; display: grid; gap: 3px; }

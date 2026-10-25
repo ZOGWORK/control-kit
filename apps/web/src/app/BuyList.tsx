@@ -28,7 +28,7 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
     <div className="tiles">
       <div className={`tile ${complete ? '' : 'incomplete'}`}><span className="tile-label">{complete ? 'Purchasing total' : 'Known subtotal'}</span>
         <span className="tile-value">{summary.subtotal === null ? 'None yet' : money(summary.subtotal)}</span>
-        <span className="tile-context">{summary.pricedLines} of {summary.buyLines} parts priced{complete ? '' : ', so the real total is higher'}</span></div>
+        <span className="tile-context">{summary.pricedLines} of {summary.buyLines} parts priced{complete ? '' : ', so the real total is higher'}. Public list prices, before shipping and tax.</span></div>
       <div className="tile"><span className="tile-label">Vendors</span><span className="tile-value">{vendors.length}</span><span className="tile-context">{vendors.map(vendor => vendor.label).join(', ') || 'none matched yet'}</span></div>
       <div className={`tile ${needsSku.length ? 'attention' : ''}`}><span className="tile-label">No vendor match</span><span className="tile-value">{needsSku.length}</span><span className="tile-context">parts to buy without a SKU match</span></div>
     </div>

@@ -42,7 +42,7 @@ export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) =
         <div className="row-main">
           <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><span>{line.name}</span></button>
           <span className="row-meta"><span><span className="num">{line.qty}</span> needed</span>{line.material && <span>{line.material}</span>}
-            <span>{line.dispositionSource === 'manual' ? 'set by you' : line.dispositionEvidence[line.dispositionEvidence.length - 1] ?? ''}</span></span>
+            <span>{line.dispositionSource === 'manual' ? 'chosen by your team' : line.dispositionEvidence[line.dispositionEvidence.length - 1] ?? ''}</span></span>
         </div>
         <div className="row-aside"><a className="link small" href={line.partStudioUrl} target="_blank" rel="noopener noreferrer">Open in Onshape <ExternalLink aria-hidden size={11} /></a></div>
       </div>)}</div>
