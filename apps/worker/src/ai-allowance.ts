@@ -8,7 +8,9 @@ export type AllowanceRequest = { action: 'reserve'; userId: string; perUser: num
 export type AllowanceReply = { ok: true } | { ok: false; reason: 'busy' | 'user-limit' | 'global-limit' };
 
 export class AiAllowance {
-  constructor(private readonly state: { storage: Storage }, private readonly now = () => Date.now()) {}
+  /** Cloudflare constructs a Durable Object as `(state, env)`; the clock is a property so tests can set it. */
+  now = () => Date.now();
+  constructor(private readonly state: { storage: Storage }, _env?: unknown) { void _env; }
 
   async fetch(request: Request): Promise<Response> {
     const body = await request.json() as AllowanceRequest;

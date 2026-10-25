@@ -126,7 +126,9 @@ describe('AI review allowance', () => {
   it('picks the day itself, starts a new day fresh, and keeps a review running across midnight locked', async () => {
     const memory = memoryStorage();
     let clock = Date.parse('2026-10-25T23:59:30Z');
-    const allowance = new AiAllowance(memory, () => clock);
+    // Constructed the way Cloudflare does, with an environment as the second argument.
+    const allowance = new AiAllowance(memory, { APP_STATE: {} });
+    allowance.now = () => clock;
     const reserve = (userId: string) => allowance.handle({ action: 'reserve', userId, perUser: 1, global: 300, lockMs: 200_000 });
     expect(await reserve('night')).toEqual({ ok: true });
     clock = Date.parse('2026-10-26T00:00:30Z');
