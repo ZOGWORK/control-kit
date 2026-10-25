@@ -17,6 +17,14 @@ describe('manufacturing disposition', () => {
     for (const name of ['Axon Servo Mount Assembly', 'Axon Mount', 'Axon Bracket', 'Pinpoint case', 'Pinpoint plate holder'])
       expect(purchasedAssemblyReason(name, null, true)).toBeNull();
     expect(purchasedAssemblyReason('Axon Max', null, false)).toBeNull();
+    // Linked team subsystems named after what they hold are groupings, so their parts stay listed.
+    for (const name of ['Intake Wheels', 'Servo Arm', 'Drive Motors', 'Battery Box', 'Odometry Wheels', 'Bearing Block', 'Claw Servo', 'Turret Encoder Gear', 'Outtake Servo Linkage'])
+      expect(purchasedAssemblyReason(name, null, true)).toBeNull();
+  });
+  it('does not take made parts with fastener words for stock fasteners', () => {
+    for (const name of ['Captive Nut Plate', 'Washer Plate', 'Nut Strip', 'Lead Screw 8mm', 'Ball Screw', 'Screw Jack', 'Snap Ring Groove Shaft'])
+      expect(classify(line(name)).disposition).not.toBe('hardware');
+    expect(classify(line('M4 x 12mm Socket Head Screw')).disposition).toBe('hardware');
   });
   it('keeps an exact vendor SKU Buy whatever its name says', () => {
     const value = line('Printed custom bracket 16236 [3DP]');

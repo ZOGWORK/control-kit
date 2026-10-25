@@ -22,5 +22,14 @@ id = "f04685dda4a64f8093960649885513d6"
 binding = "APP_STATE"
 id = "c3ef1ad4a11a47f1899c2b63e7a0c3b6"
 
+# The AI review's daily allowance: one Durable Object, so reserving is atomic (free plan: SQLite-backed classes).
+[[durable_objects.bindings]]
+name = "AI_ALLOWANCE"
+class_name = "AiAllowance"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AiAllowance"]
+
 [triggers]
 crons = ["0 * * * *", "12 * * * *", "24 * * * *", "36 * * * *", "48 * * * *"]

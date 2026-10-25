@@ -97,6 +97,20 @@ describe('vendor matching', () => {
   });
 });
 
+describe('numeric part numbers', () => {
+  it('never turns a team part number into an AndyMark or REV product, but still matches bare-number vendors', () => {
+    const andymark = record('Intake side plate kit', 'am-1001', 'andymark', { priceUsd: 120 });
+    expect(findBestMatch({ name: 'Intake side plate', partNumber: '1001' }, [andymark]).status).not.toBe('exact');
+    expect(findBestMatch({ name: 'Intake side plate', partNumber: 'am-1001' }, [andymark]).status).toBe('exact');
+    const rev = record('Through Bore Encoder', 'REV-11-1271');
+    expect(findBestMatch({ name: 'Encoder', partNumber: '111271' }, [rev]).status).not.toBe('exact');
+    const pitsco = record('Tetrix bracket', '44260', 'pitsco');
+    expect(findBestMatch({ name: 'Bracket', partNumber: '44260' }, [pitsco]).status).toBe('exact');
+    const gobilda = record('U-Channel', '1120-0001-0048', 'gobilda');
+    expect(findBestMatch({ name: 'Channel', partNumber: '1120-0001-0048' }, [gobilda]).status).toBe('exact');
+  });
+});
+
 describe('parts library tags', () => {
   it('reads a trailing vendor tag and configuration values that describe the product', () => {
     expect(vendorTag('Servo Hub (GB)')).toEqual({ vendor: 'gobilda', name: 'Servo Hub' });

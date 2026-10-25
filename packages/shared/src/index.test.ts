@@ -84,6 +84,15 @@ describe('assembly traversal and aggregation', () => {
     const folded = aggregateAssembly(definition('import1', true), context, 'Robot');
     expect(folded.lines.map(line => [line.name, line.qty]).sort()).toEqual([['5000-0002-0001 Motor', 2], ['Team motor mount', 2]]);
     expect(folded.lines.find(line => line.purchasedAssembly)!.purchasedAssembly).toMatchObject({ parts: 4, includes: ['2107-4008-0001'], inside: ['base', 'endcap', 'Pin (1)'] });
+    // Standard content beside a kit is never folded into it, even when the kit's insides use the same screw.
+    const withScrews = definition('import1', true);
+    withScrews.subAssemblies![1].instances!.push({ ...body('kitscrew', 'Socket head cap screw', 'std'), isStandardContent: true });
+    withScrews.subAssemblies![0].instances!.push(...Array.from({ length: 8 }, (_, n) => ({ ...body(`s${n}`, 'Socket head cap screw', 'std'), id: `s${n}`, partId: 'kitscrew', isStandardContent: true })));
+    expect(aggregateAssembly(withScrews, context, 'Robot').lines.find(line => line.name === 'Socket head cap screw')?.qty).toBe(16);
+    // A body from the same Part Studio but another configuration is another product.
+    const configured = definition('import1', true);
+    configured.subAssemblies![0].instances = configured.subAssemblies![0].instances!.map(instance => instance.id === 'shaft' ? { ...instance, configuration: 'type=wheel' } : instance);
+    expect(aggregateAssembly(configured, context, 'Robot').lines.map(line => line.name)).toContain('2107-4008-0001');
     // A body from a different Part Studio, or placed anywhere else, is a part of its own.
     expect(aggregateAssembly(definition('teamparts', true), context, 'Robot').lines.map(line => line.name)).toContain('2107-4008-0001');
     expect(aggregateAssembly(definition('import1', false), context, 'Robot').lines.map(line => line.name)).toContain('2107-4008-0001');
