@@ -175,8 +175,11 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
     // A parts library's vendor tag ("Servo Hub (GB)") names the vendor, so only that vendor's products are candidates,
     // ranked by how much of the part name and its configuration ("6000rpm Bare REX") each covers. Still a question:
     // the closest few are offered as choices.
-    const tag = !mapped && match.status !== 'exact' ? vendorTag(line.name) : null;
+    // Exact SKU choices already name the products, so they are kept as they are.
+    const tag = !mapped && match.status !== 'exact' && !match.choices?.length ? vendorTag(line.name) : null;
     const tagged = tag ? catalogs.find(index => index.vendor === tag.vendor) : undefined;
+    // Without that vendor's catalog the part stays unmatched rather than falling back to another vendor.
+    if (tag && !tagged) match = { vendor: null, confidence: 0, status: 'unmatched', reasons: [`no published ${tag.vendor} catalog to match "${tag.name}"`] };
     if (tag && tagged) {
       const wanted = [tag.name, ...configurationValues(line.configuration)].join(' ');
       const positions = new Set<number>();
@@ -191,7 +194,9 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
         : { vendor: null, confidence: 0, status: 'unmatched', reasons: [`no ${tag.vendor} product matches "${tag.name}"`] };
     }
     // A part named exactly like a known FTC product ("Pinpoint", "Control Hub") is that product; with several SKUs, a person picks.
-    const known = !mapped && match.status !== 'exact' ? knownProduct(tag ? tag.name : line.name) : null;
+    const found = !mapped && match.status !== 'exact' ? knownProduct(tag ? tag.name : line.name) : null;
+    // A vendor tag keeps only that vendor's SKUs: "Control Hub (GB)" is not REV's Control Hub.
+    const known = found && tag ? { ...found, skus: found.skus.filter(([vendor]) => vendor === tag.vendor) } : found;
     const knownRecords = known ? (await Promise.all(known.skus.map(([vendor, sku]) => recordAt(vendor, sku)))).filter((record): record is VendorRecord => Boolean(record)) : [];
     // A name sold as several SKUs stays a question even when only one of them is readable right now.
     if (known && knownRecords.length === 1 && known.skus.length === 1) match = { vendor: knownRecords[0], confidence: 1, status: 'exact', reasons: [`named as the ${known.product}, SKU ${knownRecords[0].sku}`] };

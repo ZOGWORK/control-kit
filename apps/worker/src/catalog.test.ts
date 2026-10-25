@@ -347,4 +347,15 @@ describe('parts library vendor tags', () => {
     expect(motor.choices?.map(choice => choice.sku)).not.toContain('5203-2402-0139');
     expect(revHub.vendor?.sku).toBe('REV-11-1855');
   });
+  it('keeps exact SKU choices, never falls back to another vendor, and keeps known products at the tagged vendor', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: '5203-2402-0001 5202-0002-0001 Motor (GB)' }, { name: 'Control Hub (GB)' });
+    await enrichScan(result, catalog([...shelf, record('rev', 'REV-31-1595', 'Control Hub', 375)]));
+    expect(result.lines[0].choices?.map(choice => choice.sku).sort()).toEqual(['5202-0002-0001', '5203-2402-0001']);
+    expect(result.lines[1].vendor?.sku).not.toBe('REV-31-1595');
+    clearCatalogMemoryCache();
+    const missing = lines({ name: 'Servo Hub (GB)' });
+    await enrichScan(missing, catalog(shelf.filter(item => item.vendorId !== 'gobilda')));
+    expect(missing.lines[0]).toMatchObject({ matchStatus: 'unmatched', vendor: null });
+  });
 });
