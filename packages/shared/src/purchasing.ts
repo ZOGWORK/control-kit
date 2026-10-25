@@ -32,20 +32,21 @@ const parentOf = (path: string) => path.split(' > ').slice(0, -1).join(' > ');
 const baseName = (name: string) => name.toLowerCase().trim().replace(/\s*(?:\(\d+\)|<\d+>|\s\d+)$/, '');
 /**
  * Pieces in one Part Studio that carry one SKU. Copies of one body add up. Different pieces of one product (a REV
- * switch's housing and connector) count once per placement: in each assembly they sit in, the product count is the
- * largest number of any one piece there, and the assemblies add up (two switches in one place and a spare housing
- * elsewhere are three).
+ * switch's housing and connector) appear the same number of times wherever the product is placed, so in an assembly
+ * where every piece present has the same count, that count is the number of products; where the counts differ
+ * ("Left screw" 6 times, "Right screw" 4 times) they are separate parts and add up. Assemblies add up (two switches in
+ * one place and a spare housing elsewhere are three).
  */
 function studioQuantity(bodies: BomLine[]) {
   if (bodies.length === 1) return bodies[0].qty;
   if (new Set(bodies.map(body => baseName(body.name))).size !== bodies.length) return bodies.reduce((sum, body) => sum + body.qty, 0);
-  const perParent = new Map<string, number>();
+  const perParent = new Map<string, number[]>();
   for (const body of bodies) {
     const here = new Map<string, number>();
     for (const path of body.instancePaths) here.set(parentOf(path), (here.get(parentOf(path)) ?? 0) + 1);
-    for (const [parent, count] of here) perParent.set(parent, Math.max(perParent.get(parent) ?? 0, count));
+    for (const [parent, count] of here) perParent.set(parent, [...(perParent.get(parent) ?? []), count]);
   }
-  return [...perParent.values()].reduce((sum, count) => sum + count, 0);
+  return [...perParent.values()].reduce((sum, counts) => sum + (counts.every(count => count === counts[0]) ? counts[0] : counts.reduce((a, b) => a + b, 0)), 0);
 }
 
 export function recalculatePurchasing(result: ScanResult): ScanResult {

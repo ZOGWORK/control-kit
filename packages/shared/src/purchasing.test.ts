@@ -50,6 +50,11 @@ describe('purchase orders', () => {
     for (const line of result.lines) { line.vendor = screw; line.matchStatus = 'exact'; }
     expect(classifyScan(result, { teamNumber: null }, {}).lines.find(line => line.order)?.order).toEqual({ qty: 10, lines: 2 });
   });
+  it('adds differently named bodies placed different numbers of times in one assembly', () => {
+    const screw = record('gobilda', '2800-0004-0012', 25, 3.59);
+    const bodies = [...placed('Left screw', 6, 'robot', 'hardware', 'left'), ...placed('Right screw', 4, 'robot', 'hardware', 'right')];
+    expect(scan(bodies, () => screw).lines.find(line => line.order)?.order).toEqual({ qty: 10, lines: 2 });
+  });
   it('counts a multi-body product per place: two switches in one assembly and a spare housing elsewhere are three', () => {
     const sw = record('rev', 'REV-31-1462', 1, 17.5);
     const result = aggregateAssembly({ rootAssembly: { instances: [
