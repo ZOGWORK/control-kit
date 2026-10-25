@@ -1,4 +1,4 @@
-import { batchKey, indexKey, pointerKey, normalizeName, normalizeSku, type VendorId, type VendorRecord, type IndexEntry } from '@control-kit/shared';
+import { batchKey, indexKey, pointerKey, normalizeName, normalizeSku, withKnownPack, type VendorId, type VendorRecord, type IndexEntry } from '@control-kit/shared';
 export { batchKey, indexKey, pointerKey };
 export type { IndexEntry };
 import type { Kv } from './index';
@@ -158,6 +158,8 @@ export function applyPackEvidence(record: VendorRecord, packInfo: string | null 
   if (field) return { ...record, packSize: field.size, packSizeVerified: true, packEvidence: `product field "Pack Info: ${packInfo}"` };
   const suffix = record.sku.match(/-PK(\d{1,4})$/i);
   if (suffix && Number(suffix[1]) > 0) return { ...record, packSize: Number(suffix[1]), packSizeVerified: true, packEvidence: `SKU suffix "${suffix[0].slice(1)}"` };
+  const known = withKnownPack(record);
+  if (known !== record) return known;
   // ServoCity states packs only in its Pack Info field, so "no statement" means one unit only when that field was read
   // from the page. A record staged from an older dump never had it read and stays unverified.
   if (labelsEveryPack.includes(record.vendorId) && (record.vendorId !== 'servocity' || page.fieldsRead)) return { ...record, packSize: 1, packSizeVerified: true, packEvidence: 'sold individually: no pack wording, and this vendor names every multi-unit product' };

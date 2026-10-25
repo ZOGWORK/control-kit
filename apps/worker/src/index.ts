@@ -1,6 +1,6 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
 import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from './scan';
-import { applyMatchDecision, catalogReadKey, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings, type VendorId } from '@control-kit/shared';
+import { applyMatchDecision, catalogReadKey, decisionRecord, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings, type VendorId } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
@@ -337,7 +337,8 @@ async function route(request: Request, env: Env): Promise<Response> {
         const value = await env.APP_STATE.get(await matchDecisionKey(userId, result.documentId, line.bomLineKey));
         let choice: MatchDecision | null = null;
         try { choice = value ? JSON.parse(value) as MatchDecision : null; } catch { choice = null; }
-        if (choice && line.vendor && choice.vendorId === line.vendor.vendorId && choice.normalizedSku === line.vendor.normalizedSku) result = applyMatchDecision(result, line.bomLineKey, choice.status);
+        // A decision may pick one of the line's choices rather than the match it was shown.
+        if (choice && decisionRecord(line, choice)) result = applyMatchDecision(result, line.bomLineKey, choice.status, choice);
       }
       const settingsRaw = await env.APP_STATE.get(`settings:${userId}`);
       const overrides = await loadClassificationOverrides(result.lines, line => readDisposition(env, userId, result.documentId, classificationIdentity(line)), request.signal);

@@ -78,12 +78,12 @@ describe('assembly traversal and aggregation', () => {
       rootAssembly: { instances: [sub('w1', 'Motor Smol <1>', 'wrapper'), sub('w2', 'Motor Smol <2>', 'wrapper'), ...(besideMotor ? [] : [body('shaft', '2107-4008-0001 <1>', shaftElement)])] },
       subAssemblies: [
         { documentId: 'doc1', elementId: 'wrapper', instances: [sub('m', '5000-0002-0001 Motor <1>', 'motor'), ...(besideMotor ? [body('shaft', '2107-4008-0001 <1>', shaftElement)] : []), body('mount', 'Team motor mount', 'teamparts')] },
-        { documentId: 'doc1', elementId: 'motor', instances: [body('base', 'base'), body('endcap', 'endcap'), body('pin', 'Pin (1)')] },
+        { documentId: 'doc1', elementId: 'motor', instances: [body('base', 'base'), body('endcap', 'endcap'), body('pin', 'Pin (1)'), { ...body('spare', '5000-0002-4008 spare'), suppressed: true }] },
       ],
     });
     const folded = aggregateAssembly(definition('import1', true), context, 'Robot');
     expect(folded.lines.map(line => [line.name, line.qty]).sort()).toEqual([['5000-0002-0001 Motor', 2], ['Team motor mount', 2]]);
-    expect(folded.lines.find(line => line.purchasedAssembly)!.purchasedAssembly).toMatchObject({ parts: 3, includes: ['2107-4008-0001'] });
+    expect(folded.lines.find(line => line.purchasedAssembly)!.purchasedAssembly).toMatchObject({ parts: 4, includes: ['2107-4008-0001'], inside: ['base', 'endcap', 'Pin (1)'] });
     // A body from a different Part Studio, or placed anywhere else, is a part of its own.
     expect(aggregateAssembly(definition('teamparts', true), context, 'Robot').lines.map(line => line.name)).toContain('2107-4008-0001');
     expect(aggregateAssembly(definition('import1', false), context, 'Robot').lines.map(line => line.name)).toContain('2107-4008-0001');
