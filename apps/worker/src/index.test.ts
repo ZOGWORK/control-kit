@@ -44,7 +44,9 @@ describe('match decisions', () => {
 describe('vendor crons', () => {
   it('runs every vendor from a cron that wrangler.toml schedules', () => {
     const crons = JSON.parse(readFileSync(new URL('../../../wrangler.toml', import.meta.url), 'utf8').match(/^crons = (\[.*\])$/m)![1]) as string[];
-    expect(crons.sort()).toEqual(Object.keys(cronVendors).sort());
+    // Paused at the owner's request: nothing is scheduled, and anything scheduled later must map to a vendor.
+    expect(crons).toEqual([]);
+    expect(crons.every(cron => cron in cronVendors)).toBe(true);
     expect(new Set(Object.values(cronVendors)).size).toBe(5);
   });
 });

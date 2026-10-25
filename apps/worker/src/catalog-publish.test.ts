@@ -5,7 +5,7 @@ import { enrichScan, clearCatalogMemoryCache } from './catalog';
 import { manifestKey, publishStaged, spotCheck, stageCatalog, validateStaged } from './catalog-publish';
 const later = (iso: string, seconds = 70) => new Date(Date.parse(iso) + seconds * 1000);
 import { normalizeFeedRows, parseCsv, parseJsonFeed } from './feed-import';
-import { crawlKey, pointerKey, runVendor, snapshotKey, type CatalogPointer } from './vendor-ingest';
+import { crawlKey, pointerKey, retireReplaced, runVendor, snapshotKey, type CatalogPointer } from './vendor-ingest';
 
 class MemoryKv implements Kv {
   values = new Map<string, string>();
@@ -123,13 +123,51 @@ describe('generation bookkeeping', () => {
     const pointer = await publishStaged('gobilda', kv, 'feed1', { now: later(at) });
     expect(pointer.previous?.gen).toBe('crawl0');
     expect(pointer.retiring).toBeUndefined();
-    // The next cron run sees the fresh feed, drops the crawl, and must leave the rollback copy in place.
-    await runVendor('gobilda', kv, async () => new Response(''), { minRequestMs: 0, feedFreshHours: 1000000 });
+    // The next cron run (an hour later, inside the 24-hour rollback window; the clock is pinned so the test does not
+    // depend on today's date) sees the fresh feed, drops the crawl, and must leave the rollback copy in place.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(later(at, 3600));
+    try { await runVendor('gobilda', kv, async () => new Response(''), { minRequestMs: 0, feedFreshHours: 1000000 }); }
+    finally { vi.useRealTimers(); }
     const after = JSON.parse(kv.values.get(pointerKey('gobilda'))!) as CatalogPointer;
     expect(after.previous?.gen).toBe('crawl0');
     expect(after.retiring).toBeUndefined();
     expect(kv.values.has('cat:gobilda:gen:crawl0:batch:0')).toBe(true);
     vi.restoreAllMocks();
+  });
+  it('cleans up replaced catalogs without a crawl once their day of rollback is over, and never touches the live one', async () => {
+    const kv = new MemoryKv();
+    await stageCatalog('gobilda', records(10), kv, { source: 'official-feed', gen: 'feed1', now: new Date(at) });
+    await publishStaged('gobilda', kv, 'feed1', { now: later(at) });
+    await stageCatalog('gobilda', records(12), kv, { source: 'official-feed', gen: 'feed2', now: later(at, 100) });
+    await publishStaged('gobilda', kv, 'feed2', { now: later(at, 200) });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // Inside the rollback day nothing is deleted.
+      vi.setSystemTime(later(at, 3600));
+      expect((await retireReplaced('gobilda', kv)).deleted).toBe(0);
+      expect(kv.values.has('cat:gobilda:gen:feed1:batch:0')).toBe(true);
+      // After it, the replaced generation goes and the live one stays.
+      vi.setSystemTime(later(at, 2 * 86400));
+      const result = await retireReplaced('gobilda', kv);
+      expect(result.deleted).toBeGreaterThan(0);
+      expect(result.waiting).toEqual([]);
+    } finally { vi.useRealTimers(); }
+    expect(kv.values.has('cat:gobilda:gen:feed1:batch:0')).toBe(false);
+    expect(kv.values.has('cat:gobilda:gen:feed2:batch:0')).toBe(true);
+    expect((JSON.parse(kv.values.get(pointerKey('gobilda'))!) as CatalogPointer).previous).toBeNull();
+    // A publication that lands while cleanup runs keeps its own pointer.
+    const racing = new MemoryKv();
+    await stageCatalog('gobilda', records(10), racing, { source: 'official-feed', gen: 'f1', now: new Date(at) });
+    await publishStaged('gobilda', racing, 'f1', { now: later(at) });
+    await stageCatalog('gobilda', records(11), racing, { source: 'official-feed', gen: 'f2', now: later(at, 100) });
+    await publishStaged('gobilda', racing, 'f2', { now: later(at, 200) });
+    const published = JSON.stringify({ ...JSON.parse(racing.values.get(pointerKey('gobilda'))!), gen: 'f3' });
+    const remove = racing.delete.bind(racing);
+    racing.delete = async (key: string) => { await remove(key); racing.values.set(pointerKey('gobilda'), published); };
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try { vi.setSystemTime(later(at, 2 * 86400)); await retireReplaced('gobilda', racing); } finally { vi.useRealTimers(); }
+    expect(racing.values.get(pointerKey('gobilda'))).toBe(published);
   });
   it('stops a crawl that was running when a feed went live, so it can never replace the feed', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});

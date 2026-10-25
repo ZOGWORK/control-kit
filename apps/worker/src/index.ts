@@ -450,7 +450,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   return reply({ error: 'Not found' }, 404);
 }
-/** Each vendor crawls hourly, 12 minutes apart. Must match `[triggers] crons` in wrangler.toml (a test checks). */
+/**
+ * Each vendor crawls hourly, 12 minutes apart, when its cron is scheduled in wrangler.toml. The crons are paused (an
+ * empty list) at the owner's request; every cron that is scheduled must be one of these (a test checks).
+ */
 export const cronVendors: Record<string, VendorId> = { '0 * * * *': 'gobilda', '12 * * * *': 'servocity', '24 * * * *': 'andymark', '36 * * * *': 'rev', '48 * * * *': 'pitsco' };
 
 export default {
