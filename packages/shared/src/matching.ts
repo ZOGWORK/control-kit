@@ -44,7 +44,8 @@ export type VendorRecord = {
   /** Catalog generation the record was published in. */
   catalogVersion?: string;
 };
-export type MatchResult = { vendor: VendorRecord | null; confidence: number; status: 'unmatched' | 'possible' | 'confirmed' | 'exact'; reasons: string[] };
+/** `choices` lists the products a person picks between when a line names more than one exact SKU. */
+export type MatchResult = { vendor: VendorRecord | null; confidence: number; status: 'unmatched' | 'possible' | 'confirmed' | 'exact'; reasons: string[]; choices?: VendorRecord[] };
 
 const prefixes: Record<VendorId, string[]> = {
   gobilda: ['GB'], servocity: ['SC'], andymark: ['AM'], rev: ['REV'], pitsco: [],
@@ -143,13 +144,13 @@ export function findBestMatch(line: { name: string; partNumber?: string | null }
     }
     const ranked = exact.sort(preferStockThenPrice);
     const vendor = ranked[0];
-    if (!sameNumber) return { vendor, confidence: 0.9, status: 'possible', reasons: [`different SKUs on this part (${[...new Set(exact.map(item => item.sku))].join(', ')}); confirm which one`] };
+    if (!sameNumber) return { vendor, confidence: 0.9, status: 'possible', reasons: [`different SKUs on this part (${[...new Set(exact.map(item => item.sku))].join(', ')}); confirm which one`], choices: ranked };
     // goBILDA products are also sold by ServoCity under the same SKU: one product, several sellers. Only when the
     // product names disagree is the shared number ambiguous, and then a person must say which product it is.
     const sameProduct = ranked.every(other => sameProductName(vendor, other));
     const others = [...exactVendors].filter(id => id !== vendor.vendorId).join(', ');
     if (sameProduct) return { vendor, confidence: 1, status: 'exact', reasons: [`exact SKU ${vendor.sku}; also sold by ${others}`] };
-    return { vendor, confidence: 0.9, status: 'possible', reasons: [`SKU ${vendor.sku} names different products at ${[...exactVendors].join(', ')}; confirm which one`] };
+    return { vendor, confidence: 0.9, status: 'possible', reasons: [`SKU ${vendor.sku} names different products at ${[...exactVendors].join(', ')}; confirm which one`], choices: ranked };
   }
   const ranked = candidates.map(vendor => ({ vendor, ...candidateScore(line.name, vendor) }));
   const eligible = ranked.filter(candidate => candidate.score >= 0.5);

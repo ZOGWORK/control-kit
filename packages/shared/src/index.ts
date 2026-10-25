@@ -6,6 +6,7 @@ export type { ClassificationOverride, ClassificationOverrides, Confidence, Dispo
 export type { Attribution, LibraryMapping, LicensedImage, VendorId, VendorRecord, MatchResult } from './matching';
 export { buildControlPointPayload, MockControlPointAdapter } from './control-point';
 export { recalculatePurchasing, updatePurchasing } from './purchasing';
+export { knownProduct, withKnownPack } from './known-products';
 import { recalculatePurchasing } from './purchasing';
 export { batchKey, catalogReadKey, catalogVendors, clearCatalogMemoryCache, indexKey, matchCatalog, pointerKey } from './catalog-read';
 export type { CatalogReader, IndexEntry } from './catalog-read';
@@ -31,7 +32,9 @@ export type BomLine = { bomLineKey: string; name: string; description: string | 
   /** Workspace or version a file export can read this part from; Onshape's translation endpoint takes no microversion. */
   exportSource?: { type: 'w' | 'v'; id: string } | null;
   /** Set when a subassembly is listed as one bought product instead of its internal parts. */
-  purchasedAssembly?: { parts: number; reason: string; includes?: string[] } | null;
+  purchasedAssembly?: { parts: number; reason: string; includes?: string[]; inside?: string[] } | null;
+  /** The exact-SKU products a person picks between when the line names more than one; a saved decision may pick any of them. */
+  choices?: VendorRecord[];
   /** Set when a parts library's mapping supplied the SKU, with the library's credit. */
   libraryMatch?: { library: string; attribution: Attribution } | null;
   /** A licensed picture of the product (library or vendor feed). Empty until a source grants permission. */
@@ -90,10 +93,19 @@ export const catalogUsable = (health: CatalogHealth | undefined, vendorId: Vendo
 export type ScanResult = { vendorMatching?: 'pending' | 'done'; scanId?: string; diagnostics?: ScanDiagnostics; catalogHealth?: CatalogHealth; documentName?: string; assemblyName: string; documentId: string; elementId: string; scannedAt: string; vendorDataUpdatedAt: string | null; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
 export type MatchDecision = { status: 'confirmed' | 'rejected'; vendorId: VendorRecord['vendorId']; normalizedSku: string };
 
-export function applyMatchDecision(result: ScanResult, key: string, decision: 'confirmed' | 'rejected'): ScanResult {
+/** The record a saved decision names on this line: its current match or one of the products it is choosing between. */
+export function decisionRecord(line: BomLine, decision: Pick<MatchDecision, 'vendorId' | 'normalizedSku'> | null): VendorRecord | null {
+  if (!decision) return null;
+  return [line.vendor, ...(line.choices ?? [])].find(record => record && record.vendorId === decision.vendorId && record.normalizedSku === decision.normalizedSku) ?? null;
+}
+
+/** Confirms or rejects a possible match. With `pick`, confirms that one of the line's choices instead, also after an earlier pick. */
+export function applyMatchDecision(result: ScanResult, key: string, decision: 'confirmed' | 'rejected', pick?: Pick<MatchDecision, 'vendorId' | 'normalizedSku'>): ScanResult {
   const next: ScanResult = { ...result, stats: { ...result.stats }, lines: result.lines.map(line => ({ ...line })) };
   const line = next.lines.find(item => item.bomLineKey === key);
-  if (!line || line.matchStatus !== 'possible') return next;
+  const picked = line && pick ? decisionRecord(line, pick) : null;
+  if (!line || (line.matchStatus !== 'possible' && !(picked && line.matchStatus === 'confirmed'))) return next;
+  if (picked) line.vendor = picked;
   line.matchStatus = decision;
   if (decision === 'rejected') { line.vendor = null; line.alternatives = []; }
   next.missingMetadata = next.missingMetadata.map(item => next.lines.find(active => active.bomLineKey === item.bomLineKey) ?? item);
@@ -154,6 +166,18 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
       return total + (child?.instances && !ancestry.has(key) ? countParts(child.instances, new Set([...ancestry, key])) : 0);
     }, 0);
   }
+  /** Names of the parts and subassemblies inside a subassembly, nested ones included (at most 50). */
+  function namesInside(instances: AssemblyInstance[], ancestry: Set<string>, into = new Set<string>()): Set<string> {
+    for (const instance of instances) {
+      if (into.size >= 50) break;
+      into.add(partNames.get(`${instance.documentId}:${instance.elementId}:${instance.partId}`) ?? instance.name.replace(/\s*<\d+>$/, ''));
+      if (instance.type.toLowerCase() !== 'assembly') continue;
+      const key = subassemblyKey(instance);
+      const child = definitions.get(key);
+      if (child?.instances && !ancestry.has(key)) namesInside(child.instances, new Set([...ancestry, key]), into);
+    }
+    return into;
+  }
   /** True when a subassembly somewhere inside carries a vendor part number in its own name. */
   function containsVendorProduct(instances: AssemblyInstance[], ancestry: Set<string>): boolean {
     return instances.some(instance => {
@@ -175,7 +199,8 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
       // A wrapper named only like a product ("Motor Smol") steps aside for the SKU-named product inside it, so the SKU survives.
       if (reason && !purchasedAssemblyReason(instance.name.replace(/\s*<\d+>$/, ''), instance.partNumber, false) && child?.instances && containsVendorProduct(child.instances, new Set([...ancestry, key]))) reason = null;
       if (reason) {
-        const line = add(instance, childPath, isSuppressed, false, { parts: child?.instances ? countParts(child.instances, new Set([...ancestry, key])) : 0, reason });
+        const inside = child?.instances ? [...namesInside(child.instances, new Set([...ancestry, key]))] : [];
+        const line = add(instance, childPath, isSuppressed, false, { parts: child?.instances ? countParts(child.instances, new Set([...ancestry, key])) : 0, reason, ...(inside.length ? { inside } : {}) });
         if (child?.instances) {
           const parent = path.join(' > ');
           kitsByParent.set(parent, [...(kitsByParent.get(parent) ?? []), { line, studios: studiosInside(child.instances, new Set([...ancestry, key])) }]);

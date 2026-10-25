@@ -88,9 +88,20 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
           <dt>Product</dt><dd><a className="link" href={vendor.url} target="_blank" rel="noopener noreferrer">{vendorLabel[vendor.vendorId]} {vendor.sku} <ExternalLink aria-hidden size={11} /></a><br /><span className="muted small">{vendor.name}</span></dd>
           <dt>Match</dt><dd>{matchLabel[line.matchStatus]}{line.libraryMatch && <span className="muted small"> (part mapping from {line.libraryMatch.attribution.credit})</span>}{line.matchReasons.length ? <span className="muted small"><br />{line.matchReasons.join('; ')}</span> : null}</dd>
           <dt>Pack</dt><dd>{vendor.packSizeVerified && vendor.packSize ? `${vendor.packSize} per pack (${vendor.packEvidence ?? 'from the product page'})` : 'Unknown, so no total'}</dd>
-          <dt>Price</dt><dd>{vendor.priceUsd === null ? 'Unknown' : `${money(vendor.priceUsd)} per pack`}{line.packsToOrder !== null && line.lineTotalUsd !== null ? `; ${line.packsToOrder} pack${line.packsToOrder === 1 ? '' : 's'} = ${money(line.lineTotalUsd)}` : ''}</dd>
+          <dt>Price</dt><dd>{vendor.priceUsd === null ? 'Unknown' : `${money(vendor.priceUsd)} per pack (public list price)`}{line.packsToOrder !== null && line.lineTotalUsd !== null ? `; ${line.packsToOrder} pack${line.packsToOrder === 1 ? '' : 's'} = ${money(line.lineTotalUsd)}` : ''}</dd>
           <dt>Stock</dt><dd>{vendor.stock === 'unknown' ? 'Unknown' : vendor.stock === 'in' ? 'In stock' : vendor.stock === 'low' ? 'Low stock' : 'Out of stock'}<span className="muted small"> as of {new Date(vendor.updatedAt).toLocaleDateString()}</span></dd>
         </dl>
+        {(line.choices?.length ?? 0) > 1 && ['possible', 'confirmed'].includes(line.matchStatus) && <div className="stack">
+          <p className="small">Which product is it?</p>
+          {line.choices!.map(choice => {
+            const chosen = line.matchStatus === 'confirmed' && choice.vendorId === vendor.vendorId && choice.normalizedSku === vendor.normalizedSku;
+            return <div key={`${choice.vendorId}:${choice.normalizedSku}`} className="inline-actions">
+              <Button size="sm" variant={chosen ? 'primary' : 'secondary'} aria-pressed={chosen} disabled={locked || chosen} onClick={() => void kit.decide(line, 'confirmed', choice)}>{chosen ? 'Chosen' : 'Use this'}</Button>
+              <a className="link small" href={choice.url} target="_blank" rel="noopener noreferrer">{vendorLabel[choice.vendorId]} {choice.sku} <ExternalLink aria-hidden size={11} /></a>
+              <span className="muted small">{choice.name}{choice.priceUsd !== null ? `, ${money(choice.priceUsd)}` : ''}</span>
+            </div>;
+          })}
+        </div>}
         {line.matchStatus === 'possible' && <div className="inline-actions">
           <Button size="sm" disabled={locked} onClick={() => void kit.decide(line, 'confirmed')}>Confirm this product</Button>
           <Button size="sm" variant="ghost" disabled={locked} onClick={() => void kit.decide(line, 'rejected')}>Not this product</Button>

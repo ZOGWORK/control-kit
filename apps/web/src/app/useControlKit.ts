@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, matchCatalog, type BomLine, type ClassificationOverride, type ExportPart, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, decisionRecord, matchCatalog, type BomLine, type ClassificationOverride, type ExportPart, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
 /** Spreadsheet and ZIP builders load on first download, keeping them out of the initial bundle. */
 const exporters = () => import('@control-kit/excel');
 
@@ -110,7 +110,9 @@ export function useControlKit(context: URLSearchParams) {
           if (!choice) return line;
           const next = { ...line, manualClassification: choice.disposition };
           const decision = choice.decision;
-          if (decision && line.vendor && ['possible', 'confirmed', 'rejected'].includes(line.matchStatus) && decision.vendorId === line.vendor.vendorId && decision.normalizedSku === line.vendor.normalizedSku) {
+          const picked = decision && ['possible', 'confirmed', 'rejected'].includes(line.matchStatus) ? decisionRecord(line, decision as Parameters<typeof decisionRecord>[1]) : null;
+          if (decision && picked) {
+            next.vendor = picked;
             next.matchStatus = decision.status;
             if (decision.status === 'rejected') next.vendor = null;
           }
@@ -209,13 +211,14 @@ export function useControlKit(context: URLSearchParams) {
   }
 
   /** Confirm or reject a possible vendor match; the line updates at once and rolls back if saving fails. */
-  async function decide(line: BomLine, decision: 'confirmed' | 'rejected') {
+  /** Confirms or rejects the line's match; `pick` confirms one of its choices instead. */
+  async function decide(line: BomLine, decision: 'confirmed' | 'rejected', pick?: VendorRecord) {
     if (!result || !line.vendor || pending || saving.has(line.bomLineKey)) return;
     markSaving(line.bomLineKey, true);
     const generation = scanGeneration.current;
-    const vendor = line.vendor;
+    const vendor = pick ?? line.vendor;
     const previous = { matchStatus: line.matchStatus, vendor: line.vendor, alternatives: line.alternatives };
-    setResult(current => { if (!current) return current; const decided = applyMatchDecision(current, line.bomLineKey, decision); return classifyScan(decided, settings, overridesOf(decided)); });
+    setResult(current => { if (!current) return current; const decided = applyMatchDecision(current, line.bomLineKey, decision, pick); return classifyScan(decided, settings, overridesOf(decided)); });
     try {
       const response = await postJson('/api/matches/decision', { documentId: result.documentId, lineKey: line.bomLineKey, decision, vendorId: vendor.vendorId, normalizedSku: vendor.normalizedSku });
       if (!response.ok) throw new Error();

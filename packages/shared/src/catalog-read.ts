@@ -1,5 +1,6 @@
-import { findBestMatch, findLibraryMapping, libraryMapKey, nameSimilarity, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates, type LibraryMapping, type VendorId, type VendorRecord } from './matching';
-import { recalculatePurchasing, type MatchDecision, type ScanResult } from './index';
+import { findBestMatch, findLibraryMapping, libraryMapKey, nameSimilarity, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates, type LibraryMapping, type MatchResult, type VendorId, type VendorRecord } from './matching';
+import { decisionRecord, recalculatePurchasing, type MatchDecision, type ScanResult } from './index';
+import { knownProduct, withKnownPack } from './known-products';
 
 /**
  * Reading published vendor catalogs. Storage layout (written by the Worker's ingestion and staged publish):
@@ -127,7 +128,7 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
     if (!found) {
       found = read(kv, key, cache, signal).then(raw => {
         const records = new Map<string, VendorRecord>();
-        try { for (const value of JSON.parse(raw ?? '[]') as unknown[]) if (isVendorRecord(value)) records.set(value.normalizedSku, value); } catch { /* A malformed batch is a miss. */ }
+        try { for (const value of JSON.parse(raw ?? '[]') as unknown[]) if (isVendorRecord(value)) records.set(value.normalizedSku, withKnownPack(value)); } catch { /* A malformed batch is a miss. */ }
         return records;
       });
       batches.set(key, found);
@@ -143,6 +144,12 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
       mappings.set(documentId, found);
     }
     return found;
+  };
+  /** One SKU's record at a vendor, or null. */
+  const recordAt = async (vendor: VendorId, sku: string) => {
+    const index = catalogs.find(item => item.vendor === vendor);
+    const position = index?.bySku.get(normalizeSku(sku, vendor));
+    return index && position !== undefined ? (await batch(index, index.entries[position][2])).get(index.entries[position][0]) ?? null : null;
   };
   const jobs = result.lines.map(async line => {
     if (signal?.aborted) throw signal.reason;
@@ -163,16 +170,36 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
     const mappedIndex = mapping ? catalogs.find(index => index.vendor === mapping.vendorId) : undefined;
     const mappedPosition = mappedIndex ? mappedIndex.bySku.get(normalizeSku(mapping!.sku, mapping!.vendorId)) : undefined;
     const mapped = mappedIndex && mappedPosition !== undefined ? (await batch(mappedIndex, mappedIndex.entries[mappedPosition][2])).get(mappedIndex.entries[mappedPosition][0]) ?? null : null;
-    const match = mapped ? { vendor: mapped, confidence: 1, status: 'exact' as const, reasons: [`SKU ${mapping!.sku} from ${mapping!.library} part mapping`] }
+    let match: MatchResult = mapped ? { vendor: mapped, confidence: 1, status: 'exact', reasons: [`SKU ${mapping!.sku} from ${mapping!.library} part mapping`] }
       : findBestMatch(line, [...candidates.values()]);
+    // A part named exactly like a known FTC product ("Pinpoint", "Control Hub") is that product; with several SKUs, a person picks.
+    const known = !mapped && match.status !== 'exact' ? knownProduct(line.name) : null;
+    const knownRecords = known ? (await Promise.all(known.skus.map(([vendor, sku]) => recordAt(vendor, sku)))).filter((record): record is VendorRecord => Boolean(record)) : [];
+    if (known && knownRecords.length === 1) match = { vendor: knownRecords[0], confidence: 1, status: 'exact', reasons: [`named as the ${known.product}, SKU ${knownRecords[0].sku}`] };
+    else if (known && knownRecords.length > 1) match = { vendor: knownRecords[0], confidence: 0.9, status: 'possible', reasons: [`named as the ${known.product}, sold as ${knownRecords.map(record => record.sku).join(' or ')}; confirm which one`], choices: knownRecords };
+    // A product whose own bodies name a different SKU of the same family (an imported motor named 5000-0002-0001 whose
+    // bodies say 5000-0002-4008) is a question: the name may be a template's, the bodies the real product's.
+    if (match.status === 'exact' && match.vendor && !mapped && line.purchasedAssembly?.inside?.length) {
+      // A family is the number's first four digits at the same vendor (goBILDA 5000-0002-xxxx, REV-31-15xx).
+      const family = (sku: string) => sku.toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^[A-Z]+/, '').slice(0, 4);
+      const own = match.vendor;
+      const innerSkus = [...new Set(line.purchasedAssembly.inside.flatMap(name => skuCandidates(name, null)))].filter(sku => family(sku) === family(own.sku));
+      const inner = new Map<string, VendorRecord>();
+      for (const record of await Promise.all(innerSkus.map(sku => recordAt(own.vendorId, sku)))) if (record && record.normalizedSku !== own.normalizedSku) inner.set(record.normalizedSku, record);
+      if (inner.size) match = { vendor: own, confidence: 0.9, status: 'possible', reasons: [`${own.sku} in the name, but parts inside name ${[...inner.values()].map(record => record.sku).join(', ')}; confirm which product this is`], choices: [own, ...inner.values()] };
+    }
     line.vendor = match.vendor;
+    line.choices = match.choices ?? [];
     line.matchConfidence = match.confidence;
     line.matchStatus = match.status;
     line.matchReasons = match.reasons;
     if (match.status === 'exact') { line.classification = 'commercial'; line.classificationReasons = ['exact vendor SKU forces Commercial']; }
     if (match.vendor && match.status !== 'exact') {
       const choice = await getDecision(line.bomLineKey, signal);
-      if (choice?.vendorId === match.vendor.vendorId && choice.normalizedSku === match.vendor.normalizedSku) {
+      // A saved decision may name the shown match or any of the line's choices.
+      const picked = decisionRecord(line, choice);
+      if (choice && picked) {
+        line.vendor = picked;
         line.matchStatus = choice.status;
         if (choice.status === 'rejected') line.vendor = null;
       }

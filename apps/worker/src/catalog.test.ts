@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { aggregateAssembly, applyMatchDecision, normalizeName, type AssemblyDefinition, type VendorRecord, classifyScan } from '@control-kit/shared';
+import { aggregateAssembly, applyMatchDecision, normalizeName, normalizeSku, type AssemblyDefinition, type BomLine, type VendorId, type VendorRecord, classifyScan } from '@control-kit/shared';
 import { clearCatalogMemoryCache, enrichScan } from './catalog';
 import { batchKey, indexKey, pointerKey } from './vendor-ingest';
 import type { Kv } from './index';
@@ -246,5 +246,59 @@ describe('catalog health', () => {
     kv.values.set('vendor:pitsco:__snapshot__', JSON.stringify({ status: 'failed', updatedAt: '2026-01-01T00:00:00.000Z', lastRunAt: new Date().toISOString(), recordCount: 12, source: 'sitemap', version: 'v1', error: 'Vendor returned HTTP 503' }));
     const result = await enrichScan(aggregateAssembly(fixture('empty'), context, 'Empty'), kv);
     expect(result.catalogHealth!.vendors.find(vendor => vendor.vendorId === 'pitsco')).toMatchObject({ state: 'published', stale: true, lastRunFailed: true, error: 'Vendor returned HTTP 503', recordCount: 12 });
+  });
+});
+
+describe('known products and SKU choices', () => {
+  const record = (vendorId: VendorId, sku: string, name: string, priceUsd = 10): VendorRecord => ({ vendorId, sku, normalizedSku: normalizeSku(sku, vendorId), name, normalizedName: normalizeName(name), url: 'https://www.gobilda.com/x/', priceUsd, packSize: 1, packSizeVerified: true, packEvidence: 'sold individually: no pack wording, and this vendor names every multi-unit product', stock: 'in', stockQty: null, category: 'electronics', updatedAt: new Date().toISOString(), source: 'sitemap' });
+  const shelf = [
+    record('gobilda', '3110-0002-0001', 'Pinpoint Odometry Computer (IMU Sensor Fusion for 2 Dead Wheels)', 79.99),
+    record('gobilda', '3110-0002-0002', 'Pinpoint V2 Odometry Computer', 79.99),
+    record('rev', 'REV-31-1595', 'Control Hub', 375),
+    record('gobilda', '5000-0002-0001', 'Modern Robotics Motor', 30),
+    record('gobilda', '5000-0002-4008', 'Gearmotor 4008', 40),
+    record('gobilda', '3625-0202-0104', 'GripForce Mecanum Wheel Set (104mm, 40A Durometer Rollers)', 189.99),
+  ];
+  const lines = (...specs: Array<Partial<BomLine> & { name: string }>) => {
+    const result = aggregateAssembly(fixture('empty'), context, 'Robot');
+    const base = aggregateAssembly(fixture('simple'), context, 'Robot').lines[0];
+    result.lines = specs.map((spec, n) => ({ ...base, partNumber: null, bomLineKey: `line-${n}`, qty: 1, ...spec }));
+    return result;
+  };
+  it('matches a part named exactly like a known product, and asks which one when it is sold as several', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: 'Control Hub' }, { name: 'Pinpoint' }, { name: 'Pinpoint case' });
+    classifyScan(await enrichScan(result, catalog(shelf)), { teamNumber: null }, {});
+    const [hub, pinpoint, pinpointCase] = result.lines;
+    expect(hub).toMatchObject({ matchStatus: 'exact', disposition: 'buy', lineTotalUsd: 375 });
+    expect(hub.vendor?.sku).toBe('REV-31-1595');
+    expect(pinpoint.matchStatus).toBe('possible');
+    expect(pinpoint.choices?.map(choice => choice.sku)).toEqual(['3110-0002-0001', '3110-0002-0002']);
+    expect(pinpoint.lineTotalUsd).toBeNull();
+    expect(pinpointCase.matchStatus).not.toBe('exact');
+  });
+  it('applies a saved decision that picks a choice other than the one shown', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: 'Pinpoint' });
+    classifyScan(await enrichScan(result, catalog(shelf), async () => ({ status: 'confirmed', vendorId: 'gobilda', normalizedSku: normalizeSku('3110-0002-0002', 'gobilda') })), { teamNumber: null }, {});
+    expect(result.lines[0]).toMatchObject({ matchStatus: 'confirmed', lineTotalUsd: 79.99 });
+    expect(result.lines[0].vendor?.sku).toBe('3110-0002-0002');
+    // Picking another choice later replaces the first pick.
+    const changed = applyMatchDecision(result, 'line-0', 'confirmed', { vendorId: 'gobilda', normalizedSku: normalizeSku('3110-0002-0001', 'gobilda') });
+    expect(changed.lines[0].vendor?.sku).toBe('3110-0002-0001');
+  });
+  it('asks which product a kit is when its own bodies name a different SKU of the same family', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: '5000-0002-0001 Motor', purchasedAssembly: { parts: 3, reason: 'its name has a goBILDA/ServoCity part number', inside: ['5000-0002-4008 Gearbox', '2800-0004-0010 Screw', 'Shaft'] } });
+    await enrichScan(result, catalog(shelf));
+    expect(result.lines[0].matchStatus).toBe('possible');
+    expect(result.lines[0].choices?.map(choice => choice.sku)).toEqual(['5000-0002-0001', '5000-0002-4008']);
+  });
+  it('orders one mecanum wheel set for four modeled wheels', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: '3625-0202-0104 Mecanum Wheel', qty: 4 });
+    classifyScan(await enrichScan(result, catalog(shelf)), { teamNumber: null }, {});
+    expect(result.lines[0]).toMatchObject({ matchStatus: 'exact', packsToOrder: 1, lineTotalUsd: 189.99 });
+    expect(result.lines[0].vendor?.packEvidence).toMatch(/4 wheels/);
   });
 });
