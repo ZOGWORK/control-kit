@@ -35,6 +35,9 @@ export function useControlKit(context: URLSearchParams) {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [settings, setSettings] = useState<UserSettings>({ teamNumber: null });
+  /** The latest settings, for updaters that run after a later render (a reopened scan's choices arriving late). */
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const [savingSettings, setSavingSettings] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   /** Lines whose choice is being saved. Saves run side by side, so deciding the next part never waits for the last one. */
@@ -47,6 +50,8 @@ export function useControlKit(context: URLSearchParams) {
   const [ai, setAi] = useState<{ enabled: boolean; running: boolean; note: string }>({ enabled: false, running: false, note: '' });
   const abort = useRef<AbortController | null>(null);
   const scanGeneration = useRef(0);
+  /** Changes only at sign-out, so replies that belong to the previous session can be told apart. */
+  const sessionEpoch = useRef(0);
   /** The STEP export in progress, if any. Sign-out ends it; a rescan leaves it to finish for the scan it started from. */
   const stepRun = useRef<number | null>(null);
   const stepRuns = useRef(0);
@@ -88,6 +93,7 @@ export function useControlKit(context: URLSearchParams) {
   const reopenable = (scanned: ScanResult) => Date.now() - Date.parse(scanned.scannedAt) < 7 * 86400000 - 3600000;
   useEffect(() => {
     if (!savedFor || result || abort.current) return;
+    pruneSavedScans();
     type Saved = { userId: string; result: ScanResult };
     let saved: Saved | null;
     try { saved = JSON.parse(localStorage.getItem(savedKey) ?? 'null') as Saved | null; } catch { saved = null; }
@@ -96,6 +102,15 @@ export function useControlKit(context: URLSearchParams) {
     setResult(reopened);
     void refreshChoices(reopened);
   }, [savedFor]);
+  /** Drops saved scans that can no longer reopen, so old assemblies do not fill the browser's storage. */
+  function pruneSavedScans(keep?: string) {
+    try {
+      for (const key of Object.keys(localStorage).filter(item => item.startsWith('control-kit:scan:') && item !== keep)) {
+        try { const saved = JSON.parse(localStorage.getItem(key) ?? 'null') as { result?: ScanResult } | null; if (!saved?.result || !reopenable(saved.result)) localStorage.removeItem(key); }
+        catch { localStorage.removeItem(key); }
+      }
+    } catch { /* Storage unavailable. */ }
+  }
   /** Applies the document's current shared choices and the person's match decisions to a reopened scan. */
   async function refreshChoices(reopened: ScanResult) {
     if (!reopened.scanId) return;
@@ -121,15 +136,20 @@ export function useControlKit(context: URLSearchParams) {
           return next;
         });
         const updated = { ...current, lines, stats: { ...current.stats } };
-        return classifyScan(updated, settings, overridesOf(updated));
+        return classifyScan(updated, settingsRef.current, overridesOf(updated));
       });
     } catch { setError('Could not load the latest shared choices for this scan. Rescan to be sure it is current.'); }
     finally { setPending(null); }
   }
   useEffect(() => {
     if (!savedFor || !result || result.vendorMatching === 'pending') return;
-    try { localStorage.setItem(savedKey, JSON.stringify({ userId: savedFor, result })); }
-    catch { /* Storage full or blocked: the scan still works, it just will not reopen. */ }
+    const value = JSON.stringify({ userId: savedFor, result });
+    try { localStorage.setItem(savedKey, value); }
+    catch {
+      // Storage full: other assemblies' saved scans make room for this one. Blocked storage: the scan just will not reopen.
+      try { for (const key of Object.keys(localStorage).filter(item => item.startsWith('control-kit:scan:') && item !== savedKey)) localStorage.removeItem(key); localStorage.setItem(savedKey, value); }
+      catch { /* The scan still works; it will not reopen. */ }
+    }
   }, [result, savedFor]);
   // Team settings can arrive after a reopened scan; its suggestions (team number in names) follow them.
   useEffect(() => {
@@ -137,8 +157,11 @@ export function useControlKit(context: URLSearchParams) {
   }, [settings]);
   useEffect(() => {
     if (!session?.connected) return;
+    // A reply that arrives after sign-out (or another sign-in) belongs to the old session and is dropped.
+    const epoch = sessionEpoch.current;
     api('/api/settings').then(async response => { if (!response.ok) throw Error(); return await response.json() as UserSettings; })
-      .then(setSettings).catch(() => setError('Could not load team settings.'));
+      .then(value => { if (sessionEpoch.current === epoch) setSettings(value); })
+      .catch(() => { if (sessionEpoch.current === epoch) setError('Could not load team settings.'); });
   }, [session?.connected]);
 
   async function scan() {
@@ -157,6 +180,7 @@ export function useControlKit(context: URLSearchParams) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffered = '';
+      let finished = false;
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -164,10 +188,12 @@ export function useControlKit(context: URLSearchParams) {
         const lines = buffered.split('\n'); buffered = lines.pop() ?? '';
         for (const line of lines) {
           if (!line) continue;
-          const event = JSON.parse(line) as ScanEvent;
+          let event: ScanEvent;
+          try { event = JSON.parse(line) as ScanEvent; } catch { throw new Error('The scan sent a reply Control Kit could not read. Try again.'); }
           if (event.type === 'progress') setProgress({ ...event });
           if (event.type === 'rate-limit') setProgress(previous => previous && { ...previous, retry: `Onshape is rate-limiting; retrying in ${Math.ceil(event.retryInMs / 1000)}s` });
           // A result that arrives after sign-out or a newer scan is dropped.
+          if (event.type === 'result') finished = true;
           if (event.type === 'result' && generation === scanGeneration.current) {
             let scanned = event.result;
             if (scanned.vendorMatching === 'pending') {
@@ -180,6 +206,8 @@ export function useControlKit(context: URLSearchParams) {
           if (event.type === 'error') throw new Error(event.message);
         }
       }
+      // A stream that closes without a result (a dropped connection, or the server stopping the scan) is a failure too.
+      if (!finished && !controller.signal.aborted) throw new Error('The scan ended before it finished. Try again.');
     } catch (cause) {
       if (!controller.signal.aborted && generation === scanGeneration.current) setError(cause instanceof Error ? cause.message : 'The scan failed. Try again.');
     } finally { if (abort.current === controller) { abort.current = null; setProgress(null); } }
@@ -214,13 +242,14 @@ export function useControlKit(context: URLSearchParams) {
 
   /** Confirm or reject a possible vendor match; the line updates at once and rolls back if saving fails. */
   /** Confirms or rejects the line's match; `pick` confirms one of its choices instead. */
-  async function decide(line: BomLine, decision: 'confirmed' | 'rejected', pick?: VendorRecord): Promise<boolean> {
+  async function decide(line: BomLine, decision: 'confirmed' | 'rejected', pick?: VendorRecord, options: { keepAi?: boolean } = {}): Promise<boolean> {
     if (!result || !(pick ?? line.vendor) || pending || saving.has(line.bomLineKey)) return false;
     markSaving(line.bomLineKey, true);
     const generation = scanGeneration.current;
     const vendor = (pick ?? line.vendor)!;
     const previous = { matchStatus: line.matchStatus, vendor: line.vendor, alternatives: line.alternatives };
-    setResult(current => { if (!current) return current; const decided = applyMatchDecision(current, line.bomLineKey, decision, pick); return classifyScan(decided, settings, overridesOf(decided)); });
+    const suggestions = aiSuggestionsOf(result, line);
+    setResult(current => { if (!current) return current; const decided = withoutAi(applyMatchDecision(current, line.bomLineKey, decision, pick), line, options.keepAi); return classifyScan(decided, settings, overridesOf(decided)); });
     try {
       const response = await postJson('/api/matches/decision', { documentId: result.documentId, lineKey: line.bomLineKey, decision, vendorId: vendor.vendorId, normalizedSku: vendor.normalizedSku });
       if (!response.ok) throw new Error();
@@ -229,7 +258,8 @@ export function useControlKit(context: URLSearchParams) {
       // Only this line goes back; choices made on other lines meanwhile stay.
       if (scanGeneration.current === generation) setResult(current => {
         if (!current) return current;
-        const lines = current.lines.map(item => item.bomLineKey === line.bomLineKey ? { ...item, ...previous } : item);
+        // The decided row goes back first, so the check below compares it with its state from before the save.
+        const lines = restoreAi({ ...current, lines: current.lines.map(item => item.bomLineKey === line.bomLineKey ? { ...item, ...previous } : item) }, suggestions).lines;
         const restored = { ...current, lines, stats: { ...current.stats } };
         return classifyScan(restored, settings, overridesOf(restored));
       });
@@ -249,16 +279,20 @@ export function useControlKit(context: URLSearchParams) {
     const { request, keys } = buildAiReviewRequest(result);
     if (!request.lines.length) { setAi(current => ({ ...current, note: 'Nothing uncertain to recheck.' })); return; }
     const scanId = result.scanId;
-    setAi(current => ({ ...current, running: true, note: '' }));
+    const epoch = sessionEpoch.current;
+    // After sign-out the reply is dropped, so it cannot bring back the old session's note.
+    const current = () => sessionEpoch.current === epoch;
+    setAi(state => ({ ...state, running: true, note: '' }));
     try {
       const response = await postJson('/api/ai/review', { documentId: result.documentId, scanId, request, keys });
       const body = await response.json().catch(() => ({})) as { items?: AiReviewItem[]; provider?: AiProvider; cached?: boolean; error?: string };
-      if (!response.ok || !body.items || !body.provider) { setAi(current => ({ ...current, note: body.error ?? 'The AI review failed. Your parts are unchanged.' })); return; }
-      setResult(current => current && current.scanId === scanId ? applyAiReview(current, keys, body.items!, body.provider!) : current);
+      if (!current()) return;
+      if (!response.ok || !body.items || !body.provider) { setAi(state => ({ ...state, note: body.error ?? 'The AI review failed. Your parts are unchanged.' })); return; }
+      setResult(state => state && state.scanId === scanId ? applyAiReview(state, keys, body.items!, body.provider!) : state);
       const who = body.provider === 'gemini' ? 'Gemini' : 'Claude';
-      setAi(current => ({ ...current, note: `${who} suggested ${body.items!.length} of ${request.lines.length} uncertain parts${body.cached ? ' (a saved answer, no new AI call)' : ''}${request.leftOut ? `; ${request.leftOut} more were not sent` : ''}. Nothing changes until you accept a suggestion.` }));
-    } catch { setAi(current => ({ ...current, note: 'Could not reach the AI review. Your parts are unchanged.' })); }
-    finally { setAi(current => ({ ...current, running: false })); }
+      setAi(state => ({ ...state, note: `${who} suggested ${body.items!.length} of ${request.lines.length} uncertain parts${body.cached ? ' (a saved answer, no new AI call)' : ''}${request.leftOut ? `; ${request.leftOut} more were not sent` : ''}. Nothing changes until you accept a suggestion.` }));
+    } catch { if (current()) setAi(state => ({ ...state, note: 'Could not reach the AI review. Your parts are unchanged.' })); }
+    finally { if (current()) setAi(state => ({ ...state, running: false })); }
   }
   /** Accepting saves the suggestion exactly like a person's own choice: the product as a confirmed match, the type as a shared choice. */
   async function acceptAi(line: BomLine) {
@@ -267,8 +301,8 @@ export function useControlKit(context: URLSearchParams) {
     const record = aiCandidateRecord(line, suggestion.candidateId);
     const sameMatch = record && line.vendor && record.vendorId === line.vendor.vendorId && record.normalizedSku === line.vendor.normalizedSku;
     // Each save must succeed before the next; on a failure the suggestion stays so it can be accepted again.
-    if (record && line.matchStatus !== 'exact' && !(sameMatch && line.matchStatus === 'confirmed') && !await decide(line, 'confirmed', record)) return;
-    if (suggestion.disposition !== 'review' && !await setDisposition(line, suggestion.disposition)) return;
+    if (record && line.matchStatus !== 'exact' && !(sameMatch && line.matchStatus === 'confirmed') && !await decide(line, 'confirmed', record, { keepAi: true })) return;
+    if (suggestion.disposition !== 'review' && !await setDisposition(line, suggestion.disposition, { keepAi: true })) return;
     dismissAi(line);
   }
   function dismissAi(line: BomLine) {
@@ -276,13 +310,32 @@ export function useControlKit(context: URLSearchParams) {
   }
 
   /** Applies one choice at once and saves it; on failure the line returns to its previous choice. */
-  async function saveChoice(line: BomLine, choice: ClassificationOverride | null) {
+  /** A person's own decision on a line ends its AI suggestion; accepting the suggestion keeps it until both saves succeed. */
+  // A choice applies to every row of the same part (two revisions of one part are two rows), so all of them lose it.
+  function withoutAi(current: ScanResult, line: BomLine, keep = false): ScanResult {
+    const identity = classificationIdentity(line);
+    return keep ? current : { ...current, lines: current.lines.map(item => classificationIdentity(item) === identity && item.aiSuggestion ? { ...item, aiSuggestion: null } : item) };
+  }
+  /** The AI suggestions of every row of this part, to put back if a save fails. */
+  type AiSnapshot = { suggestion: BomLine['aiSuggestion']; manual: BomLine['manualClassification']; match: BomLine['matchStatus'] };
+  const aiSuggestionsOf = (current: ScanResult | null, line: BomLine) => new Map<string, AiSnapshot>((current?.lines ?? []).filter(item => classificationIdentity(item) === classificationIdentity(line))
+    .map(item => [item.bomLineKey, { suggestion: item.aiSuggestion ?? null, manual: item.manualClassification, match: item.matchStatus }]));
+  /**
+   * Puts suggestions back after a failed save, but only on rows still as they were when the save began: a row that
+   * got a newer decision meanwhile keeps it, and no old suggestion can come back to overwrite that.
+   */
+  const restoreAi = (current: ScanResult, saved: Map<string, AiSnapshot>) => ({ ...current, lines: current.lines.map(item => {
+    const before = saved.get(item.bomLineKey);
+    return before && !item.aiSuggestion && item.manualClassification === before.manual && item.matchStatus === before.match ? { ...item, aiSuggestion: before.suggestion } : item;
+  }) });
+  async function saveChoice(line: BomLine, choice: ClassificationOverride | null, keepAi = false) {
     if (!result) return false;
     const scanId = result.scanId;
     const generation = scanGeneration.current;
     const identity = classificationIdentity(line);
     const previous = line.manualClassification ?? null;
-    setResult(current => current && applyClassificationChoice(current, identity, choice, settings));
+    const suggestions = aiSuggestionsOf(result, line);
+    setResult(current => current && applyClassificationChoice(withoutAi(current, line, keepAi), identity, choice, settings));
     try {
       const response = await postJson('/api/classification/override', { documentId: result.documentId, scanId, identity, classification: choice });
       if (!response.ok) throw Error();
@@ -291,18 +344,21 @@ export function useControlKit(context: URLSearchParams) {
       if (scanGeneration.current === generation) setResult(current => {
         if (!current || current.scanId !== scanId) return current;
         const active = current.lines.find(item => item.bomLineKey === line.bomLineKey);
-        return active && active.manualClassification === choice ? applyClassificationChoice(current, identity, previous, settings) : current;
+        if (!active || active.manualClassification !== choice) return current;
+        // The choice did not save, so the AI suggestion it replaced comes back too.
+        // The choice is reverted first, so the check in restoreAi compares rows with their state from before the save.
+        return restoreAi(applyClassificationChoice(current, identity, previous, settings), suggestions);
       });
       return false;
     }
   }
 
   /** Set how a part is obtained (or `null` for automatic). Shared with everyone who scans the document. */
-  async function setDisposition(line: BomLine, choice: ClassificationOverride | null): Promise<boolean> {
+  async function setDisposition(line: BomLine, choice: ClassificationOverride | null, options: { keepAi?: boolean } = {}): Promise<boolean> {
     if (!result || pending || saving.has(line.bomLineKey)) return false;
     markSaving(line.bomLineKey, true);
     try {
-      const saved = await saveChoice(line, choice);
+      const saved = await saveChoice(line, choice, options.keepAi);
       if (!saved) setError(`Could not save the choice for ${line.name}. Try again.`);
       return saved;
     } finally { markSaving(line.bomLineKey, false); }
@@ -351,6 +407,7 @@ export function useControlKit(context: URLSearchParams) {
     } catch { setError('Could not sign out. Try again.'); return; }
     // Stop work that belongs to this session and drop any results it would still deliver.
     scanGeneration.current++;
+    sessionEpoch.current++;
     abort.current?.abort(); abort.current = null; setProgress(null);
     stepRun.current = null;
     // Every saved scan of this person's goes, not just this assembly's.
@@ -362,6 +419,7 @@ export function useControlKit(context: URLSearchParams) {
       }
     } catch { /* Storage unavailable. */ }
     setStep(null); setResult(null); setError('');
+    setAi(current => ({ ...current, running: false, note: '' })); setExcel('idle'); setBulk(null); setSettings({ teamNumber: null });
     setSession({ connected: false });
   }
 
@@ -396,7 +454,13 @@ export function useControlKit(context: URLSearchParams) {
     setStep({ running: true, ready: 0, failed: 0, total: 0, failures: [], zipMade: null });
     try {
       type Job = { jobId: string; done: boolean; rateLimited?: boolean; error?: string; assemblyName: string; documentName?: string; revision?: { type: string; id: string } | null; scannedAt: string; parts: ExportPart[] };
-      const read = async (response: Response) => { const body = await response.json() as Job; if (!response.ok) throw Error(body.error ?? 'STEP export failed. Try again.'); return body; };
+      const read = async (response: Response) => {
+        // Only this export's own session may be ended: a reply from an export the person already left is ignored.
+        if (response.status === 401) { if (active()) setSession({ connected: false }); throw Error('Your Onshape connection expired. Reconnect and export again.'); }
+        const body = await response.json().catch(() => ({})) as Job;
+        if (!response.ok || !body.jobId) throw Error(body.error ?? 'STEP export failed. Try again.');
+        return body;
+      };
       let job = await read(await postJson('/api/exports', { documentId: result.documentId, scanId: result.scanId }));
       if (!active()) return;
       // The Worker fails each translation after 5 minutes, so a large export always ends. The app only gives up
