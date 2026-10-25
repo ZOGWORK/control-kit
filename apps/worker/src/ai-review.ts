@@ -101,17 +101,40 @@ export function validAiRequest(value: unknown): value is AiReviewRequest {
       && line.candidates.every(candidate => candidate && typeof candidate.id === 'string' && typeof candidate.sku === 'string'));
 }
 
+/** A saved answer for exactly this request, or null. Costs no AI call and no allowance. */
+export async function cachedAiReview(env: AiEnv, request: AiReviewRequest): Promise<AiOutcome | null> {
+  const cached = await env.APP_STATE.get(`ai-review:${await aiReviewHash(request)}`);
+  if (!cached) return null;
+  try {
+    const saved = JSON.parse(cached) as { items: unknown; provider: AiProvider };
+    await logAiCall(env, { provider: saved.provider, lines: 0, ok: true, cached: true, inputTokens: null, outputTokens: null });
+    return { ok: true, items: parseAiReview({ items: saved.items }, request), provider: saved.provider, cached: true, usage: { inputTokens: null, outputTokens: null } };
+  } catch { return null; }
+}
+
+/**
+ * Reserves one of a person's daily reviews before any provider is asked. Workers KV has no atomic counter, so a
+ * short-lived lock refuses a second review while one is running, and the count is written before the call. Two
+ * requests landing within KV's propagation window could still both pass; the providers' own quotas are the hard cap.
+ */
+export async function reserveAiReview(env: AiEnv, userId: string, limit = 20): Promise<string | null> {
+  const day = new Date().toISOString().slice(0, 10);
+  const lock = `ai-busy:${userId}`;
+  if (await env.APP_STATE.get(lock)) return 'An AI review is already running for you. Try again when it finishes.';
+  const countKey = `ai-user:${userId}:${day}`;
+  const used = Number(await env.APP_STATE.get(countKey) ?? 0);
+  if (used >= limit) return `AI review limit reached for today (${limit} reviews). It resets at midnight UTC.`;
+  await env.APP_STATE.put(lock, '1', { expirationTtl: 120 });
+  await env.APP_STATE.put(countKey, String(used + 1), { expirationTtl: 2 * 24 * 3600 });
+  return null;
+}
+export const releaseAiReview = (env: AiEnv, userId: string) => env.APP_STATE.delete(`ai-busy:${userId}`);
+
 export async function reviewWithAi(env: AiEnv, request: AiReviewRequest, fetcher: typeof fetch = fetch): Promise<AiOutcome> {
   if (!aiReviewEnabled(env)) return { ok: false, status: 501, error: 'AI review is not set up on this server. Everything else works as before.' };
+  const saved = await cachedAiReview(env, request);
+  if (saved) return saved;
   const cacheKey = `ai-review:${await aiReviewHash(request)}`;
-  const cached = await env.APP_STATE.get(cacheKey);
-  if (cached) {
-    try {
-      const saved = JSON.parse(cached) as { items: unknown; provider: AiProvider };
-      await logAiCall(env, { provider: saved.provider, lines: 0, ok: true, cached: true, inputTokens: null, outputTokens: null });
-      return { ok: true, items: parseAiReview({ items: saved.items }, request), provider: saved.provider, cached: true, usage: { inputTokens: null, outputTokens: null } };
-    } catch { /* A damaged cache entry is asked again. */ }
-  }
   const order: AiProvider[] = env.GEMINI_API_KEY ? ['gemini', ...(env.ANTHROPIC_API_KEY ? ['anthropic' as const] : [])] : ['anthropic'];
   let failure: ProviderError | null = null;
   for (const provider of order) {

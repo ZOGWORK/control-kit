@@ -100,7 +100,9 @@ describe('Control Point attach bundle', () => {
     expect(bundle.files[1].sha256).toMatch(/^[0-9a-f]{64}$/);
     const without = await buildControlPointPayload(scan(), { context, filesNotIncluded: [{ name: 'Robot STEP.zip', reason: 'No STEP export has run for this scan.' }] });
     expect(without.idempotencyKey).toBe(bundle.idempotencyKey);
-    expect(without.filesNotIncluded).toHaveLength(1);
+    expect(without.filesNotIncluded.map(item => item.name)).toEqual(['Robot STEP.zip', 'BOM workbook (.xlsx)']);
+    expect((await buildControlPointPayload(scan())).filesNotIncluded).toHaveLength(2);
+    expect(bundle.filesNotIncluded).toEqual([]);
     const otherRevision = scan();
     otherRevision.diagnostics = { onshapeRequests: null, metadataIssues: [], revision: { type: 'm', id: 'micro2' } };
     expect((await buildControlPointPayload(otherRevision, { context })).idempotencyKey).not.toBe(bundle.idempotencyKey);

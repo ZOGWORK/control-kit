@@ -214,8 +214,8 @@ export function useControlKit(context: URLSearchParams) {
 
   /** Confirm or reject a possible vendor match; the line updates at once and rolls back if saving fails. */
   /** Confirms or rejects the line's match; `pick` confirms one of its choices instead. */
-  async function decide(line: BomLine, decision: 'confirmed' | 'rejected', pick?: VendorRecord) {
-    if (!result || !(pick ?? line.vendor) || pending || saving.has(line.bomLineKey)) return;
+  async function decide(line: BomLine, decision: 'confirmed' | 'rejected', pick?: VendorRecord): Promise<boolean> {
+    if (!result || !(pick ?? line.vendor) || pending || saving.has(line.bomLineKey)) return false;
     markSaving(line.bomLineKey, true);
     const generation = scanGeneration.current;
     const vendor = (pick ?? line.vendor)!;
@@ -224,6 +224,7 @@ export function useControlKit(context: URLSearchParams) {
     try {
       const response = await postJson('/api/matches/decision', { documentId: result.documentId, lineKey: line.bomLineKey, decision, vendorId: vendor.vendorId, normalizedSku: vendor.normalizedSku });
       if (!response.ok) throw new Error();
+      return true;
     } catch {
       // Only this line goes back; choices made on other lines meanwhile stay.
       if (scanGeneration.current === generation) setResult(current => {
@@ -233,6 +234,7 @@ export function useControlKit(context: URLSearchParams) {
         return classifyScan(restored, settings, overridesOf(restored));
       });
       setError('Could not save the match choice. Try again.');
+      return false;
     } finally { markSaving(line.bomLineKey, false); }
   }
 
@@ -264,8 +266,9 @@ export function useControlKit(context: URLSearchParams) {
     if (!suggestion) return;
     const record = aiCandidateRecord(line, suggestion.candidateId);
     const sameMatch = record && line.vendor && record.vendorId === line.vendor.vendorId && record.normalizedSku === line.vendor.normalizedSku;
-    if (record && line.matchStatus !== 'exact' && !(sameMatch && line.matchStatus === 'confirmed')) await decide(line, 'confirmed', record);
-    if (suggestion.disposition !== 'review') await setDisposition(line, suggestion.disposition);
+    // Each save must succeed before the next; on a failure the suggestion stays so it can be accepted again.
+    if (record && line.matchStatus !== 'exact' && !(sameMatch && line.matchStatus === 'confirmed') && !await decide(line, 'confirmed', record)) return;
+    if (suggestion.disposition !== 'review' && !await setDisposition(line, suggestion.disposition)) return;
     dismissAi(line);
   }
   function dismissAi(line: BomLine) {
@@ -295,11 +298,14 @@ export function useControlKit(context: URLSearchParams) {
   }
 
   /** Set how a part is obtained (or `null` for automatic). Shared with everyone who scans the document. */
-  async function setDisposition(line: BomLine, choice: ClassificationOverride | null) {
-    if (!result || pending || saving.has(line.bomLineKey)) return;
+  async function setDisposition(line: BomLine, choice: ClassificationOverride | null): Promise<boolean> {
+    if (!result || pending || saving.has(line.bomLineKey)) return false;
     markSaving(line.bomLineKey, true);
-    try { if (!await saveChoice(line, choice)) setError(`Could not save the choice for ${line.name}. Try again.`); }
-    finally { markSaving(line.bomLineKey, false); }
+    try {
+      const saved = await saveChoice(line, choice);
+      if (!saved) setError(`Could not save the choice for ${line.name}. Try again.`);
+      return saved;
+    } finally { markSaving(line.bomLineKey, false); }
   }
 
   /**

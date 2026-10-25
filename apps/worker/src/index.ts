@@ -3,7 +3,7 @@ import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from '
 import { applyMatchDecision, catalogReadKey, decisionRecord, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings, type VendorId } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
-import { aiReviewEnabled, reviewWithAi, validAiRequest } from './ai-review';
+import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, reviewWithAi, validAiRequest } from './ai-review';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 import { linePreview, previewCacheKey, PreviewUnavailableError } from './preview';
@@ -239,12 +239,14 @@ async function route(request: Request, env: Env): Promise<Response> {
     // Only someone who scanned this document (and so can read it in Onshape) may send its parts for review.
     const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${body.scanId}`);
     if (!raw || (JSON.parse(raw) as ScanResult).documentId !== body.documentId) return reply({ error: 'Scan this assembly again.' }, 409);
-    // A daily cap per person keeps a free key free; cached answers do not count.
-    const capKey = `ai-user:${current.data.user.id}:${new Date().toISOString().slice(0, 10)}`;
-    const used = Number(await env.APP_STATE.get(capKey) ?? 0);
-    if (used >= 20) return reply({ error: 'AI review limit reached for today (20 reviews). It resets at midnight UTC.' }, 429);
-    const outcome = await reviewWithAi(env, body.request);
-    if (outcome.ok && !outcome.cached) await env.APP_STATE.put(capKey, String(used + 1), { expirationTtl: 2 * 24 * 3600 });
+    // A saved answer is free; anything else takes one of the person's daily reviews, reserved before the call.
+    let outcome = await cachedAiReview(env, body.request);
+    if (!outcome) {
+      const refused = await reserveAiReview(env, current.data.user.id);
+      if (refused) return reply({ error: refused }, 429);
+      try { outcome = await reviewWithAi(env, body.request); }
+      finally { await releaseAiReview(env, current.data.user.id); }
+    }
     return outcome.ok ? reply({ items: outcome.items, provider: outcome.provider, cached: outcome.cached, usage: outcome.usage }) : reply({ error: outcome.error }, outcome.status);
   }
   if (url.pathname === '/api/classification/override' && request.method === 'POST') {

@@ -86,3 +86,16 @@ describe('AI review providers (mocked)', () => {
     expect(perAnswer).toBeLessThan(5);
   });
 });
+
+describe('AI review allowance', () => {
+  it('reserves a review before the call, refuses a second while one runs, and stops at the daily limit', async () => {
+    const { reserveAiReview, releaseAiReview } = await import('./ai-review');
+    const settings = env({ GEMINI_API_KEY: 'g' });
+    expect(await reserveAiReview(settings, 'u1', 2)).toBeNull();
+    expect(await reserveAiReview(settings, 'u1', 2)).toMatch(/already running/);
+    await releaseAiReview(settings, 'u1');
+    expect(await reserveAiReview(settings, 'u1', 2)).toBeNull();
+    await releaseAiReview(settings, 'u1');
+    expect(await reserveAiReview(settings, 'u1', 2)).toMatch(/limit reached/);
+  });
+});

@@ -23,7 +23,9 @@ export type ControlPointLine = {
   disposition: Disposition; dispositionSource: BomLine['dispositionSource']; manualOverride: Disposition | null;
   /** Legacy three-way type, kept for readers of the first payload version. */
   type: 'commercial' | 'printed' | 'unknown';
-  matchStatus: BomLine['matchStatus']; matchConfidence: number; orderedWith: string | null; partNumber: string | null; configuration: string | null;
+  matchStatus: BomLine['matchStatus']; matchConfidence: number; matchReasons: string[]; dispositionEvidence: string[]; reviewReason: string | null;
+  /** On the line that carries a combined order: the pieces across every line ordering this SKU, and how many lines. */
+  order: { qty: number; lines: number } | null; orderedWith: string | null; partNumber: string | null; configuration: string | null;
   documentId: string; elementId: string; partId: string | null; partStudioUrl: string; usedIn: string[]; suppressed: boolean; metadataIssue: string | null;
 };
 export type ControlPointFile = { name: string; mediaType: string; sizeBytes: number; sha256: string } & (
@@ -72,7 +74,8 @@ function toLine(line: BomLine): ControlPointLine {
     key: line.bomLineKey, name: line.name, qty: line.qty, unitsPerPack: vendor?.packSizeVerified ? vendor.packSize : null, packsToOrder: line.packsToOrder,
     packPriceUsd: vendor?.priceUsd ?? null, lineTotalUsd: line.lineTotalUsd, vendor: vendor?.vendorId ?? null, sku: vendor?.sku ?? null, vendorUrl: vendor?.url ?? null,
     stock: vendor?.stock ?? 'unknown', disposition: line.disposition, dispositionSource: line.dispositionSource, manualOverride: line.manualClassification,
-    type: line.classification, matchStatus: line.matchStatus, matchConfidence: line.matchConfidence, orderedWith: line.orderedWith ?? null,
+    type: line.classification, matchStatus: line.matchStatus, matchConfidence: line.matchConfidence, matchReasons: line.matchReasons, dispositionEvidence: line.dispositionEvidence,
+    reviewReason: line.reviewReason, order: line.order ?? null, orderedWith: line.orderedWith ?? null,
     partNumber: line.partNumber, configuration: line.configuration, documentId: line.documentId, elementId: line.elementId, partId: line.partId,
     partStudioUrl: line.partStudioUrl, usedIn: line.instancePaths, suppressed: line.suppressed, metadataIssue: line.missingMetadataReason,
   };
@@ -100,6 +103,15 @@ function cadPart(line: BomLine, extra: ControlPointLine): ControlPointCadPart & 
   // unit_cost is what one CAD unit costs only when packs are known; a pack price is never passed off as a unit price.
   const unit = extra.lineTotalUsd !== null && extra.qty > 0 ? Math.round(extra.lineTotalUsd / extra.qty * 10000) / 10000 : 0;
   return { name: line.name, section: sectionOf(line), quantity: line.qty, source: sourceOf(line), unit_cost: unit, status: 'to_order', notes, extra };
+}
+
+/** The workbook and the STEP zip are always expected: one the caller did not supply or explain is listed as missing. */
+function expectedFiles(files: Array<{ name: string }>, explained: Array<{ name: string; reason: string }>) {
+  const missing = [...explained];
+  for (const [label, pattern] of [['BOM workbook (.xlsx)', /\.xlsx$/i], ['STEP files (.zip)', /\.zip$/i]] as const) {
+    if (!files.some(item => pattern.test(item.name)) && !explained.some(item => pattern.test(item.name) || item.name === label)) missing.push({ name: label, reason: 'Not supplied when this bundle was built.' });
+  }
+  return missing;
 }
 
 async function file(name: string, mediaType: string, bytes: Uint8Array): Promise<ControlPointFile> {
@@ -135,7 +147,7 @@ export async function buildControlPointPayload(result: ScanResult, options: { co
     cadParts: sorted.map((line, index) => cadPart(line, lines[index])),
     controlPointCadUrl: CONTROL_POINT_CAD_URL,
     files: await Promise.all((options.files ?? []).map(item => file(item.name, item.mediaType, item.bytes))),
-    filesNotIncluded: options.filesNotIncluded ?? [],
+    filesNotIncluded: expectedFiles(options.files ?? [], options.filesNotIncluded ?? []),
   };
 }
 

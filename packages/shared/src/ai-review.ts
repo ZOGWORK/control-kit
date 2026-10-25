@@ -43,7 +43,7 @@ export const aiCandidateRecord = (line: BomLine, id: string | null) => id ? line
  * or confirmed match with a known pack, or a decided disposition), are never sent.
  */
 export function needsAiReview(line: BomLine): boolean {
-  if (line.suppressed || line.manualClassification || line.disposition === 'ignore') return false;
+  if (line.suppressed || line.manualClassification || line.disposition === 'ignore' || line.matchStatus === 'rejected') return false;
   if (line.matchStatus === 'possible') return true;
   if (line.matchStatus === 'unmatched' && (line.nearMatches?.length ?? 0) > 0) return true;
   if (line.disposition === 'review' || line.dispositionConfidence === 'low') return true;
