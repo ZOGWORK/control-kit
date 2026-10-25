@@ -94,6 +94,8 @@ export function useControlKit(context: URLSearchParams) {
   /** Applies the document's current shared choices and the person's match decisions to a reopened scan. */
   async function refreshChoices(reopened: ScanResult) {
     if (!reopened.scanId) return;
+    // Choices wait for the refresh, so nothing saved meanwhile can be overwritten by the older answer.
+    setPending('refresh');
     try {
       const response = await postJson('/api/choices', { documentId: reopened.documentId, scanId: reopened.scanId });
       if (!response.ok) throw Error();
@@ -115,12 +117,17 @@ export function useControlKit(context: URLSearchParams) {
         return classifyScan(updated, settings, overridesOf(updated));
       });
     } catch { setError('Could not load the latest shared choices for this scan. Rescan to be sure it is current.'); }
+    finally { setPending(null); }
   }
   useEffect(() => {
     if (!savedFor || !result || result.vendorMatching === 'pending') return;
     try { localStorage.setItem(savedKey, JSON.stringify({ userId: savedFor, result })); }
     catch { /* Storage full or blocked: the scan still works, it just will not reopen. */ }
   }, [result, savedFor]);
+  // Team settings can arrive after a reopened scan; its suggestions (team number in names) follow them.
+  useEffect(() => {
+    setResult(current => current && current.vendorMatching !== 'pending' ? classifyScan({ ...current, lines: current.lines.map(line => ({ ...line })), stats: { ...current.stats } }, settings, overridesOf(current)) : current);
+  }, [settings]);
   useEffect(() => {
     if (!session?.connected) return;
     api('/api/settings').then(async response => { if (!response.ok) throw Error(); return await response.json() as UserSettings; })
