@@ -144,20 +144,23 @@ export type ParsedPage = { records: VendorRecord[]; skip: SkipReason | null };
  * so a product without that wording is sold as one unit. Checked across each full catalog on 2026-10-24: goBILDA (1,993
  * records) and REV (278) had no fastener or hardware product without pack wording that was not a single unit. ServoCity
  * names packs in a "Pack Info" product field instead of the name ("6-32 Socket Head Machine Screw": 25 Pack); with that field
- * read, all 208 of its screw, nut, and washer products in the 4,319-record crawl carried pack evidence.
+ * read from the page's own product, all 186 of its screw, nut, and washer products in the 4,319-record crawl of
+ * 2026-10-25 carried their own pack evidence.
  */
 const labelsEveryPack: VendorId[] = ['gobilda', 'servocity', 'rev'];
 /**
  * Pack evidence beyond the product's own wording, strongest first: a "Pack Info" product field (ServoCity), a "-PKn" SKU
  * suffix (REV), then the single-unit convention above. Records that already carry wording-based evidence are unchanged.
  */
-export function applyPackEvidence(record: VendorRecord, packInfo: string | null = null): VendorRecord {
+export function applyPackEvidence(record: VendorRecord, packInfo: string | null = null, page: { fieldsRead: boolean } = { fieldsRead: false }): VendorRecord {
   if (record.packSizeVerified) return record;
   const field = packInfo ? packFromText(packInfo) : null;
   if (field) return { ...record, packSize: field.size, packSizeVerified: true, packEvidence: `product field "Pack Info: ${packInfo}"` };
   const suffix = record.sku.match(/-PK(\d{1,4})$/i);
   if (suffix && Number(suffix[1]) > 0) return { ...record, packSize: Number(suffix[1]), packSizeVerified: true, packEvidence: `SKU suffix "${suffix[0].slice(1)}"` };
-  if (labelsEveryPack.includes(record.vendorId)) return { ...record, packSize: 1, packSizeVerified: true, packEvidence: 'sold individually: no pack wording, and this vendor names every multi-unit product' };
+  // ServoCity states packs only in its Pack Info field, so "no statement" means one unit only when that field was read
+  // from the page. A record staged from an older dump never had it read and stays unverified.
+  if (labelsEveryPack.includes(record.vendorId) && (record.vendorId !== 'servocity' || page.fieldsRead)) return { ...record, packSize: 1, packSizeVerified: true, packEvidence: 'sold individually: no pack wording, and this vendor names every multi-unit product' };
   return record;
 }
 /**
@@ -258,7 +261,7 @@ export function parseProductPage(vendor: VendorId, pageUrl: string, html: string
   if (!drafts.length) return { records: [], skip: nodes.length || title ? 'no-sku' : 'no-product-data' };
   // A page-level "Pack Info" field describes the page's product, so it only applies when the page has one record.
   const packInfo = drafts.length === 1 ? packInfoField(html) : null;
-  const records = drafts.map(draft => applyPackEvidence({ ...draft, vendorId: vendor, normalizedSku: normalizeSku(draft.sku, vendor), normalizedName: normalizeName(draft.name), category: draft.category ?? category, updatedAt, source: 'sitemap' as const }, packInfo))
+  const records = drafts.map(draft => applyPackEvidence({ ...draft, vendorId: vendor, normalizedSku: normalizeSku(draft.sku, vendor), normalizedName: normalizeName(draft.name), category: draft.category ?? category, updatedAt, source: 'sitemap' as const }, packInfo, { fieldsRead: true }))
     .filter(record => /^[A-Z0-9]+$/.test(record.normalizedSku));
   return records.length ? { records: [...new Map(records.map(record => [record.normalizedSku, record])).values()], skip: null } : { records: [], skip: 'no-sku' };
 }
