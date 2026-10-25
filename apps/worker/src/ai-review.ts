@@ -8,7 +8,13 @@ import type { Kv } from './index';
  * With no key the review is off and everything else is unchanged.
  */
 export type AiEnv = { APP_STATE: Kv; GEMINI_API_KEY?: string; ANTHROPIC_API_KEY?: string; GEMINI_MODEL?: string; ANTHROPIC_MODEL?: string };
-export const aiReviewEnabled = (env: AiEnv) => Boolean(env.GEMINI_API_KEY || env.ANTHROPIC_API_KEY);
+export const aiReviewEnabled = (env: AiEnv) => Boolean(env.GEMINI_API_KEY?.trim() || env.ANTHROPIC_API_KEY?.trim());
+const geminiModel = (env: AiEnv) => env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+const anthropicModel = (env: AiEnv) => env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
+/** Answers are cached per request and per configured models, so changing a model never serves another model's answer. */
+const cacheKeyFor = async (env: AiEnv, request: AiReviewRequest) => `ai-review:${await aiReviewHash(request)}:${geminiModel(env)}:${anthropicModel(env)}`;
+/** Reviews across all people per day: a hard ceiling on what one server key can spend. */
+export const AI_GLOBAL_DAILY_LIMIT = 300;
 const TIMEOUT_MS = 90_000;
 const CACHE_SECONDS = 30 * 24 * 3600;
 export type AiOutcome =
@@ -31,7 +37,7 @@ const geminiSchema = {
 
 async function askGemini(env: AiEnv, request: AiReviewRequest, fetcher: typeof fetch) {
   // The same default as Control Point's Bruno (ai.ts), so one key behaves the same in both apps.
-  const model = env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+  const model = geminiModel(env);
   let response: Response;
   try {
     response = await fetcher(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
@@ -57,7 +63,7 @@ async function askAnthropic(env: AiEnv, request: AiReviewRequest, fetcher: typeo
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY!, maxRetries: 0, timeout: TIMEOUT_MS, fetch: fetcher });
   try {
     const message = await client.beta.messages.create({
-      model: env.ANTHROPIC_MODEL || 'claude-sonnet-5-5', max_tokens: 16000,
+      model: anthropicModel(env), max_tokens: 16000,
       betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
       system: aiReviewInstructions,
       messages: [{ role: 'user', content: JSON.stringify(request) }],
@@ -104,11 +110,11 @@ export function validAiRequest(value: unknown): value is AiReviewRequest {
 
 /** A saved answer for exactly this request, or null. Costs no AI call and no allowance. */
 export async function cachedAiReview(env: AiEnv, request: AiReviewRequest): Promise<AiOutcome | null> {
-  const cached = await env.APP_STATE.get(`ai-review:${await aiReviewHash(request)}`);
+  const cached = await env.APP_STATE.get(await cacheKeyFor(env, request));
   if (!cached) return null;
   try {
+    // A cached answer costs nothing and writes nothing, so repeated hits cannot use up KV writes.
     const saved = JSON.parse(cached) as { items: unknown; provider: AiProvider };
-    await logAiCall(env, { provider: saved.provider, lines: 0, ok: true, cached: true, inputTokens: null, outputTokens: null });
     return { ok: true, items: parseAiReview({ items: saved.items }, request), provider: saved.provider, cached: true, usage: { inputTokens: null, outputTokens: null } };
   } catch { return null; }
 }
@@ -123,10 +129,15 @@ export async function reserveAiReview(env: AiEnv, userId: string, limit = 20): P
   const lock = `ai-busy:${userId}`;
   if (await env.APP_STATE.get(lock)) return 'An AI review is already running for you. Try again when it finishes.';
   const countKey = `ai-user:${userId}:${day}`;
+  const globalKey = `ai-global:${day}`;
   const used = Number(await env.APP_STATE.get(countKey) ?? 0);
   if (used >= limit) return `AI review limit reached for today (${limit} reviews). It resets at midnight UTC.`;
-  await env.APP_STATE.put(lock, '1', { expirationTtl: 120 });
+  const everyone = Number(await env.APP_STATE.get(globalKey) ?? 0);
+  if (everyone >= AI_GLOBAL_DAILY_LIMIT) return 'AI review has reached its limit for today. It resets at midnight UTC.';
+  // Longer than the slowest review (Gemini, then Anthropic, 90 seconds each).
+  await env.APP_STATE.put(lock, '1', { expirationTtl: 200 });
   await env.APP_STATE.put(countKey, String(used + 1), { expirationTtl: 2 * 24 * 3600 });
+  await env.APP_STATE.put(globalKey, String(everyone + 1), { expirationTtl: 2 * 24 * 3600 });
   return null;
 }
 export const releaseAiReview = (env: AiEnv, userId: string) => env.APP_STATE.delete(`ai-busy:${userId}`);
@@ -135,7 +146,7 @@ export async function reviewWithAi(env: AiEnv, request: AiReviewRequest, fetcher
   if (!aiReviewEnabled(env)) return { ok: false, status: 501, error: 'AI review is not set up on this server. Everything else works as before.' };
   const saved = await cachedAiReview(env, request);
   if (saved) return saved;
-  const cacheKey = `ai-review:${await aiReviewHash(request)}`;
+  const cacheKey = await cacheKeyFor(env, request);
   const order: AiProvider[] = env.GEMINI_API_KEY ? ['gemini', ...(env.ANTHROPIC_API_KEY ? ['anthropic' as const] : [])] : ['anthropic'];
   let failure: ProviderError | null = null;
   for (const provider of order) {

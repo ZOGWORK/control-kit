@@ -74,7 +74,7 @@ export function useControlKit(context: URLSearchParams) {
   const inOnshape = window.parent !== window;
   const onshapeMessage = (messageName: string, extra: Record<string, string> = {}) => {
     if (!inOnshape || context.get('workspaceOrVersion') !== 'w') return false;
-    window.parent.postMessage({ documentId: context.get('documentId'), workspaceId: context.get('workspaceOrVersionId'), elementId: context.get('elementId'), messageName, ...extra }, '*');
+    window.parent.postMessage({ documentId: context.get('documentId'), workspaceId: context.get('workspaceOrVersionId'), elementId: context.get('elementId'), messageName, ...extra }, 'https://cad.onshape.com');
     return true;
   };
   useEffect(() => { onshapeMessage('applicationInit'); }, []);

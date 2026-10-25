@@ -53,7 +53,8 @@ describe('AI review providers (mocked)', () => {
     expect(again).toMatchObject({ ok: true, cached: true });
     expect(calls).toEqual(['generativelanguage.googleapis.com']);
     const ledger = JSON.parse([...(settings.APP_STATE as MemoryKv).values.entries()].find(([key]) => key.startsWith('ai-ledger:'))![1]);
-    expect(ledger).toMatchObject({ calls: 1, cached: 1, lines: 2, inputTokens: 900, outputTokens: 200, byProvider: { gemini: 1 } });
+    // A cached answer writes nothing, not even to the ledger.
+    expect(ledger).toMatchObject({ calls: 1, cached: 0, lines: 2, inputTokens: 900, outputTokens: 200, byProvider: { gemini: 1 } });
   });
   it('falls back to Anthropic once on a Gemini rate limit, and never on a Gemini key error', async () => {
     const limited = mockFetch(() => json({ error: { code: 429 } }, 429), () => claude(answer));

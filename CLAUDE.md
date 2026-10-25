@@ -186,6 +186,15 @@ PR 12 (owner's script Parts 1–3: AI review layer, Control Point attach bundle)
 - **Open gaps (Part 3).** "24mm × 6mm Round Standoff" and "Control Hub REV-31-1152" are AI-review fixtures; the AI can only point at REV-31-1595, never the discontinued SKU. REV's option-picker families (112 of 390 pages) need REV's storefront API, which is not used without permission: a feed question for REV. The four "[LS]" screws remain under Fasteners, unchanged.
 - **Constraints.** The Cloudflare Workers free plan applies (10 ms CPU measured in PR 7f). The Worker bundle with the SDK is 198 KiB gzipped. GitHub Actions runs again since the repository went public. No Onshape request was made for this PR.
 
+Audit 1 (security, from the full audit of 2026-10-25):
+- **OAuth state.** `/oauth/start` no longer writes `oauth-state:*` to KV (anyone could spend the 1,000 daily free-plan writes by opening it). The state rides in a signed, HttpOnly `controlkit_oauth` cookie (HMAC-SHA-256, key derived from `SESSION_ENCRYPTION_KEY`, `Path=/oauth`, 10 minutes), so a redirect also completes only in the browser that started sign-in (no login CSRF). A one-use `oauth-used:{state}` key is written only after Onshape sends the person back.
+- **Session.** Only `{id, name}` from `sessioninfo` is kept. `/api/session` re-saves a session at most once a day (`savedAt`). `/api/logout` checks Origin.
+- **AI route.** Request text must come from the caller's own scan (assembly name and every line name). Body cap 150 KB. Cached answers write nothing. The cache key includes both configured models. The lock lasts 200 s. A global cap of 300 reviews a day (`ai-global:{date}`) sits beside the per-person 20. An empty key counts as no key.
+- **Shared part types.** An override must name a part that is in the writer's scan.
+- **Export polls** write the job only when it changed (a 5-minute export polled every 2 s used to cost about 150 writes).
+- **Framing.** `apps/web/public/_headers` sets `frame-ancestors 'self' https://cad.onshape.com https://*.onshape.com`. `postMessage` targets `https://cad.onshape.com`. `.gitignore` covers `.env.*`.
+- **Not changed, owner decision:** anyone who can read a public document can scan it and change its shared part types (history keeps who). Limiting writes to editors needs an Onshape permission read per write.
+
 ## Tuning, tests, and release
 
 Match normalization, thresholds, and alternative ranking are in `packages/shared/src/matching.ts`; exact SKU still forces Commercial absent manual override. Print scoring thresholds and mechanism folders are in `packages/shared/src/classifier.ts`. Vendor stale hours and cron schedule are in `wrangler.toml`; catalog crawl batch limits are in `apps/worker/src/vendor-ingest.ts`. Scan request flow, source cache, and backoff are in `apps/worker/src/scan.ts`; BOM column mapping is in `packages/shared/src/bom.ts`; STEP export job bounds (per-call request budget, 5-minute translation timeout, 20 MB file cap) are in `apps/worker/src/step-export.ts`. Change these with fixture tests and record any changed data shape here.
