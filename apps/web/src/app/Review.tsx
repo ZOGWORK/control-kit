@@ -32,6 +32,9 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
   const items = queue.filter(item => filter === 'all' || item.kind === filter);
   const suggested = queue.filter(item => item.kind === 'suggested');
   const visible = items.slice(0, shown);
+  // Once its last AI answer is accepted or dismissed, the AI group's button goes away, so the view returns to all.
+  const aiLeft = count('ai');
+  useEffect(() => { if (filter === 'ai' && !aiLeft) setFilter('all'); }, [filter, aiLeft]);
   // The highlighted row stays at its position: a decided part leaves the list and the next one slides under it.
   const [active, setActive] = useState(0);
   const current = visible[Math.min(active, visible.length - 1)];
