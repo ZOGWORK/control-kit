@@ -30,7 +30,8 @@ const geminiSchema = {
 };
 
 async function askGemini(env: AiEnv, request: AiReviewRequest, fetcher: typeof fetch) {
-  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  // The same default as Control Point's Bruno (ai.ts), so one key behaves the same in both apps.
+  const model = env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
   let response: Response;
   try {
     response = await fetcher(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
@@ -56,7 +57,7 @@ async function askAnthropic(env: AiEnv, request: AiReviewRequest, fetcher: typeo
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY!, maxRetries: 0, timeout: TIMEOUT_MS, fetch: fetcher });
   try {
     const message = await client.beta.messages.create({
-      model: env.ANTHROPIC_MODEL || 'claude-opus-5-5', max_tokens: 16000,
+      model: env.ANTHROPIC_MODEL || 'claude-sonnet-5-5', max_tokens: 16000,
       betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
       system: aiReviewInstructions,
       messages: [{ role: 'user', content: JSON.stringify(request) }],
