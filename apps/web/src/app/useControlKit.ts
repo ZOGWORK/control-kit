@@ -50,6 +50,8 @@ export function useControlKit(context: URLSearchParams) {
   const [ai, setAi] = useState<{ enabled: boolean; running: boolean; note: string }>({ enabled: false, running: false, note: '' });
   const abort = useRef<AbortController | null>(null);
   const scanGeneration = useRef(0);
+  /** Changes only at sign-out, so replies that belong to the previous session can be told apart. */
+  const sessionEpoch = useRef(0);
   /** The STEP export in progress, if any. Sign-out ends it; a rescan leaves it to finish for the scan it started from. */
   const stepRun = useRef<number | null>(null);
   const stepRuns = useRef(0);
@@ -155,8 +157,11 @@ export function useControlKit(context: URLSearchParams) {
   }, [settings]);
   useEffect(() => {
     if (!session?.connected) return;
+    // A reply that arrives after sign-out (or another sign-in) belongs to the old session and is dropped.
+    const epoch = sessionEpoch.current;
     api('/api/settings').then(async response => { if (!response.ok) throw Error(); return await response.json() as UserSettings; })
-      .then(setSettings).catch(() => setError('Could not load team settings.'));
+      .then(value => { if (sessionEpoch.current === epoch) setSettings(value); })
+      .catch(() => { if (sessionEpoch.current === epoch) setError('Could not load team settings.'); });
   }, [session?.connected]);
 
   async function scan() {
@@ -272,16 +277,20 @@ export function useControlKit(context: URLSearchParams) {
     const { request, keys } = buildAiReviewRequest(result);
     if (!request.lines.length) { setAi(current => ({ ...current, note: 'Nothing uncertain to recheck.' })); return; }
     const scanId = result.scanId;
-    setAi(current => ({ ...current, running: true, note: '' }));
+    const epoch = sessionEpoch.current;
+    // After sign-out the reply is dropped, so it cannot bring back the old session's note.
+    const current = () => sessionEpoch.current === epoch;
+    setAi(state => ({ ...state, running: true, note: '' }));
     try {
       const response = await postJson('/api/ai/review', { documentId: result.documentId, scanId, request, keys });
       const body = await response.json().catch(() => ({})) as { items?: AiReviewItem[]; provider?: AiProvider; cached?: boolean; error?: string };
-      if (!response.ok || !body.items || !body.provider) { setAi(current => ({ ...current, note: body.error ?? 'The AI review failed. Your parts are unchanged.' })); return; }
-      setResult(current => current && current.scanId === scanId ? applyAiReview(current, keys, body.items!, body.provider!) : current);
+      if (!current()) return;
+      if (!response.ok || !body.items || !body.provider) { setAi(state => ({ ...state, note: body.error ?? 'The AI review failed. Your parts are unchanged.' })); return; }
+      setResult(state => state && state.scanId === scanId ? applyAiReview(state, keys, body.items!, body.provider!) : state);
       const who = body.provider === 'gemini' ? 'Gemini' : 'Claude';
-      setAi(current => ({ ...current, note: `${who} suggested ${body.items!.length} of ${request.lines.length} uncertain parts${body.cached ? ' (a saved answer, no new AI call)' : ''}${request.leftOut ? `; ${request.leftOut} more were not sent` : ''}. Nothing changes until you accept a suggestion.` }));
-    } catch { setAi(current => ({ ...current, note: 'Could not reach the AI review. Your parts are unchanged.' })); }
-    finally { setAi(current => ({ ...current, running: false })); }
+      setAi(state => ({ ...state, note: `${who} suggested ${body.items!.length} of ${request.lines.length} uncertain parts${body.cached ? ' (a saved answer, no new AI call)' : ''}${request.leftOut ? `; ${request.leftOut} more were not sent` : ''}. Nothing changes until you accept a suggestion.` }));
+    } catch { if (current()) setAi(state => ({ ...state, note: 'Could not reach the AI review. Your parts are unchanged.' })); }
+    finally { if (current()) setAi(state => ({ ...state, running: false })); }
   }
   /** Accepting saves the suggestion exactly like a person's own choice: the product as a confirmed match, the type as a shared choice. */
   async function acceptAi(line: BomLine) {
@@ -381,6 +390,7 @@ export function useControlKit(context: URLSearchParams) {
     } catch { setError('Could not sign out. Try again.'); return; }
     // Stop work that belongs to this session and drop any results it would still deliver.
     scanGeneration.current++;
+    sessionEpoch.current++;
     abort.current?.abort(); abort.current = null; setProgress(null);
     stepRun.current = null;
     // Every saved scan of this person's goes, not just this assembly's.

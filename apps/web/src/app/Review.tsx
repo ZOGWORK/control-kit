@@ -25,7 +25,8 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
   // AI answers on parts that are otherwise settled (a Buy line whose pack size is unknown) get their own group.
   const queued = reviewQueue(kit.result!);
   const queue: Array<{ line: BomLine; kind: QueueKind | 'ai' }> = [...queued, ...kit.result!.lines
-    .filter(line => line.aiSuggestion && needsAiReview(line) && !queued.some(item => item.line.bomLineKey === line.bomLineKey)).map(line => ({ line, kind: 'ai' as const }))];
+    // A suggestion stays until it is accepted (both saves), dismissed, or replaced by the person's own decision.
+    .filter(line => line.aiSuggestion && !queued.some(item => item.line.bomLineKey === line.bomLineKey)).map(line => ({ line, kind: 'ai' as const }))];
   const [filter, setFilter] = useState<Filter>('all');
   const [shown, setShown] = useState(page);
   const count = (kind: QueueKind | 'ai') => queue.filter(item => item.kind === kind).length;
