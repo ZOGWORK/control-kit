@@ -322,6 +322,20 @@ async function retirePrevious(vendor: VendorId, kv: Kv, pointer: CatalogPointer,
   return limit - budget.left;
 }
 /**
+ * Cleanup without a crawl: deletes the vendor's replaced generations whose grace period is over (never the live one),
+ * at most `limit` keys, and saves the pointer. While crawls are paused, `scripts/catalog-load.ts retire` runs this so
+ * replaced catalogs do not pile up. Returns the keys deleted and the generations still waiting.
+ */
+export async function retireReplaced(vendor: VendorId, kv: Kv, limit = 200) {
+  const raw = await kv.get(pointerKey(vendor));
+  if (!raw) return { deleted: 0, waiting: [] as string[] };
+  const pointer = JSON.parse(raw) as CatalogPointer;
+  const before = JSON.stringify(pointer);
+  const deleted = await retirePrevious(vendor, kv, pointer, limit);
+  if (JSON.stringify(pointer) !== before) await kv.put(pointerKey(vendor), JSON.stringify(pointer));
+  return { deleted, waiting: [pointer.previous, ...(pointer.retiring ?? [])].flatMap(entry => entry ? [`${entry.gen} after ${new Date(entry.deleteAfter).toISOString()}`] : []) };
+}
+/**
  * A crawl that finds a different live generation than it started with (an official feed or one-time load was published
  * meanwhile) stops: its batches are queued for deletion instead of saving its position, so it can never come back.
  */

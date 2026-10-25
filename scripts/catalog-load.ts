@@ -4,10 +4,13 @@
 //   npx tsx scripts/catalog-load.ts stage    --vendor gobilda --crawl work/backfill/gobilda.json
 //   npx tsx scripts/catalog-load.ts validate --vendor gobilda --gen <gen> [--expect 1121-0010-0264,1309-0016-4008] [--spot 20]
 //   npx tsx scripts/catalog-load.ts publish  --vendor gobilda --gen <gen> [--expect ...] [--spot 20]
+//   npx tsx scripts/catalog-load.ts retire   --vendor gobilda [--limit 200]
 //
 // `stage` writes a new generation that no reader sees. `publish` re-runs validation and refuses unless it passes; the
 // live generation is kept as `previous` for a day of rollback. A published official feed stops the hourly crawl for
-// that vendor until the feed is older than VENDOR_STALE_HOURS. Uses wrangler's credentials; never prints records.
+// that vendor until the feed is older than VENDOR_STALE_HOURS. `retire` deletes replaced generations whose day of
+// rollback is over, which the crawl normally does, so they do not pile up while crawls are paused. It fetches nothing
+// from vendor sites. Uses wrangler's credentials; never prints records.
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { normalizeSku, type VendorId, type VendorRecord } from '../packages/shared/src/index';
 import { propagationMs, publishStaged, spotCheck, stageCatalog, validateStaged } from '../apps/worker/src/catalog-publish';
 import { normalizeFeedRows, parseCsv, parseJsonFeed, type FeedField } from '../apps/worker/src/feed-import';
-import { applyPackEvidence, batchKey, pointerKey, type CatalogPointer } from '../apps/worker/src/vendor-ingest';
+import { applyPackEvidence, batchKey, pointerKey, retireReplaced, type CatalogPointer } from '../apps/worker/src/vendor-ingest';
 import type { Kv } from '../apps/worker/src/index';
 
 const [mode, ...rest] = process.argv.slice(2);
@@ -107,4 +110,8 @@ if (mode === 'stage') {
     kv.flush();
     console.log(`${vendor}: gen ${pointer.gen} is live (${pointer.records} records, ${pointer.source ?? 'crawl'}); previous ${pointer.previous?.gen ?? 'none'} kept until ${pointer.previous ? new Date(pointer.previous.deleteAfter).toISOString() : '-'}`);
   }
-} else throw new Error('mode: stage | validate | publish');
+} else if (mode === 'retire') {
+  const { deleted, waiting } = await retireReplaced(vendor, kv, Number(flag('limit') ?? 200));
+  kv.flush();
+  console.log(`${vendor}: deleted ${deleted} keys of replaced catalogs; still waiting: ${waiting.join(', ') || 'none'}`);
+} else throw new Error('mode: stage | validate | publish | retire');
