@@ -25,6 +25,7 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
   // AI answers on parts that are otherwise settled (a Buy line whose pack size is unknown) get their own group.
   const queued = reviewQueue(kit.result!);
   const queue: Array<{ line: BomLine; kind: QueueKind | 'ai' }> = [...queued, ...kit.result!.lines
+    // A suggestion stays until it is accepted (both saves), dismissed, or replaced by the person's own decision.
     .filter(line => line.aiSuggestion && !queued.some(item => item.line.bomLineKey === line.bomLineKey)).map(line => ({ line, kind: 'ai' as const }))];
   const [filter, setFilter] = useState<Filter>('all');
   const [shown, setShown] = useState(page);
@@ -42,14 +43,19 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
   useEffect(() => { document.getElementById(`review-${current?.line.bomLineKey}`)?.scrollIntoView({ block: 'nearest' }); }, [current?.line.bomLineKey]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      // Keys act only on the list itself: not while typing, not with a drawer or dialog open, not with modifiers.
-      // Nor on a focused button or link (Enter and Space keep their normal meaning), nor once another control handled the key.
+      // Keys act on the list: not while typing, not with a drawer or dialog open, not with modifiers, and not once
+      // another control handled the key.
       const target = event.target as HTMLElement | null;
-      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || target?.closest('input, textarea, select, button, a, [role="button"], [contenteditable], [role="dialog"]') || document.querySelector('[role="dialog"]')) return;
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || target?.closest('input, textarea, select, [contenteditable], [role="dialog"]') || document.querySelector('[role="dialog"]')) return;
       if (!current) return;
       const { line, kind } = current;
       const ready = !kit.pending && Boolean(kit.result!.scanId) && !kit.saving.has(line.bomLineKey);
       const key = event.key.toLowerCase();
+      // After a click on a filter or a row button, the letter keys still work; Enter, Space, and the arrows keep that
+      // control's own meaning (pressing it, or moving between filter options).
+      if (target?.closest('button, a, [role="button"], [role="radio"], [role="tab"]') && (key === 'enter' || key === ' ' || key.startsWith('arrow'))) return;
+      // A held key repeats: moving may repeat, deciding may not (each repeat would decide the next part as it slides up).
+      if (event.repeat && !['arrowdown', 'arrowup', 'j', 'k'].includes(key)) return;
       if (key === 'arrowdown' || key === 'j') setActive(index => Math.min(index + 1, visible.length - 1));
       else if (key === 'arrowup' || key === 'k') setActive(index => Math.max(index - 1, 0));
       else if (key === 'enter') open(line.bomLineKey);
@@ -90,12 +96,12 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
           <p>{Object.entries(suggestedBy).map(([choice, n]) => `${n} ${shortLabel[choice as keyof typeof shortLabel]}`).join(', ')}. Accepting saves each one as if you chose it; you can change any of them later.</p></div>
         <Button size="sm" variant="secondary" loading={Boolean(kit.bulk)} disabled={Boolean(kit.pending) && !kit.bulk} onClick={() => void kit.acceptSuggestions(suggested.map(item => item.line))}>Accept all {suggested.length}</Button>
       </div>}
-      <p className="muted small keys-hint" aria-hidden>Keys: <kbd>A</kbd> accept suggestion · <kbd>B</kbd> buy · <kbd>P</kbd> 3D print · <kbd>N</kbd> not needed · {kit.ai.enabled && <><kbd>I</kbd> accept AI · <kbd>X</kbd> dismiss AI · </>}<kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> details</p>
-      <div className="rows" role="listbox" aria-label="Parts to decide" aria-activedescendant={visible[active] ? `review-${visible[active].line.bomLineKey}` : undefined}>{visible.map(({ line, kind }, index) => {
+      <p className="muted small keys-hint">Keys: <kbd>A</kbd> accept suggestion · <kbd>B</kbd> buy · <kbd>P</kbd> 3D print · <kbd>N</kbd> not needed · {kit.ai.enabled && <><kbd>I</kbd> accept AI · <kbd>X</kbd> dismiss AI · </>}<kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> details</p>
+      <div className="rows" role="list" aria-label="Parts to decide">{visible.map(({ line, kind }, index) => {
         const busy = kit.saving.has(line.bomLineKey);
         // Only a whole-list operation (Accept all, loading shared choices) blocks every row; one save blocks only its own.
         const locked = Boolean(kit.pending) || !kit.result!.scanId || busy;
-        return <div key={line.bomLineKey} id={`review-${line.bomLineKey}`} role="option" aria-selected={index === active} className={`row ${index === active ? 'focused' : ''}`} onMouseEnter={() => setActive(index)}>
+        return <div key={line.bomLineKey} id={`review-${line.bomLineKey}`} role="listitem" aria-current={index === active ? 'true' : undefined} className={`row review-row ${index === active ? 'focused' : ''}`} onMouseEnter={() => setActive(index)}>
           <div className="row-main">
             <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><Thumbnail line={line} /><span>{line.name}</span></button>
             <PartMeta line={line} />

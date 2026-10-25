@@ -43,7 +43,7 @@ export function Overview({ kit, summary, go, now }: { kit: ControlKit; summary: 
       <Tile label="Make" value={summary.make.total} context={makeParts.join(', ') || 'nothing yet'} onClick={() => go('make')} />
       <Tile label="Needs review" value={summary.review} context={summary.review ? 'decisions to make' : 'all decided'} attention={summary.review > 0} onClick={() => go('review')} />
       <Tile label={subtotalComplete ? 'Purchasing total' : 'Known subtotal'} value={summary.subtotal === null ? 'None yet' : money(summary.subtotal)} incomplete={!subtotalComplete}
-        context={summary.buyLines ? `${summary.pricedLines} of ${summary.buyLines} parts to buy are priced` : 'no parts to buy yet'} onClick={() => go('buy')} />
+        context={summary.buyLines ? `${summary.pricedLines} of ${summary.buyLines} parts to buy are priced, at list prices before shipping and tax` : 'no parts to buy yet'} onClick={() => go('buy')} />
     </div>
 
     <section className="panel" aria-labelledby="next-steps">

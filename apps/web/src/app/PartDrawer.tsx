@@ -7,7 +7,7 @@ import { Drawer, DrawerContent, useDrawerItem } from '../components/arc/drawer/d
 import type { ControlKit } from './useControlKit';
 import { money, vendorLabel, vendorLookup } from './model';
 
-const sourceLabel: Record<BomLine['dispositionSource'], string> = { manual: 'Set by you', 'exact-sku': 'Exact vendor SKU', 'explicit-metadata': 'From Onshape data', provenance: 'From where the part comes from', suggestion: 'Suggested', none: 'Not decided' };
+const sourceLabel: Record<BomLine['dispositionSource'], string> = { manual: 'Chosen by your team', 'exact-sku': 'Exact vendor SKU', 'explicit-metadata': 'From Onshape data', provenance: 'From where the part comes from', suggestion: 'Suggested', none: 'Not decided' };
 const matchLabel: Record<BomLine['matchStatus'], string> = { exact: 'Exact SKU match', confirmed: 'Confirmed by you', possible: 'Possible match', rejected: 'Rejected by you', unmatched: 'No match' };
 
 /** Configuration values a person set, without Onshape's encoded parameter ids or values left at Default. */
@@ -51,6 +51,8 @@ export function PartDrawer({ kit, line, onClose }: { kit: ControlKit; line: BomL
   const shown = useDrawerItem(line);
   return <Drawer open={Boolean(line)} onOpenChange={open => { if (!open) onClose(); }}>
     {shown && <DrawerContent title={shown.name} description={`${shown.qty} needed${shown.suppressed ? ', suppressed' : ''}`}>
+      {/* The page's own error banner is behind the drawer, so a failed save is shown here too. */}
+      {kit.error && <Alert tone="danger" title={kit.error} onDismiss={kit.clearError} />}
       <PartDetails kit={kit} line={shown} />
     </DrawerContent>}
   </Drawer>;
@@ -122,7 +124,7 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
         {configurationText(line.configuration) && <><dt>Configuration</dt><dd className="small">{configurationText(line.configuration)}</dd></>}
         <dt>Used in</dt><dd className="small">{usedIn(line).map(([where, count]) => <div key={where}>{where}{count > 1 && <span className="muted"> ×{count}</span>}</div>)}</dd>
       </dl>
-      <div><Button size="sm" variant="secondary" onClick={() => kit.showInOnshape(line)}>{line.documentId === kit.result?.documentId ? 'Show its tab in Onshape' : 'Open its document in Onshape'} <ExternalLink aria-hidden size={12} /></Button></div>
+      <div><Button size="sm" variant="secondary" onClick={() => kit.showInOnshape(line)}>{line.documentId === kit.result?.documentId ? 'Show its tab in Onshape' : <>Open its document in Onshape <ExternalLink aria-hidden size={12} /></>}</Button></div>
       <p className="muted small">{line.documentId === kit.result?.documentId ? 'Switches this document to the tab the part is modelled in.' : 'This part is linked from another document, which opens in a new browser tab.'}</p>
     </section>
   </div>;
