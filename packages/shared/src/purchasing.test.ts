@@ -50,6 +50,18 @@ describe('purchase orders', () => {
     for (const line of result.lines) { line.vendor = screw; line.matchStatus = 'exact'; }
     expect(classifyScan(result, { teamNumber: null }, {}).lines.find(line => line.order)?.order).toEqual({ qty: 10, lines: 2 });
   });
+  it('counts a multi-body product per place: two switches in one assembly and a spare housing elsewhere are three', () => {
+    const sw = record('rev', 'REV-31-1462', 1, 17.5);
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'a', name: 'Lift', type: 'Assembly', documentId: 'robot', elementId: 'lift' },
+      { id: 'b', name: 'Spares', type: 'Assembly', documentId: 'robot', elementId: 'spares' },
+    ] }, subAssemblies: [
+      { documentId: 'robot', elementId: 'lift', instances: ['Connector', 'Screw', 'Housing'].flatMap(name => placed(name, 2, 'revdoc', 'switch', name)) },
+      { documentId: 'robot', elementId: 'spares', instances: placed('Housing', 1, 'revdoc', 'switch', 'Housing').map(instance => ({ ...instance, id: 'spare' })) },
+    ] }, { documentId: 'robot', workspaceOrVersion: 'w', workspaceOrVersionId: 'w1', elementId: 'asm' }, 'Robot');
+    for (const line of result.lines) { line.vendor = sw; line.matchStatus = 'exact'; }
+    expect(classifyScan(result, { teamNumber: null }, {}).lines.find(line => line.order)?.order).toEqual({ qty: 3, lines: 3 });
+  });
   it('keeps configurations of one Part Studio apart', () => {
     const sw = record('rev', 'REV-31-1462', 1, 17.5);
     const instances = [...placed('Switch', 1, 'revdoc', 'switch', 'body'), ...placed('Switch', 1, 'revdoc', 'switch', 'body')].map((instance, n) => ({ ...instance, id: `s${n}`, configuration: n ? 'mount=left' : 'mount=right' }));
