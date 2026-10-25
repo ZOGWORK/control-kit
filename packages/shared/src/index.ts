@@ -4,13 +4,15 @@ export { applyClassificationChoice, classificationIdentity, classifyLine, classi
 import { purchasedAssemblyReason } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, Confidence, Disposition, DispositionSource, Provenance, UserSettings } from './classifier';
 export type { Attribution, LibraryMapping, LicensedImage, VendorId, VendorRecord, MatchResult } from './matching';
-export { buildControlPointPayload, MockControlPointAdapter } from './control-point';
+export { buildControlPointPayload, CONTROL_POINT_CAD_URL, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter } from './control-point';
 export { recalculatePurchasing, updatePurchasing } from './purchasing';
 export { knownProduct, withKnownPack } from './known-products';
+export { AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, aiCandidateRecord, aiDispositions, aiReviewHash, aiReviewInstructions, aiReviewSchema, applyAiReview, buildAiReviewRequest, lineCandidates, needsAiReview, parseAiReview } from './ai-review';
+export type { AiCandidate, AiDisposition, AiProvider, AiReviewItem, AiReviewLine, AiReviewRequest, AiSuggestion } from './ai-review';
 import { recalculatePurchasing } from './purchasing';
 export { batchKey, catalogReadKey, catalogVendors, clearCatalogMemoryCache, indexKey, matchCatalog, pointerKey } from './catalog-read';
 export type { CatalogReader, IndexEntry } from './catalog-read';
-export type { ControlPointAdapter, ControlPointBomPayload } from './control-point';
+export type { ControlPointAdapter, ControlPointBomPayload, ControlPointCadPart, ControlPointFile, ControlPointLine } from './control-point';
 export { checkStep, exportManifest, stepDispositions, stepFileName, wantsStep } from './step';
 export type { ExportPart, StepCheck } from './step';
 export { bomColumns, bomIdentity, bomProperties, bomText, flagMissingSources, mergeBom } from './bom';
@@ -18,6 +20,7 @@ export type { BillOfMaterials, BomHeader, BomItemSource, BomProperties, BomRecon
 import type { Attribution, LicensedImage, VendorRecord } from './matching';
 import type { BomProperties, BomReconciliation } from './bom';
 import type { Confidence, Disposition, DispositionSource, Provenance } from './classifier';
+import type { AiSuggestion } from './ai-review';
 
 export type AssemblyContext = { documentId: string; workspaceOrVersion: 'w' | 'v' | 'm'; workspaceOrVersionId: string; elementId: string };
 export type AssemblyInstance = { id: string; name: string; type: string; documentId: string; elementId: string; partId?: string; partNumber?: string; configuration?: string; fullConfiguration?: string; documentMicroversion?: string; documentVersion?: string; versionId?: string; workspaceId?: string; suppressed?: boolean; isSuppressed?: boolean; isStandardContent?: boolean;
@@ -35,6 +38,10 @@ export type BomLine = { bomLineKey: string; name: string; description: string | 
   purchasedAssembly?: { parts: number; reason: string; includes?: string[]; inside?: string[] } | null;
   /** The exact-SKU products a person picks between when the line names more than one; a saved decision may pick any of them. */
   choices?: VendorRecord[];
+  /** The closest catalog records that were not chosen (at most 3), offered to the AI review and to a person. */
+  nearMatches?: VendorRecord[];
+  /** The optional AI review's proposal for this line; a person accepts or dismisses it. */
+  aiSuggestion?: AiSuggestion | null;
   /** Set when a parts library's mapping supplied the SKU, with the library's credit. */
   libraryMatch?: { library: string; attribution: Attribution } | null;
   /** A licensed picture of the product (library or vendor feed). Empty until a source grants permission. */
@@ -96,7 +103,7 @@ export type MatchDecision = { status: 'confirmed' | 'rejected'; vendorId: Vendor
 /** The record a saved decision names on this line: its current match or one of the products it is choosing between. */
 export function decisionRecord(line: BomLine, decision: Pick<MatchDecision, 'vendorId' | 'normalizedSku'> | null): VendorRecord | null {
   if (!decision) return null;
-  return [line.vendor, ...(line.choices ?? [])].find(record => record && record.vendorId === decision.vendorId && record.normalizedSku === decision.normalizedSku) ?? null;
+  return [line.vendor, ...(line.choices ?? []), ...(line.nearMatches ?? [])].find(record => record && record.vendorId === decision.vendorId && record.normalizedSku === decision.normalizedSku) ?? null;
 }
 
 /** Confirms or rejects a possible match. With `pick`, confirms that one of the line's choices instead, also after an earlier pick. */
@@ -104,7 +111,7 @@ export function applyMatchDecision(result: ScanResult, key: string, decision: 'c
   const next: ScanResult = { ...result, stats: { ...result.stats }, lines: result.lines.map(line => ({ ...line })) };
   const line = next.lines.find(item => item.bomLineKey === key);
   const picked = line && pick ? decisionRecord(line, pick) : null;
-  if (!line || (line.matchStatus !== 'possible' && !(picked && line.matchStatus === 'confirmed'))) return next;
+  if (!line || (line.matchStatus !== 'possible' && !(picked && ['confirmed', 'unmatched'].includes(line.matchStatus)))) return next;
   if (picked) line.vendor = picked;
   line.matchStatus = decision;
   if (decision === 'rejected') { line.vendor = null; line.alternatives = []; }

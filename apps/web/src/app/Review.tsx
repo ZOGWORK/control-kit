@@ -2,24 +2,39 @@ import { useEffect, useState } from 'react';
 import { EmptyState } from '../components/arc/empty-state/empty-state';
 import SegmentedControl from '../components/arc/segmented-control/segmented-control';
 import type { ControlKit } from './useControlKit';
+import { aiCandidateRecord, needsAiReview, type BomLine } from '@control-kit/shared';
 import { reviewQueue, shortLabel, vendorLabel, type QueueKind } from './model';
 import { Button, PartMeta, Thumbnail } from './bits';
 
-type Filter = 'all' | QueueKind;
+type Filter = 'all' | QueueKind | 'ai';
 const page = 25;
+
+/** "AI suggests 3D print (78%): reason", with the product it points at when there is one. */
+function aiText(line: BomLine) {
+  const suggestion = line.aiSuggestion!;
+  const record = aiCandidateRecord(line, suggestion.candidateId);
+  const what = suggestion.disposition === 'review' ? 'no clear answer' : shortLabel[suggestion.disposition];
+  return `AI suggests ${what}${record ? `, ${vendorLabel[record.vendorId]} ${record.sku}` : ''} (${Math.round(suggestion.confidence * 100)}%): ${suggestion.reason}`;
+}
 
 /**
  * Only the parts that need a person: possible vendor matches, suggestions to confirm, and open questions.
  * Each item says why it is here and offers the likely answers as one click; anything else opens the part.
  */
 export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => void }) {
-  const queue = reviewQueue(kit.result!);
+  // AI answers on parts that are otherwise settled (a Buy line whose pack size is unknown) get their own group.
+  const queued = reviewQueue(kit.result!);
+  const queue: Array<{ line: BomLine; kind: QueueKind | 'ai' }> = [...queued, ...kit.result!.lines
+    .filter(line => line.aiSuggestion && !queued.some(item => item.line.bomLineKey === line.bomLineKey)).map(line => ({ line, kind: 'ai' as const }))];
   const [filter, setFilter] = useState<Filter>('all');
   const [shown, setShown] = useState(page);
-  const count = (kind: QueueKind) => queue.filter(item => item.kind === kind).length;
+  const count = (kind: QueueKind | 'ai') => queue.filter(item => item.kind === kind).length;
   const items = queue.filter(item => filter === 'all' || item.kind === filter);
   const suggested = queue.filter(item => item.kind === 'suggested');
   const visible = items.slice(0, shown);
+  // Once its last AI answer is accepted or dismissed, the AI group's button goes away, so the view returns to all.
+  const aiLeft = count('ai');
+  useEffect(() => { if (filter === 'ai' && !aiLeft) setFilter('all'); }, [filter, aiLeft]);
   // The highlighted row stays at its position: a decided part leaves the list and the next one slides under it.
   const [active, setActive] = useState(0);
   const current = visible[Math.min(active, visible.length - 1)];
@@ -40,6 +55,8 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
       else if (key === 'enter') open(line.bomLineKey);
       else if (!ready) return;
       else if (key === 'a') { if (kind === 'match') void kit.decide(line, 'confirmed'); else if (kind === 'suggested') void kit.setDisposition(line, line.suggestedDisposition!); else return; }
+      else if (key === 'i' && line.aiSuggestion) void kit.acceptAi(line);
+      else if (key === 'x' && line.aiSuggestion) kit.dismissAi(line);
       else if (key === 'b') void kit.setDisposition(line, 'buy');
       else if (key === 'p') void kit.setDisposition(line, 'print');
       else if (key === 'n') void kit.setDisposition(line, 'ignore');
@@ -51,16 +68,21 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
   });
   const suggestedBy = suggested.reduce<Record<string, number>>((counts, item) => ({ ...counts, [item.line.suggestedDisposition!]: (counts[item.line.suggestedDisposition!] ?? 0) + 1 }), {});
 
-  if (!queue.length) return <section className="panel"><EmptyState title="Nothing to review" description="Every part has a decision. New or changed parts show up here after a rescan." /></section>;
+  const uncertain = kit.result!.lines.filter(needsAiReview).length;
+  const aiButton = kit.ai.enabled && uncertain > 0 && <Button size="sm" variant="secondary" loading={kit.ai.running} disabled={!kit.result!.scanId || kit.result!.vendorMatching === 'pending'} onClick={() => void kit.runAiReview()}>Recheck {uncertain} with AI</Button>;
+  if (!queue.length) return <section className="panel"><EmptyState title="Nothing to review" description="Every part has a decision. New or changed parts show up here after a rescan." />{aiButton}{kit.ai.note && <p className="muted small" role="status">{kit.ai.note}</p>}</section>;
   return <>
     <div className="section-head">
       <div><h2>{queue.length} parts need a decision</h2><p>Your choices apply to everyone who scans this document and are kept across rescans. Choose a part to see the evidence behind it.</p></div>
+      {aiButton}
     </div>
+    {kit.ai.note && <p className="muted small" role="status">{kit.ai.note}</p>}
     <SegmentedControl label="Show" value={filter} onValueChange={value => { setFilter(value as Filter); setShown(page); }} options={[
       { value: 'all', label: `All ${queue.length}` },
       { value: 'match', label: `Vendor matches ${count('match')}` },
       { value: 'suggested', label: `Suggested ${count('suggested')}` },
       { value: 'undecided', label: `Undecided ${count('undecided')}` },
+      ...(count('ai') ? [{ value: 'ai', label: `AI on other parts ${count('ai')}` }] : []),
     ]} />
     <section className="panel">
       {suggested.length > 1 && (filter === 'all' || filter === 'suggested') && <div className="panel-head">
@@ -68,7 +90,7 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
           <p>{Object.entries(suggestedBy).map(([choice, n]) => `${n} ${shortLabel[choice as keyof typeof shortLabel]}`).join(', ')}. Accepting saves each one as if you chose it; you can change any of them later.</p></div>
         <Button size="sm" variant="secondary" loading={Boolean(kit.bulk)} disabled={Boolean(kit.pending) && !kit.bulk} onClick={() => void kit.acceptSuggestions(suggested.map(item => item.line))}>Accept all {suggested.length}</Button>
       </div>}
-      <p className="muted small keys-hint" aria-hidden>Keys: <kbd>A</kbd> accept suggestion · <kbd>B</kbd> buy · <kbd>P</kbd> 3D print · <kbd>N</kbd> not needed · <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> details</p>
+      <p className="muted small keys-hint" aria-hidden>Keys: <kbd>A</kbd> accept suggestion · <kbd>B</kbd> buy · <kbd>P</kbd> 3D print · <kbd>N</kbd> not needed · {kit.ai.enabled && <><kbd>I</kbd> accept AI · <kbd>X</kbd> dismiss AI · </>}<kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> details</p>
       <div className="rows" role="listbox" aria-label="Parts to decide" aria-activedescendant={visible[active] ? `review-${visible[active].line.bomLineKey}` : undefined}>{visible.map(({ line, kind }, index) => {
         const busy = kit.saving.has(line.bomLineKey);
         // Only a whole-list operation (Accept all, loading shared choices) blocks every row; one save blocks only its own.
@@ -77,9 +99,14 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
           <div className="row-main">
             <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><Thumbnail line={line} /><span>{line.name}</span></button>
             <PartMeta line={line} />
-            <span className="muted small">{kind === 'match' ? `Possible match: ${vendorLabel[line.vendor!.vendorId]} ${line.vendor!.sku}, ${line.vendor!.name}` : line.reviewReason}</span>
+            <span className="muted small">{kind === 'match' ? `Possible match: ${vendorLabel[line.vendor!.vendorId]} ${line.vendor!.sku}, ${line.vendor!.name}` : line.reviewReason ?? (line.vendor && !line.vendor.packSizeVerified ? 'Pack size unknown, so no total yet' : '')}</span>
+            {line.aiSuggestion && <span className="small">{aiText(line)}</span>}
           </div>
           <div className="row-aside">
+            {line.aiSuggestion && <>
+              <Button size="sm" disabled={locked} onClick={() => void kit.acceptAi(line)}>Use AI suggestion</Button>
+              <Button size="sm" variant="ghost" disabled={locked} onClick={() => kit.dismissAi(line)}>Dismiss</Button>
+            </>}
             {kind === 'match' && <>
               <Button size="sm" disabled={locked} onClick={() => void kit.decide(line, 'confirmed')}>Confirm match</Button>
               <Button size="sm" variant="ghost" disabled={locked} onClick={() => void kit.decide(line, 'rejected')}>Not this</Button>

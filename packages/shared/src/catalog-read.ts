@@ -214,11 +214,16 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
     }
     line.vendor = match.vendor;
     line.choices = match.choices ?? [];
+    // The closest records not chosen, for the AI review and for a person to pick from.
+    const shown = new Set([match.vendor, ...line.choices].flatMap(record => record ? [`${record.vendorId}:${record.normalizedSku}`] : []));
+    line.nearMatches = match.status === 'exact' ? [] : [...candidates.values()].filter(record => !shown.has(`${record.vendorId}:${record.normalizedSku}`))
+      .map(record => [record, nameSimilarity(line.name, record.normalizedName)] as const).filter(([, score]) => score >= 0.25)
+      .sort((a, b) => b[1] - a[1] || a[0].sku.localeCompare(b[0].sku)).slice(0, 3).map(([record]) => record);
     line.matchConfidence = match.confidence;
     line.matchStatus = match.status;
     line.matchReasons = match.reasons;
     if (match.status === 'exact') { line.classification = 'commercial'; line.classificationReasons = ['exact vendor SKU forces Commercial']; }
-    if (match.vendor && match.status !== 'exact') {
+    if (match.status !== 'exact' && (match.vendor || line.nearMatches.length)) {
       const choice = await getDecision(line.bomLineKey, signal);
       // A saved decision may name the shown match or any of the line's choices.
       const picked = decisionRecord(line, choice);

@@ -3,11 +3,14 @@ import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from '
 import { applyMatchDecision, catalogReadKey, decisionRecord, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings, type VendorId } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
+import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, reviewWithAi, validAiRequest } from './ai-review';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 import { linePreview, previewCacheKey, PreviewUnavailableError } from './preview';
 
-export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string }
+export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string;
+  /** Optional AI review keys (Worker secrets). Without either, the review is off and nothing else changes. */
+  GEMINI_API_KEY?: string; ANTHROPIC_API_KEY?: string; GEMINI_MODEL?: string; ANTHROPIC_MODEL?: string }
 type Tokens = { access_token: string; refresh_token: string };
 type Session = { tokens: Tokens; user: { id: string; name: string } };
 type OAuthState = { context?: Record<string, string>; redirectOnshapeUri?: string };
@@ -221,6 +224,30 @@ async function route(request: Request, env: Env): Promise<Response> {
       }));
     }
     return reply({ choices });
+  }
+  if (url.pathname === '/api/ai/status' && request.method === 'GET') return reply({ enabled: aiReviewEnabled(env) });
+  if (url.pathname === '/api/ai/review' && request.method === 'POST') {
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    if (!aiReviewEnabled(env)) return reply({ error: 'AI review is not set up on this server. Everything else works as before.' }, 501);
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const text = await request.text();
+    if (text.length > 400_000) return reply({ error: 'Too many parts for one AI review.' }, 413);
+    let body: { documentId?: string; scanId?: string; request?: unknown };
+    try { body = JSON.parse(text); } catch { return reply({ error: 'Invalid AI review request.' }, 400); }
+    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.scanId || !/^[a-f0-9-]{36}$/.test(body.scanId) || !validAiRequest(body.request)) return reply({ error: 'Invalid AI review request.' }, 400);
+    // Only someone who scanned this document (and so can read it in Onshape) may send its parts for review.
+    const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${body.scanId}`);
+    if (!raw || (JSON.parse(raw) as ScanResult).documentId !== body.documentId) return reply({ error: 'Scan this assembly again.' }, 409);
+    // A saved answer is free; anything else takes one of the person's daily reviews, reserved before the call.
+    let outcome = await cachedAiReview(env, body.request);
+    if (!outcome) {
+      const refused = await reserveAiReview(env, current.data.user.id);
+      if (refused) return reply({ error: refused }, 429);
+      try { outcome = await reviewWithAi(env, body.request); }
+      finally { await releaseAiReview(env, current.data.user.id); }
+    }
+    return outcome.ok ? reply({ items: outcome.items, provider: outcome.provider, cached: outcome.cached, usage: outcome.usage }) : reply({ error: outcome.error }, outcome.status);
   }
   if (url.pathname === '/api/classification/override' && request.method === 'POST') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
