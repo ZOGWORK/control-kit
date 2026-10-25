@@ -111,6 +111,8 @@ export function applyMatchDecision(result: ScanResult, key: string, decision: 'c
   const next: ScanResult = { ...result, stats: { ...result.stats }, lines: result.lines.map(line => ({ ...line })) };
   const line = next.lines.find(item => item.bomLineKey === key);
   const picked = line && pick ? decisionRecord(line, pick) : null;
+  // A pick that is none of the line's records must not confirm the record that happens to be shown.
+  if (pick && !picked) return next;
   if (!line || (line.matchStatus !== 'possible' && !(picked && ['confirmed', 'unmatched'].includes(line.matchStatus)))) return next;
   if (picked) line.vendor = picked;
   line.matchStatus = decision;
@@ -155,7 +157,8 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
   /** Part Studios (document:element) whose parts make up a subassembly, nested ones included. */
   function studiosInside(instances: AssemblyInstance[], ancestry: Set<string>, into = new Set<string>()): Set<string> {
     for (const instance of instances) {
-      if (instance.type.toLowerCase() !== 'assembly') { into.add(`${instance.documentId}:${instance.elementId}`); continue; }
+      // Configured Part Studios build different products per configuration, so the configuration is part of the source.
+      if (instance.type.toLowerCase() !== 'assembly') { into.add(`${instance.documentId}:${instance.elementId}:${instance.fullConfiguration ?? instance.configuration ?? ''}`); continue; }
       const key = subassemblyKey(instance);
       const child = definitions.get(key);
       if (child?.instances && !ancestry.has(key)) studiosInside(child.instances, new Set([...ancestry, key]), into);
@@ -226,8 +229,9 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
   // is part of that product, not a separate part: it is folded into the product's line when every place it is used
   // sits beside a product built from the same Part Studio.
   for (const [key, line] of active) {
-    if (line.purchasedAssembly) continue;
-    const studio = `${line.documentId}:${line.elementId}`;
+    // Standard content (screws, nuts) is placed beside kits all the time and is never part of one.
+    if (line.purchasedAssembly || line.isStandardContent) continue;
+    const studio = `${line.documentId}:${line.elementId}:${line.configuration ?? ''}`;
     const kits = line.instancePaths.map(path => (kitsByParent.get(path.split(' > ').slice(0, -1).join(' > ')) ?? []).find(kit => !kit.line.suppressed && kit.studios.has(studio)));
     if (!kits.length || kits.some(kit => !kit)) continue;
     for (const kit of new Set(kits.map(found => found!.line))) {

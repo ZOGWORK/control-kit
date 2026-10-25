@@ -157,10 +157,20 @@ function makerOf(sku: string): VendorId | null {
   return null;
 }
 
+/**
+ * Whether a SKU candidate is this record's SKU. A candidate of bare digits ("1001", often a team's own part number)
+ * only matches vendors whose SKUs are bare digits too (Pitsco, goBILDA's dashed numbers); AndyMark's am-1001 and REV's
+ * REV-41-1300 need their prefix, or every team part numbered 1001 would become an AndyMark product.
+ */
+function skuMatches(candidate: string, record: VendorRecord) {
+  if (normalizeSku(candidate, record.vendorId) !== record.normalizedSku) return false;
+  return !/^\d+$/.test(candidate) || !/[A-Z]/.test(normalizeSku(record.sku));
+}
+
 /** Exact normalized SKU takes precedence over every fuzzy score and forces Commercial downstream. */
 export function findBestMatch(line: { name: string; partNumber?: string | null }, candidates: VendorRecord[]): MatchResult {
   const skus = skuCandidates(line.name, line.partNumber);
-  const exact = candidates.filter(vendor => skus.some(sku => normalizeSku(sku, vendor.vendorId) === vendor.normalizedSku));
+  const exact = candidates.filter(vendor => skus.some(sku => skuMatches(sku, vendor)));
   const exactVendors = new Set(exact.map(vendor => vendor.vendorId));
   // Two different numbers on one line are a question even at a single vendor (a motor body named 5000-0002-0001 and -4008).
   const exactSkus = new Set(exact.map(vendor => vendor.normalizedSku));

@@ -32,6 +32,24 @@ describe('purchase orders', () => {
     expect(lead).toMatchObject({ packsToOrder: 2, lineTotalUsd: 35 });
     expect(result.stats.totalCostUsd).toBe(35);
   });
+  it('adds copies of one body: four screws modelled in one Part Studio, each placed 30 times, are 120 screws', () => {
+    // From the audit: a hardware Part Studio with "Screw 1" to "Screw 4", all part number 2800-0004-0012.
+    const screw = record('gobilda', '2800-0004-0012', 25, 3.59);
+    const bodies = ['Screw 1', 'Screw 2', 'Screw 3', 'Screw 4'].flatMap(name => placed(name, 30, 'robot', 'hardware', name));
+    expect(scan(bodies, () => screw).lines.find(line => line.order)).toMatchObject({ order: { qty: 120, lines: 4 }, packsToOrder: 5 });
+  });
+  it('adds different bodies of one Part Studio that are placed in different places', () => {
+    const screw = record('gobilda', '2800-0004-0012', 25, 3.59);
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'a', name: 'Intake', type: 'Assembly', documentId: 'robot', elementId: 'intake' },
+      { id: 'b', name: 'Lift', type: 'Assembly', documentId: 'robot', elementId: 'lift' },
+    ] }, subAssemblies: [
+      { documentId: 'robot', elementId: 'intake', instances: placed('Left screw', 6, 'robot', 'hardware', 'left') },
+      { documentId: 'robot', elementId: 'lift', instances: placed('Right screw', 4, 'robot', 'hardware', 'right') },
+    ] }, { documentId: 'robot', workspaceOrVersion: 'w', workspaceOrVersionId: 'w1', elementId: 'asm' }, 'Robot');
+    for (const line of result.lines) { line.vendor = screw; line.matchStatus = 'exact'; }
+    expect(classifyScan(result, { teamNumber: null }, {}).lines.find(line => line.order)?.order).toEqual({ qty: 10, lines: 2 });
+  });
   it('keeps configurations of one Part Studio apart', () => {
     const sw = record('rev', 'REV-31-1462', 1, 17.5);
     const instances = [...placed('Switch', 1, 'revdoc', 'switch', 'body'), ...placed('Switch', 1, 'revdoc', 'switch', 'body')].map((instance, n) => ({ ...instance, id: `s${n}`, configuration: n ? 'mount=left' : 'mount=right' }));

@@ -77,12 +77,14 @@ const hardwareWords = /\b(?:screws?|bolts?|(?:lock)?nuts?|washers?|e-?clips?|sna
 /** Fasteners a team takes from stock rather than ordering per part. Standoffs, bearings, and belts are not here: those are counted parts. */
 const fastenerWords = /\b(?:screws?|bolts?|(?:lock|hex|nylock)?\s?nuts?|washers?|e-?clips?|snap\s*rings?|retaining\s*rings?|rivets?|set\s*screws?|shcs|bhcs|fhcs|shoulder\s*screws?|(?:button|socket|flat|pan|cap)\s*head)\b|^M\d(?:\.\d)?\s*x\s*\d/i;
 /** Products that mention a fastener as a feature ("Set Screw Pinion Pulley", "Set-Screw Collar") are not fasteners. */
-const fastenedProductWords = /\b(?:pulleys?|collars?|hubs?|gears?|sprockets?|pinions?|bearings?|couplers?|mounts?|brackets?|wheels?|clamps?)\b/i;
+const fastenedProductWords = /\b(?:pulleys?|collars?|hubs?|gears?|sprockets?|pinions?|bearings?|couplers?|mounts?|brackets?|wheels?|clamps?|plates?|strips?|shafts?|jacks?|panels?|grooves?|lead\s*screws?|ball\s*screws?)\b/i;
 const customWords = /\b(?:custom|bracket|mount|spacer|adapter|holder|guide|cover)\b/i;
 /** Products a team buys whole even when the vendor's CAD models them as an assembly. */
 const productWords = /\b(?:bearings?|motors?|servos?|gearbox(?:es)?|wheels?|encoders?|sensors?|batter(?:y|ies)|cameras?|hubs?|actuators?)\b|\b(?:axon(?: (?:max|mini|micro))?|yellow ?jacket|neverest|torquenado|ultra ?planetary|core hex|hd hex|spark ?mini|control hub|expansion hub|servo hub|limelight|pinpoint|octo ?quad|sparkfun otos|rev (?:color|distance|touch|2m)|smart robot servo|gobilda (?:motor|servo))\b/i;
 /** Names a team gives its own groupings; such a subassembly is never treated as one product by wording alone. */
-const groupingWords = /\b(?:stack|assembly|asm|sub-?assembly|pod|module|mechanism|system|side|left|right|front|back|case|plate|bracket|mount|holder|adapter|spacer|guide|cover|custom|printed|3dp|shroud|housing|cradle|clip)\b/i;
+const groupingWords = /\b(?:stack|assembly|asm|sub-?assembly|pod|module|mechanism|system|side|left|right|front|back|case|plate|bracket|mount|holder|adapter|spacer|guide|cover|custom|printed|3dp|shroud|housing|cradle|clip|arm|linkage|box|block|claw|intake|outtake|turret|drive|drivetrain|lift|slide|elevator|shooter|launcher|wrist|gripper|chassis|frame)\b/i;
+/** A plural product word names several products a team grouped ("Intake Wheels", "Drive Motors"), not one product. */
+const pluralProductWords = /\b(?:bearings|motors|servos|gearboxes|wheels|encoders|sensors|batteries|cameras|hubs|actuators)\b/i;
 
 /**
  * Why a subassembly should be one bought line instead of its internal parts, or null to list its parts. Vendor CAD
@@ -93,7 +95,7 @@ const groupingWords = /\b(?:stack|assembly|asm|sub-?assembly|pod|module|mechanis
 export function purchasedAssemblyReason(name: string, partNumber: string | null | undefined, linked: boolean): string | null {
   const text = `${name} ${partNumber ?? ''}`;
   for (const [pattern, label] of vendorNumbers) if (pattern.test(text) && !/Series/.test(label)) return `its name has a ${label}`;
-  if (linked && productWords.test(name) && !groupingWords.test(name)) return 'it is linked from another document and named like a product';
+  if (linked && productWords.test(name) && !groupingWords.test(name) && !pluralProductWords.test(name)) return 'it is linked from another document and named like a product';
   return null;
 }
 
