@@ -156,6 +156,18 @@ describe('generation bookkeeping', () => {
     expect(kv.values.has('cat:gobilda:gen:feed1:batch:0')).toBe(false);
     expect(kv.values.has('cat:gobilda:gen:feed2:batch:0')).toBe(true);
     expect((JSON.parse(kv.values.get(pointerKey('gobilda'))!) as CatalogPointer).previous).toBeNull();
+    // A publication that lands while cleanup runs keeps its own pointer.
+    const racing = new MemoryKv();
+    await stageCatalog('gobilda', records(10), racing, { source: 'official-feed', gen: 'f1', now: new Date(at) });
+    await publishStaged('gobilda', racing, 'f1', { now: later(at) });
+    await stageCatalog('gobilda', records(11), racing, { source: 'official-feed', gen: 'f2', now: later(at, 100) });
+    await publishStaged('gobilda', racing, 'f2', { now: later(at, 200) });
+    const published = JSON.stringify({ ...JSON.parse(racing.values.get(pointerKey('gobilda'))!), gen: 'f3' });
+    const remove = racing.delete.bind(racing);
+    racing.delete = async (key: string) => { await remove(key); racing.values.set(pointerKey('gobilda'), published); };
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try { vi.setSystemTime(later(at, 2 * 86400)); await retireReplaced('gobilda', racing); } finally { vi.useRealTimers(); }
+    expect(racing.values.get(pointerKey('gobilda'))).toBe(published);
   });
   it('stops a crawl that was running when a feed went live, so it can never replace the feed', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});

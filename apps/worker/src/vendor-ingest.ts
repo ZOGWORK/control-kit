@@ -332,7 +332,9 @@ export async function retireReplaced(vendor: VendorId, kv: Kv, limit = 200) {
   const pointer = JSON.parse(raw) as CatalogPointer;
   const before = JSON.stringify(pointer);
   const deleted = await retirePrevious(vendor, kv, pointer, limit);
-  if (JSON.stringify(pointer) !== before) await kv.put(pointerKey(vendor), JSON.stringify(pointer));
+  // A publication that landed meanwhile owns the pointer now: its bookkeeping is kept, and the deletions done here
+  // (only of generations that were already neither live nor the rollback copy) are picked up again next time.
+  if (JSON.stringify(pointer) !== before && await kv.get(pointerKey(vendor)) === raw) await kv.put(pointerKey(vendor), JSON.stringify(pointer));
   return { deleted, waiting: [pointer.previous, ...(pointer.retiring ?? [])].flatMap(entry => entry ? [`${entry.gen} after ${new Date(entry.deleteAfter).toISOString()}`] : []) };
 }
 /**

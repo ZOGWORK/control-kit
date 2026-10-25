@@ -39,7 +39,11 @@ const kv: Kv & { flush(): void } = {
     catch (error) { if (/404/.test(String((error as { stderr?: unknown }).stderr ?? ''))) return null; throw error; }
   },
   async put(key, value) { pending.push({ key, value }); },
-  async delete(key) { try { wrangler(['key', 'delete', key]); } catch { /* already absent */ } },
+  // Only a key that is already gone counts as deleted; any other failure stops the command before progress is saved.
+  async delete(key) {
+    try { wrangler(['key', 'delete', key]); }
+    catch (error) { if (!/404|not found/i.test(String((error as { stderr?: unknown }).stderr ?? ''))) throw error; }
+  },
   flush() {
     if (!pending.length) return;
     const file = join(mkdtempSync(join(tmpdir(), 'catalog-')), 'bulk.json');
