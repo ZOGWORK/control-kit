@@ -19,12 +19,15 @@ describe('SKU and name normalization', () => {
     expect(skuCandidates('Bracket 1120 19-2 ratio 312rpm 44260')).toEqual([]);
     expect(skuCandidates('TorqueNADO', '44260')).toEqual(['44260']);
   });
-  it('keeps a goBILDA SKU also sold by ServoCity exact, but asks when one SKU names different products', () => {
+  it('takes a goBILDA SKU from goBILDA even when ServoCity resells it cheaper, and asks when one SKU names different products', () => {
     const record = (vendorId: VendorId, sku: string, name: string, priceUsd = 5): VendorRecord => ({ vendorId, sku, normalizedSku: normalizeSku(sku, vendorId), name, normalizedName: normalizeName(name), url: 'https://example.test/', priceUsd, packSize: 1, packSizeVerified: true, stock: 'in', stockQty: null, category: 'gear', updatedAt: '2026-10-24T00:00:00Z', source: 'sitemap' });
     const worm = 'Worm Gear Set (28:1 Ratio, 8mm REX Bore Worm)';
     const shared = findBestMatch({ name: 'Worm gear', partNumber: '3204-0001-0002' }, [record('gobilda', '3204-0001-0002', worm, 36.99), record('servocity', '3204-0001-0002', worm, 34.99)]);
-    expect(shared).toMatchObject({ status: 'exact', vendor: { vendorId: 'servocity' }, reasons: ['exact SKU 3204-0001-0002; also sold by gobilda'] });
-    const sizes = findBestMatch({ name: 'Screw', partNumber: '2800-0003' }, [record('gobilda', '2800-0003', 'Stainless Steel Socket Head Cap Screw M3'), record('servocity', '2800-0003', 'Stainless Steel Socket Head Cap Screw M4')]);
+    expect(shared).toMatchObject({ status: 'exact', vendor: { vendorId: 'gobilda' }, reasons: ['exact SKU 3204-0001-0002 from its maker; also sold by servocity'] });
+    // A reseller-only number with the same product at two stores stays exact, at the in-stock cheaper one.
+    const resold = findBestMatch({ name: 'Worm gear', partNumber: '555-1234' }, [record('servocity', '555-1234', worm, 34.99), record('andymark', '555-1234', worm, 36.99)]);
+    expect(resold).toMatchObject({ status: 'exact', vendor: { vendorId: 'servocity' } });
+    const sizes = findBestMatch({ name: 'Screw', partNumber: '2800-0003' }, [record('servocity', '2800-0003', 'Stainless Steel Socket Head Cap Screw M3'), record('andymark', '2800-0003', 'Stainless Steel Socket Head Cap Screw M4')]);
     expect(sizes.status).toBe('possible');
     const clash = findBestMatch({ name: 'Part', partNumber: '1309-0016' }, [record('gobilda', '1309-0016', '1309 Series Sonic Hub'), record('pitsco', '1309-0016', 'Classroom Battery Charger')]);
     expect(clash.status).toBe('possible');

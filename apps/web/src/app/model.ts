@@ -13,6 +13,8 @@ export const money = (value: number) => `$${value.toFixed(2)}`;
 
 /** A line can be paid for only with a confirmed or exact match, a verified pack size, and a price. */
 export const priced = (line: BomLine) => line.lineTotalUsd !== null;
+/** Priced, or ordered under another line that carries the price for the same SKU. */
+export const covered = (line: BomLine) => priced(line) || Boolean(line.orderedWith);
 
 export type Summary = {
   uniqueLines: number; instances: number; suppressedInstances: number;
@@ -25,6 +27,7 @@ export function summarize(result: ScanResult): Summary {
   const lines = result.lines;
   const buy = lines.filter(line => line.disposition === 'buy');
   const pricedBuy = buy.filter(priced);
+  const coveredBuy = buy.filter(covered);
   const count = (disposition: Disposition) => lines.filter(line => line.disposition === disposition).length;
   const make = { print: count('print'), cnc: count('cnc'), 'cut-2d': count('cut-2d'), fabricate: count('fabricate'), total: 0 };
   make.total = make.print + make.cnc + make['cut-2d'] + make.fabricate;
@@ -32,7 +35,7 @@ export function summarize(result: ScanResult): Summary {
     uniqueLines: lines.length, instances: result.stats.totalInstances, suppressedInstances: result.suppressed.reduce((sum, line) => sum + line.qty, 0),
     buy: buy.length, make, review: count('review'),
     subtotal: pricedBuy.length ? Math.round(pricedBuy.reduce((sum, line) => sum + line.lineTotalUsd!, 0) * 100) / 100 : null,
-    pricedLines: pricedBuy.length, buyLines: buy.length,
+    pricedLines: coveredBuy.length, buyLines: buy.length,
     dataIssues: result.missingMetadata.filter(line => !line.suppressed).length,
     possibleMatches: lines.filter(line => line.matchStatus === 'possible').length,
   };
@@ -66,7 +69,7 @@ export function buyList(result: ScanResult) {
   const vendors: VendorGroup[] = [...groups.entries()].map(([vendorId, lines]) => {
     const withPrice = lines.filter(priced);
     return { vendorId, label: vendorLabel[vendorId], lines: lines.sort((a, b) => a.name.localeCompare(b.name)),
-      subtotal: withPrice.length ? Math.round(withPrice.reduce((sum, line) => sum + line.lineTotalUsd!, 0) * 100) / 100 : null, unpriced: lines.length - withPrice.length };
+      subtotal: withPrice.length ? Math.round(withPrice.reduce((sum, line) => sum + line.lineTotalUsd!, 0) * 100) / 100 : null, unpriced: lines.filter(line => !covered(line)).length };
   }).sort((a, b) => a.label.localeCompare(b.label));
   return { vendors, needsSku: buy.filter(line => !matched.includes(line)).sort((a, b) => a.name.localeCompare(b.name)) };
 }

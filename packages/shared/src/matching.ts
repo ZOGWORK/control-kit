@@ -114,6 +114,14 @@ function candidateScore(name: string, vendor: VendorRecord) {
   return { score: Math.max(0, Math.min(1, score)), reasons };
 }
 
+/** The vendor whose own numbering a SKU follows, when the format says so. */
+function makerOf(sku: string): VendorId | null {
+  if (/^\d{4}-\d{4}-\d{4}/.test(sku)) return 'gobilda';
+  if (/^REV-\d{2}-\d{4}/i.test(sku)) return 'rev';
+  if (/^am-\d{3,5}/i.test(sku)) return 'andymark';
+  return null;
+}
+
 /** Exact normalized SKU takes precedence over every fuzzy score and forces Commercial downstream. */
 export function findBestMatch(line: { name: string; partNumber?: string | null }, candidates: VendorRecord[]): MatchResult {
   const skus = skuCandidates(line.name, line.partNumber);
@@ -125,6 +133,12 @@ export function findBestMatch(line: { name: string; partNumber?: string | null }
     return { vendor, confidence: 1, status: 'exact', reasons: [`exact SKU ${vendor.sku} from ${from}`] };
   }
   if (exactVendors.size > 1) {
+    // The maker's own listing wins over resellers of the same number: a goBILDA-format SKU at goBILDA, REV- at REV.
+    const maker = exact.filter(vendor => makerOf(vendor.sku) === vendor.vendorId).sort(preferStockThenPrice)[0];
+    if (maker) {
+      const others = [...exactVendors].filter(id => id !== maker.vendorId).join(', ');
+      return { vendor: maker, confidence: 1, status: 'exact', reasons: [`exact SKU ${maker.sku} from its maker; also sold by ${others}`] };
+    }
     const ranked = exact.sort(preferStockThenPrice);
     const vendor = ranked[0];
     // goBILDA products are also sold by ServoCity under the same SKU: one product, several sellers. Only when the

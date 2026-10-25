@@ -11,6 +11,7 @@ export function DispositionChip({ line }: { line: BomLine }) {
 /** What a line costs, or why it has no price yet. A missing price never reads as $0. */
 export function LineCost({ line }: { line: BomLine }) {
   if (line.lineTotalUsd !== null) return <span className="num">{money(line.lineTotalUsd)}</span>;
+  if (line.orderedWith) return <span className="muted small">in the same order</span>;
   if (!line.vendor || line.matchStatus !== 'exact' && line.matchStatus !== 'confirmed') return null;
   return <span className="muted small">{line.vendor.priceUsd === null ? 'no price' : !line.vendor.packSizeVerified ? 'pack size unknown' : 'not priced'}</span>;
 }

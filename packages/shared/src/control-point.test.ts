@@ -30,7 +30,7 @@ describe('Control Point contract scaffold', () => {
     const record: VendorRecord = { vendorId: 'andymark', sku: 'AM-1000', normalizedSku: '1000', name: 'M3 Screw', normalizedName: 'm3 screw',
       url: 'https://www.andymark.com/products/m3-screw', priceUsd: 8.99, packSize: 10, packSizeVerified: true,
       stock: 'in', stockQty: null, category: 'hardware', updatedAt: '2026-10-23T00:00:00Z', source: 'feed' };
-    result.lines[0].vendor = record; result.lines[0].matchStatus = 'exact';
+    result.lines[0].vendor = record; result.lines[0].matchStatus = 'exact'; result.lines[0].disposition = 'buy';
     recalculatePurchasing(result);
     expect((await buildControlPointPayload(result)).lines[0]).toMatchObject({ qty: 12, packsToOrder: 2, packPriceUsd: 8.99, lineTotalUsd: 17.98 });
     result.lines[0].vendor = { ...record, packSizeVerified: false };

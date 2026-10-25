@@ -1,4 +1,5 @@
 import type { BomLine, ScanResult } from './index';
+import { recalculatePurchasing } from './purchasing';
 
 /**
  * How the team will get the physical part. `review` means nothing reliable decided it yet.
@@ -176,6 +177,8 @@ export function classifyLine(line: BomLine, teamNumber: string | null, override:
 export function classifyScan(result: ScanResult, settings: UserSettings, overrides: ClassificationOverrides): ScanResult {
   for (const line of result.lines) classifyLine(line, settings.teamNumber, overrides[line.bomLineKey] ?? null, result.documentId);
   result.stats.printedLines = result.lines.filter(line => line.disposition === 'print').length;
+  // Only parts to buy are priced, and orders depend on which lines are bought, so pricing follows classification.
+  recalculatePurchasing(result);
   result.missingMetadata = result.missingMetadata.map(item => item.suppressed
     ? result.suppressed.find(line => line.bomLineKey === item.bomLineKey) ?? item
     : result.lines.find(line => line.bomLineKey === item.bomLineKey) ?? item);
