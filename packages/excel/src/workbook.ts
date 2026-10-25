@@ -61,6 +61,8 @@ const date = (iso: string | null | undefined) => iso && Number.isFinite(Date.par
 const ordered = (line: BomLine) => Boolean(line.vendor && (line.matchStatus === 'exact' || line.matchStatus === 'confirmed'));
 const verifiedPack = (line: BomLine) => ordered(line) && line.vendor!.packSizeVerified && line.vendor!.packSize ? line.vendor!.packSize : null;
 const priced = (line: BomLine) => ordered(line) && line.lineTotalUsd !== null && line.packsToOrder !== null && line.vendor!.priceUsd !== null;
+/** Ordered under another row for the same SKU, which carries the packs and total. */
+const covered = (line: BomLine) => priced(line) || Boolean(line.orderedWith);
 const product = (vendor: VendorRecord) => `${vendorName[vendor.vendorId]} ${vendor.sku}`;
 function stock(line: BomLine): { value: string; style: number } {
   const vendor = line.vendor;
@@ -80,6 +82,8 @@ function purchaseNotes(line: BomLine, result: ScanResult) {
   if (result.stats.staleVendorData && ordered(line)) values.push('Vendor data may be out of date');
   if (line.disposition === 'hardware') values.push('Fastener from stock: CAD count can be low if Replicate or patterns placed some');
   if (line.purchasedAssembly) values.push(`One product (${line.purchasedAssembly.parts} internal parts not listed)`);
+  if (line.order && line.order.lines > 1) values.push(`Packs cover ${line.order.qty} pieces across ${line.order.lines} CAD lines with this SKU`);
+  if (line.orderedWith) values.push(`Ordered with ${result.lines.find(other => other.bomLineKey === line.orderedWith)?.name ?? 'another row'} (same SKU)`);
   if (line.manualClassification) values.push('Set by your team');
   if (line.missingMetadataReason) values.push(line.missingMetadataReason);
   return values.join('. ');
@@ -133,8 +137,8 @@ function buySheet(result: ScanResult, now: Date) {
   const last = Math.max(first, first + lines.length - 1);
   // Stock fasteners are listed but are not purchases, so they never count toward "priced of parts to buy".
   const purchases = lines.filter(line => line.disposition === 'buy');
-  const pricedLines = purchases.filter(priced);
-  const total = Math.round(pricedLines.reduce((sum, line) => sum + line.lineTotalUsd!, 0) * 100) / 100;
+  const pricedLines = purchases.filter(covered);
+  const total = Math.round(purchases.filter(priced).reduce((sum, line) => sum + line.lineTotalUsd!, 0) * 100) / 100;
   put(target, 4, 2, 'Lines', S.label); put(target, 4, 3, purchases.length, S.value);
   put(target, 4, 4, 'Priced', S.label); put(target, 4, 5, pricedLines.length, S.value);
   put(target, 4, 6, 'Unpriced', S.label); put(target, 4, 7, purchases.length - pricedLines.length, S.value);

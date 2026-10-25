@@ -164,13 +164,32 @@ export function applyPackEvidence(record: VendorRecord, packInfo: string | null 
  * inside an escaped string. Each small object that mentions a pack is parsed, so spacing and key order do not matter.
  */
 function packInfoField(html: string) {
-  const text = html.replace(/\\"/g, '"');
-  for (const [candidate] of text.matchAll(/\{[^{}]{0,300}\}/g)) {
-    if (!/pack/i.test(candidate)) continue;
-    try {
-      const field = JSON.parse(candidate) as { name?: unknown; value?: unknown };
-      if (typeof field.name === 'string' && /^pack (?:info|qty|quantity|size)$/i.test(field.name.trim()) && typeof field.value === 'string' && field.value.trim()) return field.value.trim();
-    } catch { /* Not a JSON object; keep looking. */ }
+  // Pages also embed related products (included hardware, accessories) with their own fields, so only the custom
+  // fields of the page's own product count: the first `custom_fields` after its wish-list link (`product_id=<id>`).
+  const id = html.match(/wishlist\.php\?action=add(?:&|&amp;|\\u0026)product_id=(\d+)/)?.[1];
+  if (!id) return null;
+  const own = html.indexOf(`product_id=${id}`);
+  // The data is often JSON inside a JavaScript string, so its quotes are escaped (\"); values may hold escaped
+  // backslashes too (a length of 0.750\\\" (3/4)), so the list is unescaped as a JSON string before it is parsed.
+  const fieldsAt = /\\?"custom_fields\\?"\s*:\s*\[/g;
+  fieldsAt.lastIndex = own;
+  const found = fieldsAt.exec(html);
+  if (!found) return null;
+  const open = found.index + found[0].length - 1;
+  let depth = 0; let end = -1;
+  for (let i = open; i < html.length && i < open + 20000; i++) {
+    if (html[i] === '[') depth++;
+    else if (html[i] === ']' && --depth === 0) { end = i; break; }
+  }
+  if (end < 0) return null;
+  let fields: unknown;
+  try {
+    const raw = html.slice(open, end + 1);
+    fields = JSON.parse(found[0].startsWith('\\') ? JSON.parse(`"${raw}"`) as string : raw);
+  } catch { return null; }
+  if (!Array.isArray(fields)) return null;
+  for (const field of fields as Array<{ name?: unknown; value?: unknown }>) {
+    if (typeof field?.name === 'string' && /^pack (?:info|qty|quantity|size)$/i.test(field.name.trim()) && typeof field.value === 'string' && field.value.trim()) return field.value.trim();
   }
   return null;
 }

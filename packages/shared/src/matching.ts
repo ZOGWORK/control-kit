@@ -114,6 +114,14 @@ function candidateScore(name: string, vendor: VendorRecord) {
   return { score: Math.max(0, Math.min(1, score)), reasons };
 }
 
+/** The vendor whose own numbering a SKU follows, when the format says so. */
+function makerOf(sku: string): VendorId | null {
+  if (/^\d{4}-\d{4}-\d{4}/.test(sku)) return 'gobilda';
+  if (/^REV-\d{2}-\d{4}/i.test(sku)) return 'rev';
+  if (/^am-\d{3,5}/i.test(sku)) return 'andymark';
+  return null;
+}
+
 /** Exact normalized SKU takes precedence over every fuzzy score and forces Commercial downstream. */
 export function findBestMatch(line: { name: string; partNumber?: string | null }, candidates: VendorRecord[]): MatchResult {
   const skus = skuCandidates(line.name, line.partNumber);
@@ -125,8 +133,17 @@ export function findBestMatch(line: { name: string; partNumber?: string | null }
     return { vendor, confidence: 1, status: 'exact', reasons: [`exact SKU ${vendor.sku} from ${from}`] };
   }
   if (exactVendors.size > 1) {
+    // The maker's own listing wins over resellers of the same number: a goBILDA-format SKU at goBILDA, REV- at REV.
+    // Only when every match is the same number: two different numbers on one line are a question, not a reseller.
+    const sameNumber = new Set(exact.map(vendor => vendor.sku.replace(/[^a-z0-9]/gi, '').toUpperCase())).size === 1;
+    const maker = sameNumber ? exact.filter(vendor => makerOf(vendor.sku) === vendor.vendorId).sort(preferStockThenPrice)[0] : undefined;
+    if (maker) {
+      const others = [...exactVendors].filter(id => id !== maker.vendorId).join(', ');
+      return { vendor: maker, confidence: 1, status: 'exact', reasons: [`exact SKU ${maker.sku} from its maker; also sold by ${others}`] };
+    }
     const ranked = exact.sort(preferStockThenPrice);
     const vendor = ranked[0];
+    if (!sameNumber) return { vendor, confidence: 0.9, status: 'possible', reasons: [`different SKUs on this part (${[...new Set(exact.map(item => item.sku))].join(', ')}); confirm which one`] };
     // goBILDA products are also sold by ServoCity under the same SKU: one product, several sellers. Only when the
     // product names disagree is the shared number ambiguous, and then a person must say which product it is.
     const sameProduct = ranked.every(other => sameProductName(vendor, other));

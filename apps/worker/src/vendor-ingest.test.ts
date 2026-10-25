@@ -65,12 +65,19 @@ describe('vendor product page parsing', () => {
   });
   it('takes pack size from a "Pack Info" product field or a -PKn SKU, and never assumes one unit for ServoCity', () => {
     const jsonld = (name: string, sku: string) => `<script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name, sku, offers: { price: '3.99', priceCurrency: 'USD' } })}</script>`;
-    // As ServoCity embeds it: a JSON string inside the page's product data, with escaped quotes.
-    const field = '<script>var BCData = {"product_attributes":{"custom_fields":"[{\\"id\\":\\"11069\\",\\"name\\":\\"Pack Info\\",\\"value\\":\\"25 Pack\\"}]"}};</script>';
-    const screw = parseProductPage('servocity', 'https://www.servocity.com/screw/', jsonld('6-32 x 0.750" Zinc-Plated Socket Head Machine Screw', '632120') + field, at).records[0];
+    // As ServoCity embeds it: JSON inside a string (escaped quotes), the page's own product first, then related products.
+    const own = (id: number, pack: string | null) => JSON.stringify({ add_to_wishlist_url: `https://www.servocity.com/wishlist.php?action=add&product_id=${id}`,
+      // A dimension with an inch mark, as ServoCity writes lengths: it must survive the double escaping.
+      custom_fields: [{ id: '1', name: 'spec_Length', value: '0.750" (3/4)' }, { id: '3', name: 'spec_Material', value: 'Steel' }, ...(pack ? [{ id: '2', name: 'Pack Info', value: pack }] : [])] });
+    const related = JSON.stringify({ sku: '2806-0005-0004', custom_fields: [{ id: '9', name: 'Pack Info', value: '25 Pack' }] });
+    const embedded = (...objects: string[]) => `<script>window.stencil = ${JSON.stringify(objects.join(','))};</script>`;
+    const screw = parseProductPage('servocity', 'https://www.servocity.com/screw/', jsonld('6-32 x 0.750" Zinc-Plated Socket Head Machine Screw', '632120') + embedded(own(3803, '25 Pack')), at).records[0];
     expect(screw).toMatchObject({ packSize: 25, packSizeVerified: true, packEvidence: 'product field "Pack Info: 25 Pack"' });
+    // A related product's Pack Info (the set screw listed with a pinion) never counts for the page's own product.
+    const pinion = parseProductPage('servocity', 'https://www.servocity.com/pinion/', jsonld('2303 Series Steel Pinion Gear (30 Tooth)', '2303-4008-0030') + embedded(own(3803, null), related), at).records[0];
+    expect(pinion.packEvidence ?? '').not.toContain('Pack Info');
     // Spacing and key order in the embedded JSON do not matter.
-    const spaced = '<script>var BCData = { "custom_fields": [ { "value": "12 Pack", "id": "1", "name": "Pack Info" } ] };</script>';
+    const spaced = '<script>var data = { "add_to_wishlist_url": "/wishlist.php?action=add&product_id=77", "custom_fields": [ { "value": "12 Pack", "id": "1", "name": "Pack Info" } ] };</script>';
     expect(parseProductPage('servocity', 'https://www.servocity.com/nut/', jsonld('6-32 Hex Nut', '632000') + spaced, at).records[0]).toMatchObject({ packSize: 12, packSizeVerified: true });
     const plain = parseProductPage('servocity', 'https://www.servocity.com/spacer/', jsonld('1504 Series 32mm OD Pattern Spacer (4mm Length)', '1504-0032-0040'), at).records[0];
     expect(plain).toMatchObject({ packSize: null, packSizeVerified: false });

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { aggregateAssembly, applyMatchDecision, normalizeName, type AssemblyDefinition, type VendorRecord } from '@control-kit/shared';
+import { aggregateAssembly, applyMatchDecision, normalizeName, type AssemblyDefinition, type VendorRecord, classifyScan } from '@control-kit/shared';
 import { clearCatalogMemoryCache, enrichScan } from './catalog';
 import { batchKey, indexKey, pointerKey } from './vendor-ingest';
 import type { Kv } from './index';
@@ -30,7 +30,7 @@ describe('catalog KV read path and purchasing', () => {
   it('uses exact SKU and verified pack quantities for purchasing totals', async () => {
     clearCatalogMemoryCache();
     const result = aggregateAssembly(fixture('ftc-robot'), context, 'Robot');
-    await enrichScan(result, catalog());
+    classifyScan(await enrichScan(result, catalog()), { teamNumber: null }, {});
     const motor = result.lines.find(line => line.partId === 'motor-5203')!;
     expect(motor.matchStatus).toBe('exact');
     expect(motor.classification).toBe('commercial');
@@ -87,7 +87,7 @@ describe('catalog KV read path and purchasing', () => {
   it('prices a name candidate only after a person confirms it', async () => {
     clearCatalogMemoryCache();
     const result = aggregateAssembly(fixture('ftc-robot'), context, 'Robot');
-    await enrichScan(result, catalog(), async () => ({ status: 'confirmed', vendorId: 'andymark', normalizedSku: '1000' }));
+    classifyScan(await enrichScan(result, catalog(), async () => ({ status: 'confirmed', vendorId: 'andymark', normalizedSku: '1000' })), { teamNumber: null }, {});
     const screw = result.lines.find(line => line.partId === 'screw-m3')!;
     expect(screw).toMatchObject({ matchStatus: 'confirmed', packsToOrder: 20, lineTotalUsd: 179.8 });
     expect(result.stats.totalCostUsd).toBe(879.6);
@@ -111,7 +111,7 @@ describe('catalog KV read path and purchasing', () => {
     clearCatalogMemoryCache();
     const result = aggregateAssembly(fixture('empty'), context, 'Robot');
     result.lines.push({ ...aggregateAssembly(fixture('simple'), context, 'Robot').lines[0], bomLineKey: 'exact-print', name: 'Custom 3D Printed Bracket', partNumber: 'REV-31-1234', qty: 12 });
-    await enrichScan(result, catalog());
+    classifyScan(await enrichScan(result, catalog()), { teamNumber: null }, {});
     expect(result.lines[0].matchStatus).toBe('exact');
     expect(result.lines[0].classification).toBe('commercial');
     expect(result.lines[0].packsToOrder).toBe(6);

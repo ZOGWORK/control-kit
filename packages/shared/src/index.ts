@@ -5,6 +5,8 @@ import { purchasedAssemblyReason } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, Confidence, Disposition, DispositionSource, Provenance, UserSettings } from './classifier';
 export type { Attribution, LibraryMapping, LicensedImage, VendorId, VendorRecord, MatchResult } from './matching';
 export { buildControlPointPayload, MockControlPointAdapter } from './control-point';
+export { recalculatePurchasing, updatePurchasing } from './purchasing';
+import { recalculatePurchasing } from './purchasing';
 export { batchKey, catalogReadKey, catalogVendors, clearCatalogMemoryCache, indexKey, matchCatalog, pointerKey } from './catalog-read';
 export type { CatalogReader, IndexEntry } from './catalog-read';
 export type { ControlPointAdapter, ControlPointBomPayload } from './control-point';
@@ -35,7 +37,11 @@ export type BomLine = { bomLineKey: string; name: string; description: string | 
   /** A licensed picture of the product (library or vendor feed). Empty until a source grants permission. */
   thumbnail?: LicensedImage | null;
   /** The person's saved confirm/reject for a possible match on this line, applied when the line is matched. */
-  matchDecision?: MatchDecision | null };
+  matchDecision?: MatchDecision | null;
+  /** On the line that carries an order: the pieces it covers across every line ordering the same SKU, and how many lines. */
+  order?: { qty: number; lines: number } | null;
+  /** On a line whose SKU is ordered by another line: that line's key. It carries no packs or total of its own. */
+  orderedWith?: string | null };
 /** Why a line lacks data. Codes are stable for UI, export, and diagnostics; the user-facing text lives in `metadataIssueText`. */
 export type MetadataIssueCode = 'unresolved-subassembly' | 'unresolved-reference' | 'source-revision-unavailable' | 'not-in-bom' | 'bom-unavailable';
 export type MetadataIssue = { code: MetadataIssueCode; httpStatus: number | null };
@@ -83,23 +89,6 @@ export const catalogUsable = (health: CatalogHealth | undefined, vendorId: Vendo
  */
 export type ScanResult = { vendorMatching?: 'pending' | 'done'; scanId?: string; diagnostics?: ScanDiagnostics; catalogHealth?: CatalogHealth; documentName?: string; assemblyName: string; documentId: string; elementId: string; scannedAt: string; vendorDataUpdatedAt: string | null; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
 export type MatchDecision = { status: 'confirmed' | 'rejected'; vendorId: VendorRecord['vendorId']; normalizedSku: string };
-
-export function updatePurchasing(line: BomLine): BomLine {
-  const record = line.vendor;
-  if (!record || !['exact', 'confirmed'].includes(line.matchStatus) || !record.packSizeVerified || !Number.isInteger(record.packSize) || record.packSize! < 1 || record.priceUsd === null) {
-    line.packsToOrder = null; line.lineTotalUsd = null; return line;
-  }
-  line.packsToOrder = Math.ceil(line.qty / record.packSize!);
-  line.lineTotalUsd = Math.round(line.packsToOrder * record.priceUsd * 100) / 100;
-  return line;
-}
-
-export function recalculatePurchasing(result: ScanResult): ScanResult {
-  const priced = result.lines.map(line => updatePurchasing(line).lineTotalUsd).filter((price): price is number => price !== null);
-  result.stats.totalCostUsd = priced.length ? Math.round(priced.reduce((total, price) => total + price, 0) * 100) / 100 : null;
-  result.stats.outOfStockLines = result.lines.filter(line => line.vendor?.stock === 'out' && !['possible', 'rejected'].includes(line.matchStatus)).length;
-  return result;
-}
 
 export function applyMatchDecision(result: ScanResult, key: string, decision: 'confirmed' | 'rejected'): ScanResult {
   const next: ScanResult = { ...result, stats: { ...result.stats }, lines: result.lines.map(line => ({ ...line })) };
