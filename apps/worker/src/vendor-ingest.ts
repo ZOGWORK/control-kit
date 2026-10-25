@@ -1,4 +1,6 @@
-import { normalizeName, normalizeSku, type VendorId, type VendorRecord } from '@control-kit/shared';
+import { batchKey, indexKey, pointerKey, normalizeName, normalizeSku, type VendorId, type VendorRecord, type IndexEntry } from '@control-kit/shared';
+export { batchKey, indexKey, pointerKey };
+export type { IndexEntry };
 import type { Kv } from './index';
 
 /**
@@ -26,11 +28,8 @@ export const feedUrl = (vendor: VendorId, page: number) => `${vendorSources[vend
  * Later crawls build a new generation while the last complete one stays live, then switch on completion.
  * The replaced generation is kept for a day for rollback, then deleted in bounded steps.
  */
-export const pointerKey = (vendor: VendorId) => `cat:${vendor}:pointer`;
 export const crawlKey = (vendor: VendorId) => `cat:${vendor}:crawl`;
 const urlsKey = (vendor: VendorId, gen: string, sitemap: number) => `cat:${vendor}:gen:${gen}:urls:${sitemap}`;
-export const batchKey = (vendor: VendorId, gen: string, batch: number) => `cat:${vendor}:gen:${gen}:batch:${batch}`;
-export const indexKey = (vendor: VendorId, gen: string) => `cat:${vendor}:gen:${gen}:index`;
 export const manifestKey = (vendor: VendorId, gen: string) => `cat:${vendor}:gen:${gen}:manifest`;
 export const snapshotKey = (vendor: VendorId) => `vendor:${vendor}:__snapshot__`;
 const legacyKeys = (vendor: VendorId) => [`vendor:${vendor}:__cursor__`, `vendor:${vendor}:__lastgood__`, `vendor:${vendor}:__retired__`];
@@ -41,7 +40,6 @@ export type CatalogPointer = { gen: string; complete: boolean; records: number; 
   /** Older generations still awaiting deletion (from publishing twice within a day, or an abandoned crawl), retired like `previous`. */
   retiring?: Array<{ gen: string; batches: number; deleteAfter: number; deleted: number }> };
 /** `previousBatch` keeps a re-listed SKU readable from its older batch until the newer batch is published. */
-export type IndexEntry = [normalizedSku: string, normalizedName: string, batch: number, previousBatch?: number];
 export type SkipReason = 'redirect-stub' | 'no-product-data' | 'no-sku' | 'robots-disallowed' | 'off-vendor-url' | 'fetch-failed';
 type Crawl = { gen: string; startedAt: string; sitemaps: string[]; sitemapIndex: number; urlCount: number; urlIndex: number; batches: number; records: number; skipped: Partial<Record<SkipReason, number>>; skipSamples: Array<{ reason: SkipReason; url: string }>; failing: { url: string; runs: number } | null; done?: boolean };
 /** Crawl position, copied into the snapshot so health checks never read crawl or index keys. */

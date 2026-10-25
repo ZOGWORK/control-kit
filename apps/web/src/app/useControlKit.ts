@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, type BomLine, type ClassificationOverride, type ExportPart, type ScanResult, type UserSettings } from '@control-kit/shared';
+import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, matchCatalog, type BomLine, type ClassificationOverride, type ExportPart, type ScanResult, type UserSettings } from '@control-kit/shared';
 /** Spreadsheet and ZIP builders load on first download, keeping them out of the initial bundle. */
 const exporters = () => import('@control-kit/excel');
 
@@ -106,7 +106,14 @@ export function useControlKit(context: URLSearchParams) {
           if (event.type === 'progress') setProgress({ ...event });
           if (event.type === 'rate-limit') setProgress(previous => previous && { ...previous, retry: `Onshape is rate-limiting; retrying in ${Math.ceil(event.retryInMs / 1000)}s` });
           // A result that arrives after sign-out or a newer scan is dropped.
-          if (event.type === 'result' && generation === scanGeneration.current) setResult(event.result);
+          if (event.type === 'result' && generation === scanGeneration.current) {
+            let scanned = event.result;
+            if (scanned.vendorMatching === 'pending') {
+              setProgress(previous => previous && { ...previous, stage: 'Matching vendor catalogs…' });
+              scanned = await matchInBrowser(scanned, controller.signal);
+            }
+            if (generation === scanGeneration.current) setResult(scanned);
+          }
           if (event.type === 'session-expired') { setSession({ connected: false }); throw new Error('Your Onshape connection expired. Reconnect and scan again.'); }
           if (event.type === 'error') throw new Error(event.message);
         }
@@ -116,6 +123,32 @@ export function useControlKit(context: URLSearchParams) {
     } finally { if (abort.current === controller) { abort.current = null; setProgress(null); } }
   }
   const cancelScan = () => abort.current?.abort();
+
+  /**
+   * Matches a Worker scan against the vendor catalogs here in the browser, then classifies and prices it, exactly as
+   * the Worker used to. Catalog data comes from `/api/catalog/raw`; generation keys are cached by the browser. If the
+   * catalogs cannot be read, the scan is still shown, unmatched, with the catalog warning.
+   */
+  async function matchInBrowser(scanned: ScanResult, signal: AbortSignal): Promise<ScanResult> {
+    const reader = { get: async (key: string) => {
+      const response = await api(`/api/catalog/raw?key=${encodeURIComponent(key)}`, { signal });
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error(`Catalog read failed (${response.status})`);
+      return response.text();
+    } };
+    const decisions = new Map(scanned.lines.map(line => [line.bomLineKey, line.matchDecision ?? null]));
+    // Matching works on a copy, so a read that fails partway never shows a half-matched result.
+    const copy = structuredClone(scanned);
+    try {
+      await matchCatalog(copy, reader, async key => decisions.get(key) ?? null, signal);
+      copy.vendorMatching = 'done';
+      return classifyScan(copy, settings, overridesOf(copy));
+    } catch (cause) {
+      if (signal.aborted) throw cause;
+      setError('Vendor catalogs could not be read, so parts are not matched or priced. Rescan to try again.');
+      return scanned;
+    }
+  }
 
   /** Confirm or reject a possible vendor match; the line updates at once and rolls back if saving fails. */
   async function decide(line: BomLine, decision: 'confirmed' | 'rejected') {

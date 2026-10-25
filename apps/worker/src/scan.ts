@@ -1,5 +1,5 @@
 import { aggregateAssembly, classifyScan, flagMissingSources, mergeBom, metadataIssueText, summarizeMetadataIssues, type AssemblyContext, type AssemblyDefinition, type BillOfMaterials, type BomLine, type BomReconciliation, type ClassificationOverride, type ClassificationOverrides, type MatchDecision, type OnshapeRequestSummary, type ScanResult, type UserSettings } from '@control-kit/shared';
-import { enrichScan } from './catalog';
+import { catalogHealth } from './catalog';
 import type { Kv } from './index';
 
 export type ScanEvent =
@@ -137,8 +137,16 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         for (const line of all) line.missingMetadataReason = line.metadataIssue ? metadataIssueText[line.metadataIssue.code] : null;
         result.missingMetadata = all.filter(line => line.metadataIssue);
         const count = result.stats.totalInstances;
-        emit({ type: 'progress', stage: 'Matching vendors…', current: 3, total: 3, instances: count });
-        await enrichScan(result, catalog, getDecision, request.signal, staleHours);
+        emit({ type: 'progress', stage: 'Reading saved choices…', current: 3, total: 3, instances: count });
+        // Vendor matching runs in the browser (`matchCatalog`): against every catalog it costs far more CPU than a Worker
+        // request may use. The scan supplies what the browser needs: catalog health and the person's saved match decisions.
+        try { result.catalogHealth = await catalogHealth(catalog, staleHours, request.signal); }
+        catch (error) { if (request.signal.aborted) throw error; console.error('Catalog health read failed', error instanceof Error ? error.name : 'unknown'); }
+        // Saved decisions are read twenty at a time, so the stage waits for a few KV round trips, not one per line.
+        for (let start = 0; start < result.lines.length; start += 20) {
+          await Promise.all(result.lines.slice(start, start + 20).map(async line => { line.matchDecision = await getDecision(line.bomLineKey, request.signal); }));
+        }
+        result.vendorMatching = 'pending';
         classifyScan(result, settings, await loadClassificationOverrides(result.lines, getOverride, request.signal));
         result.diagnostics = { onshapeRequests: requests?.summary() ?? null, metadataIssues: summarizeMetadataIssues(all), bom: reconciliation, revision, cache };
         if (onResult) await onResult(result);

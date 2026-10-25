@@ -1,6 +1,6 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
 import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from './scan';
-import { applyMatchDecision, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings, type VendorId } from '@control-kit/shared';
+import { applyMatchDecision, catalogReadKey, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings, type VendorId } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
@@ -168,6 +168,21 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (url.pathname === '/api/catalog/health' && request.method === 'GET') {
     // Public vendor crawl state only: counts, timestamps, and our own error text. No user data or credentials.
     return reply(await catalogHealth(env.VENDOR_CATALOG, Number(env.VENDOR_STALE_HOURS ?? 336)));
+  }
+  if (url.pathname === '/api/catalog/raw' && request.method === 'GET') {
+    // Published vendor catalog data, exactly as stored, for the browser's matcher. Public vendor information only:
+    // pointers and generation indexes and batches; never crawl state, sessions, or user data. Generation keys never
+    // change, so they are cached for a year; pointers move, so for a minute.
+    const key = url.searchParams.get('key') ?? '';
+    if (!catalogReadKey.test(key)) return reply({ error: 'Not a catalog key.' }, 400);
+    // Library mappings may hold licensed data, so only a connected person reads them.
+    if (key.startsWith('library-map:') && !await getSession(request, env)) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const value = await env.VENDOR_CATALOG.get(key);
+    if (value === null) return new Response('', { status: 404, headers: { 'cache-control': 'public, max-age=60' } });
+    // A batch is written once and never changes. An index is rewritten while a first crawl publishes in parts, and
+    // pointers and mappings move, so those are cached for a minute only.
+    const cache = /:batch:\d+$/.test(key) ? 'public, max-age=31536000, immutable' : key.startsWith('library-map:') ? 'private, max-age=60' : 'public, max-age=60';
+    return new Response(value, { headers: { 'content-type': 'application/json', 'cache-control': cache } });
   }
   if (url.pathname === '/api/settings' && request.method === 'GET') {
     const current = await getSession(request, env);
