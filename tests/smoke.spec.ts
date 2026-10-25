@@ -193,7 +193,7 @@ test('reopening the panel shows the last scan, and Not needed dismisses a part',
   await expect(page.locator('.row').filter({ hasText: next })).toHaveCount(0);
   expect(saved.at(-1)).toMatchObject({ classification: 'buy' });
   // Parts remain, and the highlight stays on the next one.
-  await expect(page.locator('.rows [role="option"]')).not.toHaveCount(0);
+  await expect(page.locator('.rows [role="listitem"]')).not.toHaveCount(0);
   await expect(page.locator('.row.focused')).toHaveCount(1);
 });
 

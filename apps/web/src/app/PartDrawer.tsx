@@ -7,7 +7,7 @@ import { Drawer, DrawerContent, useDrawerItem } from '../components/arc/drawer/d
 import type { ControlKit } from './useControlKit';
 import { money, vendorLabel, vendorLookup } from './model';
 
-const sourceLabel: Record<BomLine['dispositionSource'], string> = { manual: 'Chosen by your team', 'exact-sku': 'Exact vendor SKU', 'explicit-metadata': 'From Onshape data', provenance: 'From where the part comes from', suggestion: 'Suggested', none: 'Not decided' };
+const sourceLabel: Record<BomLine['dispositionSource'], string> = { manual: 'Chosen by your team', 'exact-sku': 'Exact vendor SKU', 'explicit-metadata': 'From Onshape data', provenance: 'From where the part comes from', suggestion: 'Decided automatically; change it if wrong', none: 'Not decided' };
 const matchLabel: Record<BomLine['matchStatus'], string> = { exact: 'Exact SKU match', confirmed: 'Confirmed by you', possible: 'Possible match', rejected: 'Rejected by you', unmatched: 'No match' };
 
 /** Configuration values a person set, without Onshape's encoded parameter ids or values left at Default. */
