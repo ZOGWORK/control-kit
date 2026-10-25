@@ -6,6 +6,12 @@ import { aggregateAssembly, classifyScan, type AssemblyDefinition, type ScanResu
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/assembly-simple.json', import.meta.url), 'utf8')) as AssemblyDefinition;
 const result = classifyScan(aggregateAssembly(fixture, { documentId: 'simple', workspaceOrVersion: 'w', workspaceOrVersionId: 'work1', elementId: 'elem1' }, 'Simple FTC Assembly'), { teamNumber: null }, {});
 result.scanId = '00000000-0000-4000-8000-000000000001';
+/** The same assembly with two more printed parts, so Review keeps several print suggestions to accept and step through. */
+const withPrints = classifyScan(aggregateAssembly({ ...fixture, rootAssembly: { ...fixture.rootAssembly, instances: [...(fixture.rootAssembly.instances ?? []),
+  { id: 'pa', name: 'Printed guide A', type: 'Part', documentId: 'simple', elementId: 'printed', partId: 'pa' },
+  { id: 'pb', name: 'Printed guide B', type: 'Part', documentId: 'simple', elementId: 'printed', partId: 'pb' }] } },
+  { documentId: 'simple', workspaceOrVersion: 'w', workspaceOrVersionId: 'work1', elementId: 'elem1' }, 'Simple FTC Assembly'), { teamNumber: null }, {});
+withPrints.scanId = result.scanId;
 const appUrl = '/?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1';
 
 async function connected(page: Page, scan: ScanResult | (() => ScanResult) = result) {
@@ -106,16 +112,19 @@ test('sign-out keeps the work when the server fails, then ends the session', asy
 test('review explains each part, saves a one-click choice, and accepts all suggestions', async ({ page }) => {
   const saved: Array<{ identity: string; classification: string | null }> = [];
   await page.route('**/api/classification/override', async route => { saved.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"saved":true}' }); });
-  await connected(page);
+  await connected(page, withPrints);
   await section(page, /^Review/).click();
   // Fasteners never wait for a decision.
   await expect(page.locator('.row').filter({ hasText: 'M3 Screw' })).toHaveCount(0);
-  const bearing = page.locator('.row').filter({ hasText: 'Bearing' });
-  await expect(bearing).toContainText('Looks like standard hardware: confirm it is bought');
-  await bearing.getByRole('button', { name: 'Mark Buy' }).click();
+  // Standard hardware is decided automatically now; only how team-made parts are produced waits for a person.
   await expect(page.locator('.row').filter({ hasText: 'Bearing' })).toHaveCount(0);
+  const first = page.locator('.row').filter({ has: page.getByRole('button', { name: 'Buy' }) }).first();
+  const firstName = (await first.locator('.row-title').innerText()).trim();
+  await first.getByRole('button', { name: 'Buy', exact: true }).click();
+  await expect(page.locator('.row').filter({ hasText: firstName })).toHaveCount(0);
   expect(saved.at(-1)).toMatchObject({ classification: 'buy' });
-  const remaining = result.lines.filter(line => line.disposition === 'review' && line.suggestedDisposition && line.name !== 'Bearing').length;
+  const remaining = withPrints.lines.filter(line => line.disposition === 'review' && line.suggestedDisposition && line.name !== firstName).length;
+  expect(remaining).toBeGreaterThan(1);
   await page.getByRole('button', { name: `Accept all ${remaining}` }).click();
   await expect.poll(() => saved.length).toBe(1 + remaining);
   // The part drawer explains a decision and offers every choice.
@@ -165,7 +174,7 @@ test('STEP export polls the job, zips ready files with a manifest, and shows fai
 test('reopening the panel shows the last scan, and Not needed dismisses a part', async ({ page }) => {
   const saved: Array<{ classification: string | null }> = [];
   await page.route('**/api/classification/override', async route => { saved.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"saved":true}' }); });
-  await connected(page);
+  await connected(page, withPrints);
   let scans = 0;
   await page.route('**/api/scan?**', route => { scans++; return route.fallback(); });
   // Leaving the assembly and coming back reloads the panel; the scan is still there without scanning again.
@@ -183,6 +192,8 @@ test('reopening the panel shows the last scan, and Not needed dismisses a part',
   await page.keyboard.press('b');
   await expect(page.locator('.row').filter({ hasText: next })).toHaveCount(0);
   expect(saved.at(-1)).toMatchObject({ classification: 'buy' });
+  // Parts remain, and the highlight stays on the next one.
+  await expect(page.locator('.rows [role="listitem"]')).not.toHaveCount(0);
   await expect(page.locator('.row.focused')).toHaveCount(1);
 });
 

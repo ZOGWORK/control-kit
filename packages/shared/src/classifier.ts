@@ -112,8 +112,12 @@ function provenanceOf(line: BomLine, assemblyDocumentId: string | null): { prove
 /**
  * Deterministic precedence: manual override → exact verified SKU (Buy) → explicit metadata (process column, team
  * tag, print material) → strong provenance (standard content, linked library part with a part number, confirmed
- * match) → heuristic suggestion → Needs review. A suggestion never decides on its own; it rides along with
- * `review` so a person confirms it with one click.
+ * match) → wording and provenance → Needs review.
+ *
+ * At the owner's request (2026-10-25) a scan should need little to no review, so wording and provenance now decide
+ * Buy, Fastener, or 2D cut on their own (source `suggestion`, labeled as automatic, one click to change). Prices are
+ * unaffected: a line is priced only from an exact or confirmed match with a verified pack. What still waits for a
+ * person is how a team-designed part is made (3D print or otherwise), which the owner keeps as it is.
  */
 export function decideDisposition(line: BomLine, teamNumber: string | null, assemblyDocumentId: string | null = null): Decision {
   const { provenance, evidence: provenanceEvidence } = provenanceOf(line, assemblyDocumentId);
@@ -136,16 +140,26 @@ export function decideDisposition(line: BomLine, teamNumber: string | null, asse
   if (provenance === 'linked-library' && line.partNumber) return { ...base, disposition: 'buy', source: 'provenance', confidence: 'medium', evidence: [...base.evidence, 'library parts with a part number are usually purchased; no catalog match yet'] };
   // Everything below is a suggestion for a person to confirm.
   const team = teamNumber && new RegExp(`(?<!\\d)${teamNumber}(?!\\d)`).test(line.name) ? `team number ${teamNumber} in name` : null;
-  if (line.matchStatus === 'possible') return { ...base, disposition: 'review', source: 'suggestion', confidence: 'low', suggestion: 'buy', reviewReason: `Possible vendor match ${line.vendor?.sku ?? ''}: confirm it or choose how this part is made`.replace('  ', ' ') };
+  const auto = (disposition: Disposition, confidence: Confidence, why: string): Decision => ({ ...base, disposition, source: 'suggestion', confidence, evidence: [...base.evidence, why, 'decided automatically; change it if wrong'] });
+  // A possible match on a part from another document is a bought part whose product is still to confirm (it is not
+  // priced until then). On a team's own part, a name resemblance proves nothing, so the other rules decide.
+  // Print wording wins: a printed part with a loose catalog resemblance is still printed.
+  if (line.matchStatus === 'possible' && provenance !== 'team-design' && !printWords.test(text)) return auto('buy', 'medium', `possible vendor match ${line.vendor?.sku ?? ''}; confirm the product to price it`.replace('  ', ' '));
   if (printWords.test(text)) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'medium', suggestion: 'print', evidence: [...base.evidence, 'print wording in name', ...(team ? [team] : [])], reviewReason: 'Name says it is printed; confirm 3D print' };
   for (const [pattern, label] of vendorNumbers) {
     const found = text.match(pattern);
-    if (found) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'medium', suggestion: 'buy', evidence: [...base.evidence, `${label} "${found[0]}" in name`], reviewReason: `Name includes a ${label} (${found[0]}): confirm it's bought` };
+    if (found) return auto('buy', 'medium', `${label} "${found[0]}" in name`);
   }
-  if (hardwareWords.test(text)) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'medium', suggestion: 'buy', evidence: [...base.evidence, 'standard hardware wording in name'], reviewReason: 'Looks like standard hardware: confirm it is bought' };
-  if (flatWords.test(text) && provenance !== 'linked-library') return { ...base, disposition: 'review', source: 'suggestion', confidence: 'low', suggestion: 'cut-2d', evidence: [...base.evidence, 'flat-part wording in name', ...(team ? [team] : [])], reviewReason: 'Looks like a custom plate: choose 2D cut, CNC, or 3D print' };
+  // "Screw Mount Bracket" or "Nut Holder" is a part the team makes: custom-part words keep hardware wording from buying it.
+  if (hardwareWords.test(text) && !customWords.test(text)) return auto('buy', 'medium', 'standard hardware wording in name');
+  // A plate the name says is machined ("CNC milled side plate") is CNC; any other plate is 2D cut.
+  if (flatWords.test(text) && provenance !== 'linked-library') {
+    const machined = /\b(?:cnc|mill(?:ed|ing)?|machined|lathe)\b/i.test(text);
+    return { ...auto(machined ? 'cnc' : 'cut-2d', 'low', machined ? 'flat part with machining wording in name' : 'flat-part wording in name'), evidence: [...base.evidence, machined ? 'flat part with machining wording in name' : 'flat-part wording in name', ...(team ? [team] : []), 'decided automatically; change it if wrong'] };
+  }
   if (provenance === 'team-design' && (customWords.test(text) || team)) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'low', suggestion: 'print', evidence: [...base.evidence, ...(team ? [team] : ['custom-part wording in name'])], reviewReason: 'Team-designed part: choose how it is made' };
-  if (provenance === 'linked-library') return { ...base, disposition: 'review', source: 'none', confidence: 'low', reviewReason: 'Library part without a part number: add its vendor SKU or choose a disposition' };
+  // Parts linked from another document (vendor and parts-library CAD) are almost always bought.
+  if (provenance === 'linked-library') return auto('buy', 'low', 'linked from another document: parts libraries hold bought parts');
   if (provenance === 'team-design') return { ...base, disposition: 'review', source: 'none', confidence: 'low', reviewReason: 'Team-designed part: choose how it is made' };
   return { ...base, disposition: 'review', source: 'none', confidence: 'low', reviewReason: 'No part number, vendor match, or process information' };
 }

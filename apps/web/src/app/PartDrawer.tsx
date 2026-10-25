@@ -7,7 +7,8 @@ import { Drawer, DrawerContent, useDrawerItem } from '../components/arc/drawer/d
 import type { ControlKit } from './useControlKit';
 import { money, vendorLabel, vendorLookup } from './model';
 
-const sourceLabel: Record<BomLine['dispositionSource'], string> = { manual: 'Chosen by your team', 'exact-sku': 'Exact vendor SKU', 'explicit-metadata': 'From Onshape data', provenance: 'From where the part comes from', suggestion: 'Suggested', none: 'Not decided' };
+/** A `suggestion` that still waits in Review reads "Suggested"; one that decided the part reads as automatic. */
+const sourceLabel: Record<BomLine['dispositionSource'], string> = { manual: 'Chosen by your team', 'exact-sku': 'Exact vendor SKU', 'explicit-metadata': 'From Onshape data', provenance: 'From where the part comes from', suggestion: 'Decided automatically; change it if wrong', none: 'Not decided' };
 const matchLabel: Record<BomLine['matchStatus'], string> = { exact: 'Exact SKU match', confirmed: 'Confirmed by you', possible: 'Possible match', rejected: 'Rejected by you', unmatched: 'No match' };
 
 /** Configuration values a person set, without Onshape's encoded parameter ids or values left at Default. */
@@ -68,7 +69,7 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
     {line.purchasedAssembly && <p className="small">Listed as one product because {line.purchasedAssembly.reason}. Its {line.purchasedAssembly.parts} internal part{line.purchasedAssembly.parts === 1 ? '' : 's'} (gearbox, bearings, screws inside it) are not listed separately.{line.purchasedAssembly.includes?.length ? ` It also includes ${line.purchasedAssembly.includes.join(', ')}, placed beside it from the same imported Part Studio.` : ''}</p>}
 
     <section className="stack" aria-labelledby="how">
-      <div><h3 id="how">How the team gets it</h3><p className="muted small">{dispositionLabel[line.disposition]}. {sourceLabel[line.dispositionSource]}.{saving && ' Saving…'}</p></div>
+      <div><h3 id="how">How the team gets it</h3><p className="muted small">{dispositionLabel[line.disposition]}. {line.dispositionSource === 'suggestion' && line.disposition === 'review' ? 'Suggested' : sourceLabel[line.dispositionSource]}.{saving && ' Saving…'}</p></div>
       {line.reviewReason && <p className="small">{line.reviewReason}</p>}
       {line.dispositionEvidence.length > 0 && <ul className="evidence">{line.dispositionEvidence.map(item => <li key={item}>{item}</li>)}</ul>}
       {line.disposition === 'ignore' && <p className="muted small">Marked not needed: it is listed but not bought, made, or reviewed. Choose another option to bring it back.</p>}

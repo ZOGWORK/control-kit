@@ -42,10 +42,11 @@ describe('manufacturing disposition', () => {
     expect(classify(line('Custom intake bracket'))).toMatchObject({ disposition: 'review', suggestedDisposition: 'print', provenance: 'team-design', dispositionSource: 'suggestion', classification: 'unknown' });
     expect(classify(line('Intake guide printed'))).toMatchObject({ disposition: 'review', suggestedDisposition: 'print', dispositionConfidence: 'medium' });
   });
-  it('routes a flat custom plate to 2D-cut review, never straight to print', () => {
+  it('decides a flat custom plate is 2D cut automatically, never straight to print', () => {
     const plate = classify(line('Drivetrain side plate'));
-    expect(plate).toMatchObject({ disposition: 'review', suggestedDisposition: 'cut-2d' });
-    expect(plate.reviewReason).toContain('custom plate');
+    expect(plate).toMatchObject({ disposition: 'cut-2d', dispositionSource: 'suggestion', dispositionConfidence: 'low', reviewReason: null });
+    expect(plate.dispositionEvidence).toContain('decided automatically; change it if wrong');
+    expect(classify(line('CNC milled side plate')).disposition).toBe('cnc');
     const bought = line('Pattern plate');
     bought.matchStatus = 'exact'; bought.vendor = vendor('1121-0016-0048');
     expect(classify(bought).disposition).toBe('buy');
@@ -84,12 +85,14 @@ describe('manufacturing disposition', () => {
     // Fasteners come from stock, standard content or not.
     expect(classify(line('Socket head cap screw M3x8', { isStandardContent: true }))).toMatchObject({ disposition: 'hardware' });
     expect(classify(line('Hub', { documentId: 'ftc-library', partNumber: '1309-0016-0006' }))).toMatchObject({ disposition: 'buy', provenance: 'linked-library', dispositionConfidence: 'medium' });
-    expect(classify(line('Mystery bracket', { documentId: 'ftc-library' }))).toMatchObject({ disposition: 'review', provenance: 'linked-library' });
+    // Without a part number a linked library part is still a bought part, decided automatically with low confidence.
+    expect(classify(line('Mystery bracket', { documentId: 'ftc-library' }))).toMatchObject({ disposition: 'buy', provenance: 'linked-library', dispositionSource: 'suggestion', dispositionConfidence: 'low' });
   });
-  it('suggests Buy for vendor part numbers and standard hardware in names, from the live HORS scan', () => {
+  it('decides Buy for vendor part numbers and standard hardware in names, from the live HORS scan', () => {
     const suggested = (name: string, extra: Partial<AssemblyInstance> = {}) => classify(line(name, extra));
-    expect(suggested('2302 Series Aluminum, MOD 0.8, Hub Mount Gear (14mm Bore, 48 Tooth)')).toMatchObject({ disposition: 'review', suggestedDisposition: 'buy', dispositionSource: 'suggestion' });
-    expect(suggested('2106-4008-0560', { documentId: 'library' })).toMatchObject({ suggestedDisposition: 'buy', reviewReason: "Name includes a goBILDA/ServoCity part number (2106-4008-0560): confirm it's bought" });
+    expect(suggested('2302 Series Aluminum, MOD 0.8, Hub Mount Gear (14mm Bore, 48 Tooth)')).toMatchObject({ disposition: 'buy', dispositionSource: 'suggestion', reviewReason: null });
+    expect(suggested('2106-4008-0560', { documentId: 'library' })).toMatchObject({ disposition: 'buy', reviewReason: null });
+    expect(suggested('2106-4008-0560', { documentId: 'library' }).dispositionEvidence).toContain('goBILDA/ServoCity part number "2106-4008-0560" in name');
     // Fasteners need no decision: they are listed as stock hardware, not suggested for Buy one by one.
     for (const name of ['5103 Gearbox Base Mounting Screw M3 x 5mm length SHCS)_91290A110', 'M4 x 0.7mm Locknut', 'Roller E-Clip', 'Button Head Screw M4 x 12'])
       expect(suggested(name, { documentId: 'library' })).toMatchObject({ disposition: 'hardware', reviewReason: null });
@@ -98,18 +101,31 @@ describe('manufacturing disposition', () => {
     for (const name of ['3414 Series 5mm HTD Pitch Set Screw Pinion Timing Belt Pulley (8mm REX Bore, 24 Tooth) 3414-4008-0024', '2920 Series Steel Set-Screw Collar (8mm REX Bore)'])
       expect(suggested(name, { documentId: 'library' }).disposition).not.toBe('hardware');
     expect(suggested('[LS] Button Head M4x5').disposition).toBe('hardware');
-    expect(suggested('8mm REX Ball Bearing', { documentId: 'library' })).toMatchObject({ suggestedDisposition: 'buy', reviewReason: 'Looks like standard hardware: confirm it is bought' });
-    expect(suggested('80 Tooth x 9mm HTD5 Belt').suggestedDisposition).toBe('buy');
-    // Print wording still wins over hardware wording, and a plain plate still goes to 2D-cut review.
-    expect(suggested('Printed bearing holder').suggestedDisposition).toBe('print');
-    expect(suggested('Inner Plate').suggestedDisposition).toBe('cut-2d');
-    // A suggestion never decides: nothing here is Buy until a person or a catalog match says so.
-    expect(suggested('80 Tooth x 9mm HTD5 Belt').disposition).toBe('review');
+    expect(suggested('8mm REX Ball Bearing', { documentId: 'library' })).toMatchObject({ disposition: 'buy', reviewReason: null });
+    expect(suggested('80 Tooth x 9mm HTD5 Belt').disposition).toBe('buy');
+    // Print wording still wins over hardware wording (a print stays a question for a person), and a plain plate is 2D cut.
+    expect(suggested('Printed bearing holder')).toMatchObject({ disposition: 'review', suggestedDisposition: 'print' });
+    expect(suggested('Inner Plate').disposition).toBe('cut-2d');
+    // Automatic Buy never prices anything: only an exact or confirmed match with a verified pack does.
+    expect(suggested('80 Tooth x 9mm HTD5 Belt').lineTotalUsd).toBeNull();
   });
-  it('asks a person about a possible vendor match instead of buying it', () => {
-    const value = line('96mm wheel');
+  it('buys a linked part with a possible vendor match but never prices it, and ignores a name resemblance on a team part', () => {
+    const value = line('96mm wheel', { documentId: 'library' });
     value.matchStatus = 'possible'; value.vendor = vendor('3606-0014-0096');
-    expect(classify(value)).toMatchObject({ disposition: 'review', suggestedDisposition: 'buy' });
+    expect(classify(value)).toMatchObject({ disposition: 'buy', dispositionSource: 'suggestion' });
+    expect(classify(value).lineTotalUsd).toBeNull();
+    // From the HORS panel: a team's own cart base resembled AndyMark am-5230_base; that is no reason to buy it.
+    const teamPart = line('Robot Parts Cart Diamond Plate Base');
+    teamPart.matchStatus = 'possible'; teamPart.vendor = vendor('am-5230_base');
+    expect(classify(teamPart).disposition).not.toBe('buy');
+    // Print wording wins over a loose match on a linked part.
+    const printed = line('Printed wheel hub', { documentId: 'library' });
+    printed.matchStatus = 'possible'; printed.vendor = vendor('1309-0016-4008');
+    expect(classify(printed)).toMatchObject({ disposition: 'review', suggestedDisposition: 'print' });
+    // Custom wording in the description keeps a hardware name from being bought.
+    const block = line('Bearing block');
+    block.description = 'Custom holder for intake';
+    expect(classify(block).disposition).not.toBe('buy');
     value.matchStatus = 'confirmed';
     expect(classify(value)).toMatchObject({ disposition: 'buy', dispositionSource: 'provenance' });
   });
