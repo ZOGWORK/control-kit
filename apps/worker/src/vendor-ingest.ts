@@ -143,9 +143,10 @@ export type ParsedPage = { records: VendorRecord[]; skip: SkipReason | null };
  * Vendors whose stores name every multi-unit product as one ("25 Pack" in the name or variant label, or a "-PK4" SKU),
  * so a product without that wording is sold as one unit. Checked across each full catalog on 2026-10-24: goBILDA (1,993
  * records) and REV (278) had no fastener or hardware product without pack wording that was not a single unit. ServoCity
- * is not here: it sells packs like "6-32 Socket Head Machine Screw" without wording, stating the pack in a product field.
+ * names packs in a "Pack Info" product field instead of the name ("6-32 Socket Head Machine Screw": 25 Pack); with that field
+ * read, all 208 of its screw, nut, and washer products in the 4,319-record crawl carried pack evidence.
  */
-const labelsEveryPack: VendorId[] = ['gobilda', 'rev'];
+const labelsEveryPack: VendorId[] = ['gobilda', 'servocity', 'rev'];
 /**
  * Pack evidence beyond the product's own wording, strongest first: a "Pack Info" product field (ServoCity), a "-PKn" SKU
  * suffix (REV), then the single-unit convention above. Records that already carry wording-based evidence are unchanged.

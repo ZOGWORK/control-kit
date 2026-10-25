@@ -70,6 +70,11 @@ describe('staged catalog publish', () => {
     await expect(publishStaged('gobilda', kv, 'nothing')).rejects.toThrow('not staged');
     expect(kv.values.has(manifestKey('gobilda', 'short'))).toBe(true);
   });
+  it('accepts a price written with a thousands separator', async () => {
+    const [record] = normalizeFeedRows('rev', [{ sku: 'REV-25-3388', name: 'Kit', price: '2000', url: 'https://www.revrobotics.com/rev-25-3388/' }], at).records;
+    const [check] = await spotCheck([record], async () => new Response('REV-25-3388 <span>$2,000.00</span>'), 1, 0);
+    expect(check).toMatchObject({ skuOnPage: true, priceOnPage: true });
+  });
   it('spot-checks a sample against the vendor page', async () => {
     const sample = records(3);
     const checks = await spotCheck(sample, async url => new Response(url.includes('/p/') ? 'SKU 1000-0000-0001 $1.00' : ''), 3, 0, () => 0.5);
