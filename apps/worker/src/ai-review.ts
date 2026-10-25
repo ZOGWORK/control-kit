@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { aiReviewHash, aiReviewInstructions, aiReviewSchema, parseAiReview, AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, type AiProvider, type AiReviewItem, type AiReviewRequest } from '@control-kit/shared';
+import { aiReviewHash, aiReviewInstructions, aiReviewSchema, configurationValues, dispositions, normalizeSku, parseAiReview, AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, type AiProvider, type AiReviewItem, type AiReviewLine, type AiReviewRequest, type ScanResult } from '@control-kit/shared';
+import type { AllowanceReply, AllowanceRequest } from './ai-allowance';
 import type { Kv } from './index';
 
 /**
@@ -7,13 +8,18 @@ import type { Kv } from './index';
  * rate limit or a server error, never on an auth or configuration error. Neither is retried. Keys are Worker secrets.
  * With no key the review is off and everything else is unchanged.
  */
-export type AiEnv = { APP_STATE: Kv; GEMINI_API_KEY?: string; ANTHROPIC_API_KEY?: string; GEMINI_MODEL?: string; ANTHROPIC_MODEL?: string };
-export const aiReviewEnabled = (env: AiEnv) => Boolean(env.GEMINI_API_KEY?.trim() || env.ANTHROPIC_API_KEY?.trim());
+/** `AI_ALLOWANCE` is the Durable Object namespace holding the daily allowance (`ai-allowance.ts`). */
+export type AiEnv = { APP_STATE: Kv; GEMINI_API_KEY?: string; ANTHROPIC_API_KEY?: string; GEMINI_MODEL?: string; ANTHROPIC_MODEL?: string;
+  AI_ALLOWANCE?: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } } };
+/** A key counts only when it holds something: a blank secret is no key. */
+const hasGemini = (env: AiEnv) => Boolean(env.GEMINI_API_KEY?.trim());
+const hasAnthropic = (env: AiEnv) => Boolean(env.ANTHROPIC_API_KEY?.trim());
+export const aiReviewEnabled = (env: AiEnv) => (hasGemini(env) || hasAnthropic(env)) && Boolean(env.AI_ALLOWANCE);
 const geminiModel = (env: AiEnv) => env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 const anthropicModel = (env: AiEnv) => env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
 /** Answers are cached per request and per configured models, so changing a model never serves another model's answer. */
 const cacheKeyFor = async (env: AiEnv, request: AiReviewRequest) => `ai-review:${await aiReviewHash(request)}:${geminiModel(env)}:${anthropicModel(env)}`;
-/** Reviews across all people per day: a hard ceiling on what one server key can spend. */
+/** Reviews across all people per day: a hard ceiling on what one server key can spend (held atomically by `AI_ALLOWANCE`). */
 export const AI_GLOBAL_DAILY_LIMIT = 300;
 const TIMEOUT_MS = 90_000;
 const CACHE_SECONDS = 30 * 24 * 3600;
@@ -42,7 +48,7 @@ async function askGemini(env: AiEnv, request: AiReviewRequest, fetcher: typeof f
   try {
     response = await fetcher(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST', signal: AbortSignal.timeout(TIMEOUT_MS),
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY! },
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY!.trim() },
       body: JSON.stringify({ systemInstruction: { parts: [{ text: aiReviewInstructions }] }, contents: [{ role: 'user', parts: [{ text: JSON.stringify(request) }] }],
         generationConfig: { responseMimeType: 'application/json', responseSchema: geminiSchema } }),
     });
@@ -60,7 +66,7 @@ async function askGemini(env: AiEnv, request: AiReviewRequest, fetcher: typeof f
 
 async function askAnthropic(env: AiEnv, request: AiReviewRequest, fetcher: typeof fetch) {
   // No SDK retries: a 429 or 5xx is surfaced, never retried blindly.
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY!, maxRetries: 0, timeout: TIMEOUT_MS, fetch: fetcher });
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY!.trim(), maxRetries: 0, timeout: TIMEOUT_MS, fetch: fetcher });
   try {
     const message = await client.beta.messages.create({
       model: anthropicModel(env), max_tokens: 16000,
@@ -124,30 +130,63 @@ export async function cachedAiReview(env: AiEnv, request: AiReviewRequest): Prom
  * short-lived lock refuses a second review while one is running, and the count is written before the call. Two
  * requests landing within KV's propagation window could still both pass; the providers' own quotas are the hard cap.
  */
-export async function reserveAiReview(env: AiEnv, userId: string, limit = 20): Promise<string | null> {
-  const day = new Date().toISOString().slice(0, 10);
-  const lock = `ai-busy:${userId}`;
-  if (await env.APP_STATE.get(lock)) return 'An AI review is already running for you. Try again when it finishes.';
-  const countKey = `ai-user:${userId}:${day}`;
-  const globalKey = `ai-global:${day}`;
-  const used = Number(await env.APP_STATE.get(countKey) ?? 0);
-  if (used >= limit) return `AI review limit reached for today (${limit} reviews). It resets at midnight UTC.`;
-  const everyone = Number(await env.APP_STATE.get(globalKey) ?? 0);
-  if (everyone >= AI_GLOBAL_DAILY_LIMIT) return 'AI review has reached its limit for today. It resets at midnight UTC.';
-  // Longer than the slowest review (Gemini, then Anthropic, 90 seconds each).
-  await env.APP_STATE.put(lock, '1', { expirationTtl: 200 });
-  await env.APP_STATE.put(countKey, String(used + 1), { expirationTtl: 2 * 24 * 3600 });
-  await env.APP_STATE.put(globalKey, String(everyone + 1), { expirationTtl: 2 * 24 * 3600 });
-  return null;
+async function allowance(env: AiEnv, body: AllowanceRequest): Promise<AllowanceReply> {
+  const stub = env.AI_ALLOWANCE!.get(env.AI_ALLOWANCE!.idFromName('global'));
+  return await (await stub.fetch(new Request('https://allowance/', { method: 'POST', body: JSON.stringify(body) }))).json() as AllowanceReply;
 }
-export const releaseAiReview = (env: AiEnv, userId: string) => env.APP_STATE.delete(`ai-busy:${userId}`);
+const refusals: Record<Exclude<AllowanceReply, { ok: true }>['reason'], (limit: number) => string> = {
+  busy: () => 'An AI review is already running for you. Try again when it finishes.',
+  'user-limit': limit => `AI review limit reached for today (${limit} reviews). It resets at midnight UTC.`,
+  'global-limit': () => 'AI review has reached its limit for today. It resets at midnight UTC.',
+};
+/** Reserves one of the person's daily reviews and one of everyone's, atomically, before any provider is asked. */
+export async function reserveAiReview(env: AiEnv, userId: string, limit = 20): Promise<string | null> {
+  // The lock outlasts the slowest review (Gemini, then Anthropic, 90 seconds each).
+  const reply = await allowance(env, { action: 'reserve', userId, day: new Date().toISOString().slice(0, 10), perUser: limit, global: AI_GLOBAL_DAILY_LIMIT, lockMs: 200_000 });
+  return reply.ok ? null : refusals[reply.reason](limit);
+}
+export const releaseAiReview = async (env: AiEnv, userId: string) => { await allowance(env, { action: 'release', userId }); };
+
+/** Text without control characters (code points below 32, and 127), cut to `max`. */
+const plain = (value: unknown, max: number) => typeof value === 'string' ? [...value].map(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? ' ' : char).join('').slice(0, max) : '';
+/**
+ * The request as it is sent: every line rebuilt from the caller's own stored scan (name, description, material, part
+ * number, configuration, places used, quantity, source, review reason), with only the browser's catalog candidates
+ * and conclusion kept, both shape-checked. Unknown fields are dropped. Null when a line is not in that scan.
+ */
+export function trustedAiRequest(request: AiReviewRequest, scan: ScanResult): AiReviewRequest | null {
+  if (request.assembly !== scan.assemblyName) return null;
+  const byName = new Map([...scan.lines, ...scan.suppressed].map(line => [line.name, line]));
+  const statuses = ['unmatched', 'possible', 'confirmed', 'exact', 'rejected'];
+  const lines: AiReviewLine[] = [];
+  for (const asked of request.lines) {
+    const line = byName.get(asked.name);
+    if (!line || !/^L\d{1,3}$/.test(asked.id)) return null;
+    const current = asked.current ?? {} as AiReviewLine['current'];
+    lines.push({
+      id: asked.id, name: line.name, description: line.description, material: line.material, partNumber: line.partNumber,
+      configuration: configurationValues(line.configuration), usedIn: line.instancePaths.slice(0, 3), quantity: line.qty,
+      source: line.isStandardContent ? 'standard content' : line.documentId === scan.documentId ? 'this document' : 'linked document',
+      current: {
+        disposition: dispositions.includes(current.disposition) ? current.disposition : 'review',
+        suggestion: dispositions.includes(current.suggestion as never) ? current.suggestion : null,
+        match: statuses.includes(current.match) ? current.match : 'unmatched', reason: line.reviewReason, packUnknown: current.packUnknown === true,
+      },
+      // Candidates come from the browser's catalog match: each must be a well-formed catalog id for its own SKU.
+      candidates: asked.candidates.filter(candidate => ['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'].includes(candidate.vendor)
+        && /^[A-Za-z0-9._-]{1,40}$/.test(candidate.sku) && candidate.id === `${candidate.vendor}:${normalizeSku(candidate.sku, candidate.vendor)}`)
+        .map(candidate => ({ id: candidate.id, vendor: candidate.vendor, sku: candidate.sku, name: plain(candidate.name, 160) })),
+    });
+  }
+  return { version: AI_REVIEW_VERSION, assembly: scan.assemblyName, leftOut: Math.max(0, Math.min(Number(request.leftOut) || 0, 10_000)), lines };
+}
 
 export async function reviewWithAi(env: AiEnv, request: AiReviewRequest, fetcher: typeof fetch = fetch): Promise<AiOutcome> {
   if (!aiReviewEnabled(env)) return { ok: false, status: 501, error: 'AI review is not set up on this server. Everything else works as before.' };
   const saved = await cachedAiReview(env, request);
   if (saved) return saved;
   const cacheKey = await cacheKeyFor(env, request);
-  const order: AiProvider[] = env.GEMINI_API_KEY ? ['gemini', ...(env.ANTHROPIC_API_KEY ? ['anthropic' as const] : [])] : ['anthropic'];
+  const order: AiProvider[] = hasGemini(env) ? ['gemini', ...(hasAnthropic(env) ? ['anthropic' as const] : [])] : ['anthropic'];
   let failure: ProviderError | null = null;
   for (const provider of order) {
     try {

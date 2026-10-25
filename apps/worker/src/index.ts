@@ -3,14 +3,15 @@ import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from '
 import { applyMatchDecision, catalogReadKey, decisionRecord, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings, type VendorId } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
-import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, reviewWithAi, validAiRequest } from './ai-review';
+import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, reviewWithAi, trustedAiRequest, validAiRequest, type AiEnv } from './ai-review';
+export { AiAllowance } from './ai-allowance';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 import { linePreview, previewCacheKey, PreviewUnavailableError } from './preview';
 
 export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string;
   /** Optional AI review keys (Worker secrets). Without either, the review is off and nothing else changes. */
-  GEMINI_API_KEY?: string; ANTHROPIC_API_KEY?: string; GEMINI_MODEL?: string; ANTHROPIC_MODEL?: string }
+  GEMINI_API_KEY?: string; ANTHROPIC_API_KEY?: string; GEMINI_MODEL?: string; ANTHROPIC_MODEL?: string; AI_ALLOWANCE?: AiEnv['AI_ALLOWANCE'] }
 type Tokens = { access_token: string; refresh_token: string };
 /** `savedAt` (ms) lets a session refresh its KV TTL at most once a day instead of on every request. */
 type Session = { tokens: Tokens; user: { id: string; name: string }; savedAt?: number };
@@ -161,8 +162,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!stateData) return reply({ error: 'Authorization expired. Reconnect Onshape.' }, 400);
     // One use: a replayed redirect (same state) is refused. Written only after Onshape sent the person back.
     if (await env.APP_STATE.get(`oauth-used:${state}`)) return reply({ error: 'Authorization expired. Reconnect Onshape.' }, 400);
-    await env.APP_STATE.put(`oauth-used:${state}`, '1', { expirationTtl: 600 });
     const tokens = await exchange(env, { grant_type: 'authorization_code', code, redirect_uri: env.ONSHAPE_OAUTH_REDIRECT_URI });
+    // Written only once Onshape accepted the code, so made-up callbacks write nothing.
+    await env.APP_STATE.put(`oauth-used:${state}`, '1', { expirationTtl: 600 });
     const ledger = new RequestLedger('oauth-profile');
     const profile = await countedFetch(ledger, `${env.ONSHAPE_API_BASE}/api/users/sessioninfo`, { headers: { authorization: `Bearer ${tokens.access_token}` }, signal: AbortSignal.timeout(10000) })
       .finally(() => persistLedger(env.APP_STATE, ledger).catch(() => undefined));
@@ -277,15 +279,15 @@ async function route(request: Request, env: Env): Promise<Response> {
     const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${body.scanId}`);
     const scanned = raw ? JSON.parse(raw) as ScanResult : null;
     if (!scanned || scanned.documentId !== body.documentId) return reply({ error: 'Scan this assembly again.' }, 409);
-    // The review may only carry parts of that scan, so the key cannot be used to send arbitrary text to a model.
-    const names = new Set([...scanned.lines, ...scanned.suppressed].map(line => line.name));
-    if (body.request.assembly !== scanned.assemblyName || body.request.lines.some(line => !names.has(line.name))) return reply({ error: 'These parts are not in your scan. Rescan and try again.' }, 409);
+    // The review is rebuilt from that scan, so the key cannot be used to send arbitrary text to a model.
+    const trusted = trustedAiRequest(body.request, scanned);
+    if (!trusted) return reply({ error: 'These parts are not in your scan. Rescan and try again.' }, 409);
     // A saved answer is free; anything else takes one of the person's daily reviews, reserved before the call.
-    let outcome = await cachedAiReview(env, body.request);
+    let outcome = await cachedAiReview(env, trusted);
     if (!outcome) {
       const refused = await reserveAiReview(env, current.data.user.id);
       if (refused) return reply({ error: refused }, 429);
-      try { outcome = await reviewWithAi(env, body.request); }
+      try { outcome = await reviewWithAi(env, trusted); }
       finally { await releaseAiReview(env, current.data.user.id); }
     }
     return outcome.ok ? reply({ items: outcome.items, provider: outcome.provider, cached: outcome.cached, usage: outcome.usage }) : reply({ error: outcome.error }, outcome.status);
@@ -430,9 +432,14 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (error instanceof SessionExpiredError) return reply({ error: 'Reconnect Onshape.' }, 401);
       throw error;
     } finally { await persistLedger(env.APP_STATE, ledger).catch(() => undefined); }
-    // A poll that changed nothing (a translation still running, or a finished job) writes nothing.
-    const after = JSON.stringify(job);
-    if (after !== before) await env.APP_STATE.put(jobKey(userId, job.jobId), after, { expirationTtl: 3600 });
+    // A poll that changed nothing writes nothing. One that only moved the polling position (a large export whose
+    // translations are still running) saves that position at most every 15 seconds; parts' progress always saves.
+    const progress = (value: ExportJob) => JSON.stringify({ ...value, cursor: undefined, positionSavedAt: undefined });
+    const moved = before && progress(job) === progress(JSON.parse(before) as ExportJob);
+    if (JSON.stringify(job) !== before && (!before || !moved || Date.now() - (job.positionSavedAt ?? 0) > 15_000)) {
+      job.positionSavedAt = Date.now();
+      await env.APP_STATE.put(jobKey(userId, job.jobId), JSON.stringify(job), { expirationTtl: 3600 });
+    }
     return reply(jobSummary(job));
   }
   return reply({ error: 'Not found' }, 404);
