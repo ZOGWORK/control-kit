@@ -487,7 +487,7 @@ describe('M2 scan stream against mock Onshape', () => {
   });
   it('keeps a linked part microversion and configuration in its identity and source link', () => {
     const result = aggregateAssembly({ rootAssembly: { instances: [{ id: 'linked', name: 'Linked Gear', type: 'Part', documentId: 'other-doc', elementId: 'studio', partId: 'gear', documentMicroversion: 'revision-1', configuration: 'size=large' }] } }, { documentId: 'doc1', workspaceOrVersion: 'w', workspaceOrVersionId: 'work1', elementId: 'assembly' }, 'Robot');
-    expect(result.lines[0]).toMatchObject({ sourceType: 'm', sourceId: 'revision-1', configuration: 'size=large', partStudioUrl: 'https://cad.onshape.com/documents/other-doc/m/revision-1/e/studio' });
+    expect(result.lines[0]).toMatchObject({ sourceType: 'm', sourceId: 'revision-1', configuration: 'size=large', partStudioUrl: 'https://cad.onshape.com/documents/other-doc' });
   });
   it('signals reconnect and counts the requests if token refresh fails while reading the BOM', async () => {
     const cookie = await connectedCookie();

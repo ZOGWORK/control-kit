@@ -123,7 +123,9 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
     const bucket = isSuppressed ? suppressed : active;
     const found = bucket.get(key);
     if (found) { found.qty++; found.instancePaths.push(path.join(' > ')); return found; }
-    const source = sourceType && sourceId ? `${sourceType}/${encodeURIComponent(sourceId)}` : '';
+    // Links use the workspace or version a person can open; a microversion link (the exact scanned revision) does not open from outside Onshape.
+    // With no openable source, the link opens the document itself.
+    const source = exportSource ? `${exportSource.type}/${encodeURIComponent(exportSource.id)}` : '';
     const name = partNames.get(`${instance.documentId}:${instance.elementId}:${partId}`) ?? instance.name.replace(/\s*<\d+>$/, '');
     bucket.set(key, { bomLineKey: key, name, description: null, documentId: instance.documentId, elementId: instance.elementId, partId, partNumber: instance.partNumber ?? null, configuration, sourceType, sourceId, qty: 1, packsToOrder: null, lineTotalUsd: null, suppressed: isSuppressed,
       instancePaths: [path.join(' > ')], massKg: null, material: null, missingMetadataReason: null, vendor: null, alternatives: [], matchConfidence: 0, matchStatus: 'unmatched', matchReasons: [], classification: 'unknown', classificationScore: 0,

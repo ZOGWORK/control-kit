@@ -37,6 +37,9 @@ export function useControlKit(context: URLSearchParams) {
   const [settings, setSettings] = useState<UserSettings>({ teamNumber: null });
   const [savingSettings, setSavingSettings] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
+  /** Lines whose choice is being saved. Saves run side by side, so deciding the next part never waits for the last one. */
+  const [saving, setSaving] = useState<ReadonlySet<string>>(new Set());
+  const markSaving = (key: string, on: boolean) => setSaving(current => { const next = new Set(current); if (on) next.add(key); else next.delete(key); return next; });
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
   const [excel, setExcel] = useState<'idle' | 'working' | 'failed'>('idle');
   const [step, setStep] = useState<ExportState | null>(null);
@@ -207,19 +210,25 @@ export function useControlKit(context: URLSearchParams) {
 
   /** Confirm or reject a possible vendor match; the line updates at once and rolls back if saving fails. */
   async function decide(line: BomLine, decision: 'confirmed' | 'rejected') {
-    if (!result || !line.vendor || pending) return;
-    setPending(line.bomLineKey);
+    if (!result || !line.vendor || pending || saving.has(line.bomLineKey)) return;
+    markSaving(line.bomLineKey, true);
     const generation = scanGeneration.current;
-    const before = result;
-    const decided = applyMatchDecision(result, line.bomLineKey, decision);
-    setResult(classifyScan(decided, settings, overridesOf(decided)));
+    const vendor = line.vendor;
+    const previous = { matchStatus: line.matchStatus, vendor: line.vendor, alternatives: line.alternatives };
+    setResult(current => { if (!current) return current; const decided = applyMatchDecision(current, line.bomLineKey, decision); return classifyScan(decided, settings, overridesOf(decided)); });
     try {
-      const response = await postJson('/api/matches/decision', { documentId: result.documentId, lineKey: line.bomLineKey, decision, vendorId: line.vendor.vendorId, normalizedSku: line.vendor.normalizedSku });
+      const response = await postJson('/api/matches/decision', { documentId: result.documentId, lineKey: line.bomLineKey, decision, vendorId: vendor.vendorId, normalizedSku: vendor.normalizedSku });
       if (!response.ok) throw new Error();
     } catch {
-      if (scanGeneration.current === generation) setResult(before);
+      // Only this line goes back; choices made on other lines meanwhile stay.
+      if (scanGeneration.current === generation) setResult(current => {
+        if (!current) return current;
+        const lines = current.lines.map(item => item.bomLineKey === line.bomLineKey ? { ...item, ...previous } : item);
+        const restored = { ...current, lines, stats: { ...current.stats } };
+        return classifyScan(restored, settings, overridesOf(restored));
+      });
       setError('Could not save the match choice. Try again.');
-    } finally { setPending(null); }
+    } finally { markSaving(line.bomLineKey, false); }
   }
 
   /** Applies one choice at once and saves it; on failure the line returns to its previous choice. */
@@ -246,10 +255,10 @@ export function useControlKit(context: URLSearchParams) {
 
   /** Set how a part is obtained (or `null` for automatic). Shared with everyone who scans the document. */
   async function setDisposition(line: BomLine, choice: ClassificationOverride | null) {
-    if (!result || pending) return;
-    setPending(line.bomLineKey);
-    try { if (!await saveChoice(line, choice)) setError('Could not save that choice. Try again.'); }
-    finally { setPending(null); }
+    if (!result || pending || saving.has(line.bomLineKey)) return;
+    markSaving(line.bomLineKey, true);
+    try { if (!await saveChoice(line, choice)) setError(`Could not save the choice for ${line.name}. Try again.`); }
+    finally { markSaving(line.bomLineKey, false); }
   }
 
   /**
@@ -402,7 +411,7 @@ export function useControlKit(context: URLSearchParams) {
     return URL.createObjectURL(await response.blob());
   }
 
-  return { showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
+  return { saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
     acceptSuggestions, bulk, pending, settings, savingSettings, saveSettings, signOut, excel, downloadExcel, downloadCsv, step, downloadStep };
 }
 export type ControlKit = ReturnType<typeof useControlKit>;

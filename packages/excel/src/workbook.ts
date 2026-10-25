@@ -36,7 +36,7 @@ function renderSheet(target: Sheet) {
 }
 const fill = (hex: string) => `<fill><patternFill patternType="solid"><fgColor rgb="FF${hex}"/><bgColor indexed="64"/></patternFill></fill>`;
 const font = (size: number, color: string, bold = false, underline = false) => `<font>${bold ? '<b/>' : ''}${underline ? '<u/>' : ''}<sz val="${size}"/><name val="Calibri"/><color rgb="FF${color}"/></font>`;
-const xf = (fontId: number, fillId: number, currency = false, wrap = false) => `<xf numFmtId="${currency ? 164 : 0}" fontId="${fontId}" fillId="${fillId}" borderId="0" xfId="0" applyFont="1" applyFill="1"${currency ? ' applyNumberFormat="1"' : ''} applyAlignment="1"><alignment vertical="center"${wrap ? ' wrapText="1"' : ''}/></xf>`;
+const xf = (fontId: number, fillId: number, currency = false, wrap = false, left = false) => `<xf numFmtId="${currency ? 164 : 0}" fontId="${fontId}" fillId="${fillId}" borderId="0" xfId="0" applyFont="1" applyFill="1"${currency ? ' applyNumberFormat="1"' : ''} applyAlignment="1"><alignment vertical="center"${left ? ' horizontal="left"' : ''}${wrap ? ' wrapText="1"' : ''}/></xf>`;
 /** Named style IDs, in the order of the `cellXfs` list below. */
 const S = {
   body: 0, bodyAlt: 1, bodySoft: 2, bold: 3, boldAlt: 4, header: 6, title: 7, band: 8,
@@ -46,7 +46,7 @@ const S = {
 const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="$#,##0.00"/></numFmts><fonts count="8">${font(11, '09090B')}${font(11, '09090B', true)}${font(11, 'FFC700', true)}${font(16, 'FFC700', true)}${font(11, 'F4F4F5')}${font(11, '725800', false, true)}${font(11, '71717A')}${font(11, 'FFC700', true)}</fonts><fills count="11"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>${['FFFFFF', 'F4F4F5', '09090B', '1F7A3A', 'C0392B', 'FFC700', '71717A', '26262C', 'FFF8D6'].map(fill).join('')}</fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="28">${[
   xf(0, 2), xf(0, 3), xf(0, 10), xf(1, 2), xf(1, 3), xf(1, 10), xf(2, 4), xf(3, 4), xf(4, 4),
   xf(4, 5), xf(4, 6), xf(0, 7), xf(4, 8), xf(7, 9), xf(0, 2, true), xf(0, 3, true), xf(0, 10, true),
-  xf(5, 2, false, true), xf(5, 3, false, true), xf(5, 10, false, true), xf(1, 2), xf(1, 10), xf(1, 10, true), xf(6, 3), xf(1, 7),
+  xf(5, 2, false, true), xf(5, 3, false, true), xf(5, 10, false, true), xf(1, 2), xf(1, 10, false, false, true), xf(1, 10, true, false, true), xf(6, 3), xf(1, 7),
   xf(0, 2, false, true), xf(0, 3, false, true), xf(6, 2, false, true),
 ].join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
 function rels(target: Sheet) { return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${target.links.map((link, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${esc(link.url)}" TargetMode="External"/>`).join('')}${target.drawing ? `<Relationship Id="rId${target.links.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>` : ''}</Relationships>`; }
@@ -122,13 +122,14 @@ function headers(target: Sheet, row: number, names: string[]) {
   names.forEach((name, index) => { put(target, row, index + 1, name, S.header); target.widths[index] = Math.max(target.widths[index], name.length + 5); });
 }
 
-const BUY_HEADERS = ['#', 'Part', 'Qty Needed', 'Pack Size', 'Packs to Order', 'Vendor', 'SKU', 'Pack Price', 'Line Total', 'Stock', 'Match', 'Product', 'Onshape part', 'Notes'];
+/** The part name links to its product page; the Onshape column opens the Part Studio that holds the part. */
+const BUY_HEADERS = ['#', 'Part', 'Qty Needed', 'Pack Size', 'Packs to Order', 'Vendor', 'SKU', 'Pack Price', 'Line Total', 'Stock', 'Match', 'Onshape Part Studio', 'Notes'];
 /**
  * One row per part the team buys, grouped by vendor. Line Total is a live `Packs × Pack Price` formula only where the match
  * is exact or confirmed and the pack size and price are verified; every other row keeps its financial cells blank.
  */
 function buySheet(result: ScanResult, now: Date) {
-  const target = sheet('Buy list', BUY_HEADERS.length, { 2: 44, 14: 52 });
+  const target = sheet('Buy list', BUY_HEADERS.length, { 2: 44, 13: 52 });
   heading(target, 'BUY LIST', result, now, 1);
   // Fasteners follow the parts to buy: listed with their CAD counts, never priced (an exact SKU would have made them Buy).
   const lines = result.lines.filter(line => line.disposition === 'buy' || line.disposition === 'hardware')
@@ -151,7 +152,7 @@ function buySheet(result: ScanResult, now: Date) {
     const body = band(index, S.body, S.bodyAlt);
     const vendor = ordered(line) ? line.vendor! : null;
     put(target, row, 1, index + 1, body);
-    put(target, row, 2, line.name, band(index, S.bold, S.boldAlt));
+    put(target, row, 2, line.name, vendor ? band(index, S.link, S.linkAlt) : band(index, S.bold, S.boldAlt), 's', vendor?.url);
     put(target, row, 3, line.qty, body);
     const pack = verifiedPack(line);
     if (pack) put(target, row, 4, pack, body); else put(target, row, 4, '', body);
@@ -163,9 +164,8 @@ function buySheet(result: ScanResult, now: Date) {
     else put(target, row, 9, '', body);
     const level = stock(line); put(target, row, 10, level.value, level.value ? level.style : body);
     put(target, row, 11, matchText[line.matchStatus], body);
-    put(target, row, 12, vendor ? 'Product page' : '', band(index, S.link, S.linkAlt), 's', vendor?.url);
-    put(target, row, 13, 'Open in Onshape', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
-    put(target, row, 14, purchaseNotes(line, result), band(index, S.wrap, S.wrapAlt));
+    put(target, row, 12, 'Open Part Studio', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+    put(target, row, 13, purchaseNotes(line, result), band(index, S.wrap, S.wrapAlt));
   });
   if (!lines.length) put(target, first, 1, 'No parts are marked Buy yet. Decide parts in Control Kit, then download again.', S.muted);
   target.filter = `A6:${cellRef(BUY_HEADERS.length, last)}`;
@@ -175,7 +175,7 @@ function buySheet(result: ScanResult, now: Date) {
 
 /** Parts the team makes, by process, with the STEP file name each one gets in the export ZIP. */
 function makeSheet(result: ScanResult, now: Date) {
-  const names = ['#', 'Part', 'Qty Needed', 'Process', 'Material', 'STEP file', 'Onshape part', 'Why'];
+  const names = ['#', 'Part', 'Qty Needed', 'Process', 'Material', 'STEP file', 'Onshape Part Studio', 'Why'];
   const target = sheet('Make', names.length, { 2: 44, 6: 44, 8: 52 });
   heading(target, 'MAKE', result, now, 1);
   put(target, 4, 1, 'STEP files come from Download STEP files in Control Kit; each file in the ZIP has the name shown here, in a folder for its process.', S.note);
@@ -193,7 +193,7 @@ function makeSheet(result: ScanResult, now: Date) {
     put(target, row, 4, shortLabel[line.disposition], body);
     put(target, row, 5, line.material ?? '', body);
     put(target, row, 6, files.get(line.bomLineKey) ?? '', body);
-    put(target, row, 7, 'Open in Onshape', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+    put(target, row, 7, 'Open Part Studio', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
     put(target, row, 8, line.dispositionEvidence.join('; '), band(index, S.wrap, S.wrapAlt));
   });
   if (!lines.length) put(target, 7, 1, 'No parts are marked to make yet.', S.muted);
@@ -204,7 +204,7 @@ function makeSheet(result: ScanResult, now: Date) {
 
 /** Parts without a decision, with Control Kit's suggestion and any possible product to confirm. */
 function reviewSheet(result: ScanResult, now: Date) {
-  const names = ['#', 'Part', 'Qty Needed', 'Suggested', 'Possible product', 'Why it needs review', 'Onshape part'];
+  const names = ['#', 'Part', 'Qty Needed', 'Suggested', 'Possible product', 'Why it needs review', 'Onshape Part Studio'];
   const target = sheet('Review', names.length, { 2: 44, 6: 64 });
   heading(target, 'NEEDS REVIEW', result, now, 1);
   put(target, 4, 1, 'Decide these parts in Control Kit. A possible product is a candidate only: it is not priced or ordered until someone confirms it.', S.note);
@@ -222,7 +222,7 @@ function reviewSheet(result: ScanResult, now: Date) {
     put(target, row, 4, line.suggestedDisposition ? shortLabel[line.suggestedDisposition] : '', body);
     put(target, row, 5, candidate ? product(candidate) : '', candidate ? band(index, S.link, S.linkAlt) : body, 's', candidate?.url);
     put(target, row, 6, line.reviewReason ?? line.dispositionEvidence.join('; '), band(index, S.wrap, S.wrapAlt));
-    put(target, row, 7, 'Open in Onshape', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+    put(target, row, 7, 'Open Part Studio', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
   });
   if (!lines.length) put(target, 7, 1, 'Every part has a decision.', S.muted);
   target.filter = `A6:${cellRef(names.length, Math.max(7, 6 + lines.length))}`;
@@ -232,7 +232,7 @@ function reviewSheet(result: ScanResult, now: Date) {
 
 /** Every part with a link to its exact vendor product page and to the part in Onshape. */
 function linksSheet(result: ScanResult, now: Date) {
-  const names = ['#', 'Part', 'Qty Needed', 'How obtained', 'Part number', 'Vendor product', 'Match', 'Onshape part'];
+  const names = ['#', 'Part', 'Qty Needed', 'How obtained', 'Part number', 'Vendor product', 'Match', 'Onshape Part Studio'];
   const target = sheet('Links', names.length, { 2: 48, 6: 30 });
   heading(target, 'LINKS', result, now, 1);
   put(target, 4, 1, 'Each part links to its vendor product page (exact or confirmed products, and possible ones marked as such) and to the part in Onshape.', S.note);
@@ -250,7 +250,7 @@ function linksSheet(result: ScanResult, now: Date) {
     put(target, row, 5, line.partNumber ?? '', body);
     put(target, row, 6, vendor ? product(vendor) : '', vendor ? band(index, S.link, S.linkAlt) : body, 's', vendor?.url);
     put(target, row, 7, vendor ? matchText[line.matchStatus] : '', body);
-    put(target, row, 8, 'Open in Onshape', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+    put(target, row, 8, 'Open Part Studio', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
   });
   target.filter = `A6:${cellRef(names.length, Math.max(7, 6 + lines.length))}`;
   target.frozen = 6;
@@ -259,7 +259,7 @@ function linksSheet(result: ScanResult, now: Date) {
 
 /** Things that keep the lists from being complete: suppressed parts, missing data, unresolved subassemblies, stock problems. */
 function exceptionsSheet(result: ScanResult, now: Date) {
-  const names = ['#', 'Kind', 'Part', 'Qty', 'Detail', 'Onshape part'];
+  const names = ['#', 'Kind', 'Part', 'Qty', 'Detail', 'Onshape Part Studio'];
   const target = sheet('Exceptions', names.length, { 3: 44, 5: 72 });
   heading(target, 'EXCEPTIONS', result, now, 1);
   headers(target, 6, names);
@@ -280,7 +280,7 @@ function exceptionsSheet(result: ScanResult, now: Date) {
     put(target, row, 3, line.name, body);
     put(target, row, 4, line.qty, body);
     put(target, row, 5, detail, band(index, S.wrap, S.wrapAlt));
-    put(target, row, 6, 'Open in Onshape', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+    put(target, row, 6, 'Open Part Studio', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
   });
   if (!rows.length) put(target, 7, 1, 'Nothing to report.', S.muted);
   target.filter = `A6:${cellRef(names.length, Math.max(7, 6 + rows.length))}`;

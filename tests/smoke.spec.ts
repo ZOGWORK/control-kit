@@ -178,6 +178,12 @@ test('reopening the panel shows the last scan, and Not needed dismisses a part',
   await row.getByRole('button', { name: 'Not needed' }).click();
   await expect(page.locator('.row').filter({ hasText: name })).toHaveCount(0);
   expect(saved.at(-1)).toMatchObject({ classification: 'ignore' });
+  // Keyboard: B decides the highlighted part, which leaves the list; the highlight stays on the next one.
+  const next = (await page.locator('.row.focused .row-title').innerText()).trim();
+  await page.keyboard.press('b');
+  await expect(page.locator('.row').filter({ hasText: next })).toHaveCount(0);
+  expect(saved.at(-1)).toMatchObject({ classification: 'buy' });
+  await expect(page.locator('.row.focused')).toHaveCount(1);
 });
 
 test('the narrow Onshape panel has no sideways scroll and keeps every section reachable', async ({ page }) => {

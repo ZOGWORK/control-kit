@@ -53,6 +53,14 @@ describe('Excel export', () => {
     expect((buy.match(/<f>E\d+\*H\d+<\/f>/g) ?? [])).toHaveLength(1);
   });
 
+  it('links the part name to its product page and the Onshape column to its Part Studio', () => {
+    const screw = row(text(zip, 2), 'M4 Screw');
+    expect(screw).toMatch(/<c r="B\d+" s="1[78]" t="inlineStr"><is><t xml:space="preserve">M4 Screw<\/t>/);
+    expect(links(zip, 2)).toContain('https://www.gobilda.com/2802-series-m4-screw/');
+    expect(screw).toContain('Open Part Studio');
+    expect(text(zip, 2)).not.toContain('Product page');
+  });
+
   it('leaves unverified and possible lines financially blank but visible', () => {
     const buy = text(zip, 2);
     const bearing = row(buy, '>Bearing<');
@@ -72,13 +80,13 @@ describe('Excel export', () => {
     expect(buy).toContain('A blank Line Total is unknown, not zero');
     expect(text(zip, 1)).toMatch(/<c r="J4" s="22"><f>IF\(COUNT\(&apos;Buy list&apos;!I7:I\d+\),SUM\(&apos;Buy list&apos;!I7:I\d+\),&quot;None priced&quot;\)<\/f><v>17.98<\/v><\/c>/);
     expect(buy).toContain('<pane ySplit="6"');
-    expect(buy).toMatch(/<autoFilter ref="A6:N\d+"/);
+    expect(buy).toMatch(/<autoFilter ref="A6:M\d+"/);
   });
 
   it('links every part to its vendor product and to Onshape on the Links sheet', () => {
     expect(sheetNames(zip)[4]).toBe('Links');
     const sheet = text(zip, 5);
-    for (const name of ['M4 Screw', 'Bearing', 'Drive Motor', 'Intake Guide', 'Mystery Bracket']) expect(row(sheet, name)).toContain('Open in Onshape');
+    for (const name of ['M4 Screw', 'Bearing', 'Drive Motor', 'Intake Guide', 'Mystery Bracket']) expect(row(sheet, name)).toContain('Open Part Studio');
     expect(row(sheet, 'M4 Screw')).toContain('goBILDA 2802-0004-0010');
     expect(row(sheet, 'Drive Motor')).toContain('Possible, not confirmed');
     const targets = links(zip, 5);
@@ -89,7 +97,7 @@ describe('Excel export', () => {
 
   it('names each STEP file as the export does, lists review parts, and reports exceptions', () => {
     expect(row(text(zip, 3), 'Intake Guide')).toMatch(/Intake_Guide_3DP__guide\.step/);
-    expect(row(text(zip, 4), 'Mystery Bracket')).toContain('Open in Onshape');
+    expect(row(text(zip, 4), 'Mystery Bracket')).toContain('Open Part Studio');
     const exceptions = text(zip, 6);
     expect(row(exceptions, 'Bearing')).toContain('Out of stock');
     expect(row(exceptions, 'Spare Plate')).toContain('Suppressed');
