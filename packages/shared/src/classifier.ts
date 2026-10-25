@@ -82,7 +82,7 @@ const customWords = /\b(?:custom|bracket|mount|spacer|adapter|holder|guide|cover
 /** Products a team buys whole even when the vendor's CAD models them as an assembly. */
 const productWords = /\b(?:bearings?|motors?|servos?|gearbox(?:es)?|wheels?|encoders?|sensors?|batter(?:y|ies)|cameras?|hubs?|actuators?)\b|\b(?:axon(?: (?:max|mini|micro))?|yellow ?jacket|neverest|torquenado|ultra ?planetary|core hex|hd hex|spark ?mini|control hub|expansion hub|servo hub|limelight|pinpoint|octo ?quad|sparkfun otos|rev (?:color|distance|touch|2m)|smart robot servo|gobilda (?:motor|servo))\b/i;
 /** Names a team gives its own groupings; such a subassembly is never treated as one product by wording alone. */
-const groupingWords = /\b(?:stack|assembly|asm|sub-?assembly|pod|module|mechanism|system|side|left|right|front|back)\b/i;
+const groupingWords = /\b(?:stack|assembly|asm|sub-?assembly|pod|module|mechanism|system|side|left|right|front|back|case|plate|bracket|mount|holder|adapter|spacer|guide|cover|custom|printed|3dp|shroud|housing|cradle|clip)\b/i;
 
 /**
  * Why a subassembly should be one bought line instead of its internal parts, or null to list its parts. Vendor CAD

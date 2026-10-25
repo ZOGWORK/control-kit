@@ -14,7 +14,8 @@ describe('manufacturing disposition', () => {
     for (const name of ['Axon Max', 'Axon Mini', 'NeveRest Orbital 20', 'Control Hub', 'goBILDA Pinpoint Odometry Computer', 'Spark Mini Motor Controller'])
       expect(purchasedAssemblyReason(name, null, true)).toBe('it is linked from another document and named like a product');
     // The team's own grouping is never collapsed by name alone, and a same-document one needs a SKU.
-    expect(purchasedAssemblyReason('Axon Servo Mount Assembly', null, true)).toBeNull();
+    for (const name of ['Axon Servo Mount Assembly', 'Axon Mount', 'Axon Bracket', 'Pinpoint case', 'Pinpoint plate holder'])
+      expect(purchasedAssemblyReason(name, null, true)).toBeNull();
     expect(purchasedAssemblyReason('Axon Max', null, false)).toBeNull();
   });
   it('keeps an exact vendor SKU Buy whatever its name says', () => {

@@ -199,6 +199,29 @@ async function route(request: Request, env: Env): Promise<Response> {
     await env.APP_STATE.put(`settings:${current.data.user.id}`, JSON.stringify({ teamNumber: body.teamNumber }));
     return reply({ saved: true });
   }
+  if (url.pathname === '/api/choices' && request.method === 'POST') {
+    // Current shared dispositions and the person's match decisions for the lines of a scan they made: lets a reopened
+    // scan pick up teammates' changes without another Onshape request.
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const body = await request.json() as { documentId?: string; scanId?: string };
+    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.scanId || !/^[a-f0-9-]{36}$/.test(body.scanId)) return reply({ error: 'Invalid scan identity.' }, 400);
+    const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${body.scanId}`);
+    if (!raw) return reply({ error: 'Scan this assembly again.' }, 409);
+    const scanned = JSON.parse(raw) as ScanResult;
+    if (scanned.documentId !== body.documentId) return reply({ error: 'Scan does not match this document.' }, 409);
+    const choices: Record<string, { disposition: ClassificationOverride | null; decision: MatchDecision | null }> = {};
+    for (let start = 0; start < scanned.lines.length; start += 20) {
+      await Promise.all(scanned.lines.slice(start, start + 20).map(async line => {
+        const decisionRaw = await env.APP_STATE.get(await matchDecisionKey(current.data.user.id, body.documentId!, line.bomLineKey));
+        let decision: MatchDecision | null = null;
+        try { decision = decisionRaw ? JSON.parse(decisionRaw) as MatchDecision : null; } catch { decision = null; }
+        choices[line.bomLineKey] = { disposition: await readDisposition(env, current.data.user.id, body.documentId!, classificationIdentity(line)), decision };
+      }));
+    }
+    return reply({ choices });
+  }
   if (url.pathname === '/api/classification/override' && request.method === 'POST') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const current = await getSession(request, env);

@@ -194,8 +194,10 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
     const studio = `${line.documentId}:${line.elementId}`;
     const kits = line.instancePaths.map(path => (kitsByParent.get(path.split(' > ').slice(0, -1).join(' > ')) ?? []).find(kit => !kit.line.suppressed && kit.studios.has(studio)));
     if (!kits.length || kits.some(kit => !kit)) continue;
-    const kit = kits[0]!.line;
-    kit.purchasedAssembly = { ...kit.purchasedAssembly!, includes: [...(kit.purchasedAssembly!.includes ?? []), line.name] };
+    for (const kit of new Set(kits.map(found => found!.line))) {
+      const includes = kit.purchasedAssembly!.includes ?? [];
+      if (!includes.includes(line.name)) kit.purchasedAssembly = { ...kit.purchasedAssembly!, includes: [...includes, line.name] };
+    }
     active.delete(key);
   }
   const lines = [...active.values()];
