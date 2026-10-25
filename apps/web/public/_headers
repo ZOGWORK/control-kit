@@ -1,0 +1,4 @@
+# Only Onshape (and the app itself) may frame Control Kit: it runs in Onshape's right panel, and no other site
+# should be able to frame it to trick a signed-in person into clicking.
+/*
+  Content-Security-Policy: frame-ancestors 'self' https://cad.onshape.com https://*.onshape.com

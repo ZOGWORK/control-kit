@@ -3,6 +3,9 @@ node_modules/
 dist/
 .dev.vars
 .env
+.env.*
+!.env.example
+!apps/web/.env.production
 .wrangler/
 coverage/
 playwright-report/
