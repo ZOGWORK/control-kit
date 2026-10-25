@@ -55,6 +55,11 @@ describe('purchase orders', () => {
     const bodies = [...placed('Left screw', 6, 'robot', 'hardware', 'left'), ...placed('Right screw', 4, 'robot', 'hardware', 'right')];
     expect(scan(bodies, () => screw).lines.find(line => line.order)?.order).toEqual({ qty: 10, lines: 2 });
   });
+  it('keeps a linked multi-body product together even when its pieces are placed unevenly', () => {
+    const sw = record('rev', 'REV-31-1462', 1, 17.5);
+    const bodies = [...placed('Connector', 2, 'revdoc', 'switch', 'Connector'), ...placed('Screw', 2, 'revdoc', 'switch', 'Screw'), ...placed('Housing', 3, 'revdoc', 'switch', 'Housing')];
+    expect(scan(bodies, () => sw).lines.find(line => line.order)?.order).toEqual({ qty: 3, lines: 3 });
+  });
   it('counts a multi-body product per place: two switches in one assembly and a spare housing elsewhere are three', () => {
     const sw = record('rev', 'REV-31-1462', 1, 17.5);
     const result = aggregateAssembly({ rootAssembly: { instances: [

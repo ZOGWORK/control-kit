@@ -20,9 +20,8 @@ export function updatePurchasing(line: BomLine): BomLine {
  * Prices what a team orders, not each CAD line. Lines to buy that resolve to the same vendor SKU are one order:
  *   - lines from different Part Studios (or documents) are separate pieces, so their quantities add up;
  *   - several bodies of one Part Studio sharing a SKU are one product modelled in parts (a REV switch's housing,
- *     connector, and screw all carry REV-31-1462) when they are different pieces (different names apart from numbers):
- *     in each assembly they sit in, that product counts as the most of any one piece there. Copies of one body (screws
- *     modelled in place, "Screw 1" to "Screw 4") add up.
+ *     connector, and screw all carry REV-31-1462) when the Part Studio is linked from another document (see
+ *     `studioQuantity`); in the team's own document they are separate parts and add up.
  * Packs are rounded up once on the total. The first line carries the order (`order`, packs, total); the others point
  * at it (`orderedWith`) and carry no total, so nothing is counted twice.
  */
@@ -31,22 +30,25 @@ const parentOf = (path: string) => path.split(' > ').slice(0, -1).join(' > ');
 /** A body's name without a copy number ("Screw 2", "Screw (3)", "Screw <4>"), so copies of one body compare equal. */
 const baseName = (name: string) => name.toLowerCase().trim().replace(/\s*(?:\(\d+\)|<\d+>|\s\d+)$/, '');
 /**
- * Pieces in one Part Studio that carry one SKU. Copies of one body add up. Different pieces of one product (a REV
- * switch's housing and connector) appear the same number of times wherever the product is placed, so in an assembly
- * where every piece present has the same count, that count is the number of products; where the counts differ
- * ("Left screw" 6 times, "Right screw" 4 times) they are separate parts and add up. Assemblies add up (two switches in
- * one place and a spare housing elsewhere are three).
+ * Pieces in one Part Studio that carry one SKU. Where the Part Studio comes from decides what they are:
+ *   - in the team's own document they are the team's parts (screws modelled in place, "Left screw" and "Right screw"),
+ *     so they add up;
+ *   - linked from another document they are a vendor's model of one product in pieces (REV's switch: housing,
+ *     connector, screw, all REV-31-1462), so in each assembly the product count is the most of any piece there, and the
+ *     assemblies add up (two switches in one place and a spare housing elsewhere are three). Copies of one piece
+ *     ("Screw 1", "Screw 2") are still copies and add up.
  */
-function studioQuantity(bodies: BomLine[]) {
-  if (bodies.length === 1) return bodies[0].qty;
-  if (new Set(bodies.map(body => baseName(body.name))).size !== bodies.length) return bodies.reduce((sum, body) => sum + body.qty, 0);
-  const perParent = new Map<string, number[]>();
+function studioQuantity(bodies: BomLine[], assemblyDocumentId: string) {
+  const sum = () => bodies.reduce((total, body) => total + body.qty, 0);
+  if (bodies.length === 1 || bodies[0].documentId === assemblyDocumentId) return sum();
+  if (new Set(bodies.map(body => baseName(body.name))).size !== bodies.length) return sum();
+  const perParent = new Map<string, number>();
   for (const body of bodies) {
     const here = new Map<string, number>();
     for (const path of body.instancePaths) here.set(parentOf(path), (here.get(parentOf(path)) ?? 0) + 1);
-    for (const [parent, count] of here) perParent.set(parent, [...(perParent.get(parent) ?? []), count]);
+    for (const [parent, count] of here) perParent.set(parent, Math.max(perParent.get(parent) ?? 0, count));
   }
-  return [...perParent.values()].reduce((sum, counts) => sum + (counts.every(count => count === counts[0]) ? counts[0] : counts.reduce((a, b) => a + b, 0)), 0);
+  return [...perParent.values()].reduce((total, count) => total + count, 0);
 }
 
 export function recalculatePurchasing(result: ScanResult): ScanResult {
@@ -64,7 +66,7 @@ export function recalculatePurchasing(result: ScanResult): ScanResult {
       const studio = `${line.documentId}:${line.elementId}:${line.configuration ?? ''}:${line.sourceId ?? ''}`;
       studios.set(studio, [...(studios.get(studio) ?? []), line]);
     }
-    const qty = [...studios.values()].reduce((sum, bodies) => sum + studioQuantity(bodies), 0);
+    const qty = [...studios.values()].reduce((sum, bodies) => sum + studioQuantity(bodies, result.documentId), 0);
     // The line whose own name or part number shows the SKU leads, so the order reads as the product.
     const sku = lines[0].vendor!.sku.toLowerCase();
     const lead = lines.find(line => `${line.name} ${line.partNumber ?? ''}`.toLowerCase().includes(sku)) ?? lines[0];
