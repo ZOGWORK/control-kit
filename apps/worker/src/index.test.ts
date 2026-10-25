@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import worker, { cronVendors, type Env, type Kv } from './index';
+import worker, { cronVendors, decisionIdentity, type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
 import { aggregateAssembly, classificationIdentity, matchCatalog, type ScanResult, type VendorId } from '@control-kit/shared';
 import { clearCatalogMemoryCache } from './catalog';
@@ -30,6 +30,16 @@ const call = async (path: string, cookie?: string) => {
 };
 beforeEach(() => vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => mock.handle(new Request(input, init))));
 afterAll(() => vi.unstubAllGlobals());
+
+describe('match decisions', () => {
+  it('are keyed by the part, so a decision survives an edit that changes the workspace microversion', () => {
+    const before = 'doc1:elem1:JHD:size=M4:m:64c9f1b7aa';
+    const after = 'doc1:elem1:JHD:size=M4:m:0fd2e81c33';
+    expect(decisionIdentity(before)).toBe('doc1:elem1:JHD:size=M4');
+    expect(decisionIdentity(after)).toBe(decisionIdentity(before));
+    expect(decisionIdentity('doc1:elem1:JHD:size=M5:m:64c9f1b7aa')).not.toBe(decisionIdentity(before));
+  });
+});
 
 describe('vendor crons', () => {
   it('runs every vendor from a cron that wrangler.toml schedules', () => {

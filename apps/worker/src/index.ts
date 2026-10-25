@@ -27,6 +27,20 @@ async function lineKeyDigest(lineKey: string) {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 async function matchDecisionKey(userId: string, documentId: string, lineKey: string) { return `match-decision:${userId}:${documentId}:${await lineKeyDigest(lineKey)}`; }
+/**
+ * A line key ends with its source revision (`:m:<microversion>` for parts of the scanned workspace), which changes on
+ * every edit. Decisions are saved under the part itself (document, element, part, configuration) so they survive edits;
+ * reads fall back to the older revision-keyed decision.
+ */
+export const decisionIdentity = (lineKey: string) => lineKey.split(':').slice(0, -2).join(':');
+async function readMatchDecision(env: Env, userId: string, documentId: string, lineKey: string): Promise<MatchDecision | null> {
+  for (const key of [await matchDecisionKey(userId, documentId, decisionIdentity(lineKey)), await matchDecisionKey(userId, documentId, lineKey)]) {
+    const raw = await env.APP_STATE.get(key);
+    if (!raw) continue;
+    try { return JSON.parse(raw) as MatchDecision; } catch { return null; }
+  }
+  return null;
+}
 /** Pre-rework per-user manual types ('commercial' | 'printed'); read as a fallback, removed when the part is set again. */
 async function legacyClassificationKey(userId: string, documentId: string, identity: string) { return `override:${userId}:${documentId}:${await lineKeyDigest(identity)}`; }
 /** Manual dispositions are shared by everyone who scans the document, with who set them and a short history. */
@@ -202,7 +216,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
     const body = await request.json() as { documentId?: string; lineKey?: string; decision?: string; vendorId?: string; normalizedSku?: string };
     if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.lineKey || body.lineKey.length > 16384 || !['confirmed', 'rejected'].includes(body.decision ?? '') || !['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'].includes(body.vendorId ?? '') || !body.normalizedSku || !/^[A-Z0-9]+$/.test(body.normalizedSku)) return reply({ error: 'Invalid match decision.' }, 400);
-    const key = await matchDecisionKey(current.data.user.id, body.documentId, body.lineKey);
+    const key = await matchDecisionKey(current.data.user.id, body.documentId, decisionIdentity(body.lineKey));
     const value: MatchDecision = { status: body.decision as MatchDecision['status'], vendorId: body.vendorId as MatchDecision['vendorId'], normalizedSku: body.normalizedSku };
     await env.APP_STATE.put(key, JSON.stringify(value));
     return reply({ saved: true });
@@ -256,9 +270,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const choices: Record<string, { disposition: ClassificationOverride | null; decision: MatchDecision | null }> = {};
     for (let start = 0; start < scanned.lines.length; start += 20) {
       await Promise.all(scanned.lines.slice(start, start + 20).map(async line => {
-        const decisionRaw = await env.APP_STATE.get(await matchDecisionKey(current.data.user.id, body.documentId!, line.bomLineKey));
-        let decision: MatchDecision | null = null;
-        try { decision = decisionRaw ? JSON.parse(decisionRaw) as MatchDecision : null; } catch { decision = null; }
+        const decision = await readMatchDecision(env, current.data.user.id, body.documentId!, line.bomLineKey);
         choices[line.bomLineKey] = { disposition: await readDisposition(env, current.data.user.id, body.documentId!, classificationIdentity(line)), decision };
       }));
     }
@@ -340,10 +352,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     };
     const getDecision = async (lineKey: string, signal?: AbortSignal): Promise<MatchDecision | null> => {
       if (signal?.aborted) throw signal.reason;
-      const raw = await env.APP_STATE.get(await matchDecisionKey(current.data.user.id, context.documentId, lineKey));
+      const decision = await readMatchDecision(env, current.data.user.id, context.documentId, lineKey);
       if (signal?.aborted) throw signal.reason;
-      if (!raw) return null;
-      try { return JSON.parse(raw) as MatchDecision; } catch { return null; }
+      return decision;
     };
     const settingsRaw = await env.APP_STATE.get(`settings:${current.data.user.id}`);
     const settings = settingsRaw ? JSON.parse(settingsRaw) as UserSettings : { teamNumber: null };
@@ -407,9 +418,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (result.documentId !== body.documentId || result.scanId !== body.scanId) return reply({ error: 'Scan does not match this document.' }, 409);
       // Use the decisions and dispositions as they are now, not as they were when the scan ran.
       for (const line of result.lines.filter(item => item.matchStatus === 'possible' && item.vendor)) {
-        const value = await env.APP_STATE.get(await matchDecisionKey(userId, result.documentId, line.bomLineKey));
-        let choice: MatchDecision | null = null;
-        try { choice = value ? JSON.parse(value) as MatchDecision : null; } catch { choice = null; }
+        const choice = await readMatchDecision(env, userId, result.documentId, line.bomLineKey);
         // A decision may pick one of the line's choices rather than the match it was shown.
         if (choice && decisionRecord(line, choice)) result = applyMatchDecision(result, line.bomLineKey, choice.status, choice);
       }
