@@ -143,14 +143,15 @@ export function decideDisposition(line: BomLine, teamNumber: string | null, asse
   const auto = (disposition: Disposition, confidence: Confidence, why: string): Decision => ({ ...base, disposition, source: 'suggestion', confidence, evidence: [...base.evidence, why, 'decided automatically; change it if wrong'] });
   // A possible match on a part from another document is a bought part whose product is still to confirm (it is not
   // priced until then). On a team's own part, a name resemblance proves nothing, so the other rules decide.
-  if (line.matchStatus === 'possible' && provenance !== 'team-design') return auto('buy', 'medium', `possible vendor match ${line.vendor?.sku ?? ''}; confirm the product to price it`.replace('  ', ' '));
+  // Print wording wins: a printed part with a loose catalog resemblance is still printed.
+  if (line.matchStatus === 'possible' && provenance !== 'team-design' && !printWords.test(text)) return auto('buy', 'medium', `possible vendor match ${line.vendor?.sku ?? ''}; confirm the product to price it`.replace('  ', ' '));
   if (printWords.test(text)) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'medium', suggestion: 'print', evidence: [...base.evidence, 'print wording in name', ...(team ? [team] : [])], reviewReason: 'Name says it is printed; confirm 3D print' };
   for (const [pattern, label] of vendorNumbers) {
     const found = text.match(pattern);
     if (found) return auto('buy', 'medium', `${label} "${found[0]}" in name`);
   }
   // "Screw Mount Bracket" or "Nut Holder" is a part the team makes: custom-part words keep hardware wording from buying it.
-  if (hardwareWords.test(text) && !customWords.test(line.name)) return auto('buy', 'medium', 'standard hardware wording in name');
+  if (hardwareWords.test(text) && !customWords.test(text)) return auto('buy', 'medium', 'standard hardware wording in name');
   if (flatWords.test(text) && provenance !== 'linked-library') return { ...auto('cut-2d', 'low', 'flat-part wording in name'), evidence: [...base.evidence, 'flat-part wording in name', ...(team ? [team] : []), 'decided automatically; change it if wrong'] };
   if (provenance === 'team-design' && (customWords.test(text) || team)) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'low', suggestion: 'print', evidence: [...base.evidence, ...(team ? [team] : ['custom-part wording in name'])], reviewReason: 'Team-designed part: choose how it is made' };
   // Parts linked from another document (vendor and parts-library CAD) are almost always bought.

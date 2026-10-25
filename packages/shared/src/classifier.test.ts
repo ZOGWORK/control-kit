@@ -117,6 +117,14 @@ describe('manufacturing disposition', () => {
     const teamPart = line('Robot Parts Cart Diamond Plate Base');
     teamPart.matchStatus = 'possible'; teamPart.vendor = vendor('am-5230_base');
     expect(classify(teamPart).disposition).not.toBe('buy');
+    // Print wording wins over a loose match on a linked part.
+    const printed = line('Printed wheel hub', { documentId: 'library' });
+    printed.matchStatus = 'possible'; printed.vendor = vendor('1309-0016-4008');
+    expect(classify(printed)).toMatchObject({ disposition: 'review', suggestedDisposition: 'print' });
+    // Custom wording in the description keeps a hardware name from being bought.
+    const block = line('Bearing block');
+    block.description = 'Custom holder for intake';
+    expect(classify(block).disposition).not.toBe('buy');
     value.matchStatus = 'confirmed';
     expect(classify(value)).toMatchObject({ disposition: 'buy', dispositionSource: 'provenance' });
   });

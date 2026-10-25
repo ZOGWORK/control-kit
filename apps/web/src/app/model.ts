@@ -37,7 +37,8 @@ export function summarize(result: ScanResult): Summary {
     subtotal: pricedBuy.length ? Math.round(pricedBuy.reduce((sum, line) => sum + line.lineTotalUsd!, 0) * 100) / 100 : null,
     pricedLines: coveredBuy.length, buyLines: buy.length,
     dataIssues: result.missingMetadata.filter(line => !line.suppressed).length,
-    possibleMatches: lines.filter(line => line.matchStatus === 'possible').length,
+    // Only matches still waiting in Review: a bought part whose product is still to confirm is on the Buy list.
+    possibleMatches: lines.filter(line => line.matchStatus === 'possible' && line.disposition === 'review').length,
   };
 }
 
