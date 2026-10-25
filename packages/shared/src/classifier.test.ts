@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateAssembly, applyClassificationChoice, classificationIdentity, classifyLine, classifyScan, parseOverride, type AssemblyInstance, type BomLine, type VendorRecord } from './index';
+import { aggregateAssembly, applyClassificationChoice, classificationIdentity, classifyLine, classifyScan, parseOverride, type AssemblyInstance, type BomLine, type VendorRecord, purchasedAssemblyReason } from './index';
 
 const context = { documentId: 'doc', workspaceOrVersion: 'w' as const, workspaceOrVersionId: 'work', elementId: 'element' };
 function line(name: string, extra: Partial<AssemblyInstance> = {}): BomLine {
@@ -9,6 +9,14 @@ const vendor = (sku: string): VendorRecord => ({ vendorId: 'gobilda', sku, norma
 const classify = (value: BomLine, override: Parameters<typeof classifyLine>[2] = null, team: string | null = null) => classifyLine(value, team, override, 'doc');
 
 describe('manufacturing disposition', () => {
+  it('treats linked FTC products by name, like an Axon Max servo, as one product', () => {
+    // From HORS: "Axon Max" is a linked servo assembly; its gear DDJ-STDCAR-GEAR5 was being listed as a part.
+    for (const name of ['Axon Max', 'Axon Mini', 'NeveRest Orbital 20', 'Control Hub', 'goBILDA Pinpoint Odometry Computer', 'Spark Mini Motor Controller'])
+      expect(purchasedAssemblyReason(name, null, true)).toBe('it is linked from another document and named like a product');
+    // The team's own grouping is never collapsed by name alone, and a same-document one needs a SKU.
+    expect(purchasedAssemblyReason('Axon Servo Mount Assembly', null, true)).toBeNull();
+    expect(purchasedAssemblyReason('Axon Max', null, false)).toBeNull();
+  });
   it('keeps an exact vendor SKU Buy whatever its name says', () => {
     const value = line('Printed custom bracket 16236 [3DP]');
     value.matchStatus = 'exact'; value.vendor = vendor('1121-0016-0048');

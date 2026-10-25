@@ -73,6 +73,23 @@ export function useControlKit(context: URLSearchParams) {
     return true;
   };
   useEffect(() => { onshapeMessage('applicationInit'); }, []);
+
+  // The last scan of this assembly reopens with the panel, so leaving and coming back does not need a rescan. It is
+  // kept per person and per assembly tab in this browser for a week, the same as the Worker's copy it relies on.
+  const savedKey = `control-kit:scan:${contextKeys.map(key => context.get(key) ?? '').join(':')}`;
+  const savedFor = session?.connected ? session.user?.id ?? null : null;
+  useEffect(() => {
+    if (!savedFor || result || abort.current) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(savedKey) ?? 'null') as { userId: string; savedAt: number; result: ScanResult } | null;
+      if (saved && saved.userId === savedFor && Date.now() - saved.savedAt < 7 * 86400000 && saved.result.vendorMatching !== 'pending') setResult(saved.result);
+    } catch { /* No saved scan, or storage is unavailable. */ }
+  }, [savedFor]);
+  useEffect(() => {
+    if (!savedFor || !result || result.vendorMatching === 'pending') return;
+    try { localStorage.setItem(savedKey, JSON.stringify({ userId: savedFor, savedAt: Date.now(), result })); }
+    catch { /* Storage full or blocked: the scan still works, it just will not reopen. */ }
+  }, [result, savedFor]);
   useEffect(() => {
     if (!session?.connected) return;
     api('/api/settings').then(async response => { if (!response.ok) throw Error(); return await response.json() as UserSettings; })
@@ -242,6 +259,7 @@ export function useControlKit(context: URLSearchParams) {
     scanGeneration.current++;
     abort.current?.abort(); abort.current = null; setProgress(null);
     stepRun.current = null;
+    try { localStorage.removeItem(savedKey); } catch { /* Storage unavailable. */ }
     setStep(null); setResult(null); setError('');
     setSession({ connected: false });
   }

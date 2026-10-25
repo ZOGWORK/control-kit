@@ -14,7 +14,7 @@ export class NoStepFilesError extends Error {}
  */
 export function buildStepZip(input: StepZipInput) {
   const root = `${input.assemblyName.replace(/[^\w\- ]/g, '').trim().replace(/\s+/g, '_').slice(0, 80) || 'Assembly'}_STEP`;
-  const folders: Record<ExportPart['disposition'], string> = { print: '3D_print', cnc: 'CNC', 'cut-2d': '2D_cut', fabricate: 'Fabricate', buy: 'Other', hardware: 'Other', review: 'Other' };
+  const folders: Record<ExportPart['disposition'], string> = { print: '3D_print', cnc: 'CNC', 'cut-2d': '2D_cut', fabricate: 'Fabricate', buy: 'Other', hardware: 'Other', ignore: 'Other', review: 'Other' };
   const files: Record<string, Uint8Array> = {};
   const parts = input.parts.map((part, index) => part.state === 'ready' && input.files[index] === undefined ? { ...part, state: 'failed' as const, error: 'File was not downloaded' } : part);
   parts.forEach((part, index) => { if (part.state === 'ready') files[`${root}/${folders[part.disposition]}/${part.fileName}`] = strToU8(input.files[index]); });

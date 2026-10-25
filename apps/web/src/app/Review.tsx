@@ -54,11 +54,13 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
             </>}
             {kind === 'suggested' && <>
               <Button size="sm" loading={busy} disabled={locked && !busy} onClick={() => void kit.setDisposition(line, line.suggestedDisposition!)}>Mark {shortLabel[line.suggestedDisposition!]}</Button>
+              <Button size="sm" variant="ghost" disabled={locked} title="Not a real part to buy or make, such as a body that is part of an imported product" onClick={() => void kit.setDisposition(line, 'ignore')}>Not needed</Button>
               <Button size="sm" variant="ghost" disabled={locked} onClick={() => open(line.bomLineKey)}>Other</Button>
             </>}
             {kind === 'undecided' && <>
               <Button size="sm" variant="secondary" loading={busy} disabled={locked && !busy} onClick={() => void kit.setDisposition(line, 'buy')}>Buy</Button>
               <Button size="sm" variant="secondary" disabled={locked} onClick={() => void kit.setDisposition(line, 'print')}>3D print</Button>
+              <Button size="sm" variant="ghost" disabled={locked} title="Not a real part to buy or make, such as a body that is part of an imported product" onClick={() => void kit.setDisposition(line, 'ignore')}>Not needed</Button>
               <Button size="sm" variant="ghost" disabled={locked} onClick={() => open(line.bomLineKey)}>Other</Button>
             </>}
           </div>

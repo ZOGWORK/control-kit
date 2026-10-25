@@ -162,6 +162,24 @@ test('STEP export polls the job, zips ready files with a manifest, and shows fai
   await expect(page.locator('.row').filter({ hasText: 'Guide' })).toContainText('Deliberate failure');
 });
 
+test('reopening the panel shows the last scan, and Not needed dismisses a part', async ({ page }) => {
+  const saved: Array<{ classification: string | null }> = [];
+  await page.route('**/api/classification/override', async route => { saved.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"saved":true}' }); });
+  await connected(page);
+  let scans = 0;
+  await page.route('**/api/scan?**', route => { scans++; return route.fallback(); });
+  // Leaving the assembly and coming back reloads the panel; the scan is still there without scanning again.
+  await page.reload();
+  await expect(page.getByRole('heading', { level: 1, name: 'Simple FTC Assembly' })).toBeVisible();
+  expect(scans).toBe(0);
+  await section(page, /^Review/).click();
+  const row = page.locator('.row').filter({ has: page.getByRole('button', { name: 'Not needed' }) }).first();
+  const name = (await row.locator('.row-title').innerText()).trim();
+  await row.getByRole('button', { name: 'Not needed' }).click();
+  await expect(page.locator('.row').filter({ hasText: name })).toHaveCount(0);
+  expect(saved.at(-1)).toMatchObject({ classification: 'ignore' });
+});
+
 test('the narrow Onshape panel has no sideways scroll and keeps every section reachable', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 720 });
   await connected(page);

@@ -31,7 +31,7 @@ export type BomLine = { bomLineKey: string; name: string; description: string | 
   /** Workspace or version a file export can read this part from; Onshape's translation endpoint takes no microversion. */
   exportSource?: { type: 'w' | 'v'; id: string } | null;
   /** Set when a subassembly is listed as one bought product instead of its internal parts. */
-  purchasedAssembly?: { parts: number; reason: string } | null;
+  purchasedAssembly?: { parts: number; reason: string; includes?: string[] } | null;
   /** Set when a parts library's mapping supplied the SKU, with the library's credit. */
   libraryMatch?: { library: string; attribution: Attribution } | null;
   /** A licensed picture of the product (library or vendor feed). Empty until a source grants permission. */
@@ -122,14 +122,27 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
     const key = `${instance.documentId}:${instance.elementId}:${partId ?? ''}:${configuration ?? ''}:${sourceType ?? ''}:${sourceId ?? ''}`;
     const bucket = isSuppressed ? suppressed : active;
     const found = bucket.get(key);
-    if (found) { found.qty++; found.instancePaths.push(path.join(' > ')); return; }
+    if (found) { found.qty++; found.instancePaths.push(path.join(' > ')); return found; }
     const source = sourceType && sourceId ? `${sourceType}/${encodeURIComponent(sourceId)}` : '';
     const name = partNames.get(`${instance.documentId}:${instance.elementId}:${partId}`) ?? instance.name.replace(/\s*<\d+>$/, '');
     bucket.set(key, { bomLineKey: key, name, description: null, documentId: instance.documentId, elementId: instance.elementId, partId, partNumber: instance.partNumber ?? null, configuration, sourceType, sourceId, qty: 1, packsToOrder: null, lineTotalUsd: null, suppressed: isSuppressed,
       instancePaths: [path.join(' > ')], massKg: null, material: null, missingMetadataReason: null, vendor: null, alternatives: [], matchConfidence: 0, matchStatus: 'unmatched', matchReasons: [], classification: 'unknown', classificationScore: 0,
       classificationReasons: [], manualClassification: null, disposition: 'review', dispositionSource: 'none', dispositionConfidence: 'low', dispositionEvidence: [], reviewReason: null, suggestedDisposition: null, provenance: 'unknown', unresolvedSubassembly, purchasedAssembly, isStandardContent: instance.isStandardContent ?? false, exportSource,
       metadataIssue: unresolvedSubassembly ? { code: 'unresolved-subassembly', httpStatus: null } : unresolvedReference(instance) ? { code: 'unresolved-reference', httpStatus: null } : null, partStudioUrl: source ? `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}/${source}/e/${encodeURIComponent(instance.elementId)}` : `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}` });
+    return bucket.get(key)!;
   }
+  /** Part Studios (document:element) whose parts make up a subassembly, nested ones included. */
+  function studiosInside(instances: AssemblyInstance[], ancestry: Set<string>, into = new Set<string>()): Set<string> {
+    for (const instance of instances) {
+      if (instance.type.toLowerCase() !== 'assembly') { into.add(`${instance.documentId}:${instance.elementId}`); continue; }
+      const key = subassemblyKey(instance);
+      const child = definitions.get(key);
+      if (child?.instances && !ancestry.has(key)) studiosInside(child.instances, new Set([...ancestry, key]), into);
+    }
+    return into;
+  }
+  /** Where each product listed as one unit sits (its parent path) and which Part Studios its insides come from. */
+  const kitsByParent = new Map<string, Array<{ line: BomLine; studios: Set<string> }>>();
   /** Parts inside a subassembly, counting nested subassemblies' parts. */
   function countParts(instances: AssemblyInstance[], ancestry: Set<string>): number {
     return instances.reduce((total, instance) => {
@@ -159,12 +172,32 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
       let reason = purchasedAssemblyReason(instance.name.replace(/\s*<\d+>$/, ''), instance.partNumber, instance.documentId !== context.documentId);
       // A wrapper named only like a product ("Motor Smol") steps aside for the SKU-named product inside it, so the SKU survives.
       if (reason && !purchasedAssemblyReason(instance.name.replace(/\s*<\d+>$/, ''), instance.partNumber, false) && child?.instances && containsVendorProduct(child.instances, new Set([...ancestry, key]))) reason = null;
-      if (reason) { add(instance, childPath, isSuppressed, false, { parts: child?.instances ? countParts(child.instances, new Set([...ancestry, key])) : 0, reason }); continue; }
+      if (reason) {
+        const line = add(instance, childPath, isSuppressed, false, { parts: child?.instances ? countParts(child.instances, new Set([...ancestry, key])) : 0, reason });
+        if (child?.instances) {
+          const parent = path.join(' > ');
+          kitsByParent.set(parent, [...(kitsByParent.get(parent) ?? []), { line, studios: studiosInside(child.instances, new Set([...ancestry, key])) }]);
+        }
+        continue;
+      }
       if (!child || !Array.isArray(child.instances) || ancestry.has(key)) { add(instance, childPath, isSuppressed, true); continue; }
       walk(child.instances, childPath, isSuppressed, new Set([...ancestry, key]));
     }
   }
   walk(definition.rootAssembly.instances ?? [], [rootName], false, new Set());
+  // A vendor product imported as a Part Studio often appears as a product subassembly plus a body or two placed beside
+  // it straight from the same import (HORS: a goBILDA motor's output shaft next to "5000-0002-0001 Motor"). Such a body
+  // is part of that product, not a separate part: it is folded into the product's line when every place it is used
+  // sits beside a product built from the same Part Studio.
+  for (const [key, line] of active) {
+    if (line.purchasedAssembly) continue;
+    const studio = `${line.documentId}:${line.elementId}`;
+    const kits = line.instancePaths.map(path => (kitsByParent.get(path.split(' > ').slice(0, -1).join(' > ')) ?? []).find(kit => !kit.line.suppressed && kit.studios.has(studio)));
+    if (!kits.length || kits.some(kit => !kit)) continue;
+    const kit = kits[0]!.line;
+    kit.purchasedAssembly = { ...kit.purchasedAssembly!, includes: [...(kit.purchasedAssembly!.includes ?? []), line.name] };
+    active.delete(key);
+  }
   const lines = [...active.values()];
   const suppressedLines = [...suppressed.values()];
   return { assemblyName: rootName, documentId: context.documentId, elementId: context.elementId, scannedAt: new Date().toISOString(), vendorDataUpdatedAt: null, lines, suppressed: suppressedLines, missingMetadata: [],
