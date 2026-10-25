@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyMatchScore, findBestMatch, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates, type VendorId, type VendorRecord } from './matching';
+import { classifyMatchScore, configurationValues, findBestMatch, vendorTag, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates, type VendorId, type VendorRecord } from './matching';
 
 const record = (name: string, sku: string, vendorId: VendorId = 'rev', overrides: Partial<VendorRecord> = {}): VendorRecord => ({
   vendorId, sku, normalizedSku: normalizeSku(sku, vendorId), name, normalizedName: normalizeName(name), url: 'https://vendor.example/product',
@@ -94,5 +94,15 @@ describe('vendor matching', () => {
     const out = record('M3 10mm screw', 'OUT2', 'rev', { stock: 'out' });
     expect(rankVendorAlternatives(selected.name, selected, [distant, otherVendor, otherCategory, near, out]).map(value => value.sku)).toEqual(['NEAR', 'DISTANT']);
     expect(rankVendorAlternatives(selected.name, { ...selected, stock: 'in' }, [near])).toEqual([]);
+  });
+});
+
+describe('parts library tags', () => {
+  it('reads a trailing vendor tag and configuration values that describe the product', () => {
+    expect(vendorTag('Servo Hub (GB)')).toEqual({ vendor: 'gobilda', name: 'Servo Hub' });
+    expect(vendorTag('Control Hub (REV)')).toEqual({ vendor: 'rev', name: 'Control Hub' });
+    expect(vendorTag('Bracket (GB) left')).toBeNull();
+    expect(vendorTag('(GB)')).toBeNull();
+    expect(configurationValues('Encoder_Cap_Color=4D4D4D;List_a1=_6000rpm_Bare_REX;Length=default')).toEqual(['6000rpm Bare REX']);
   });
 });

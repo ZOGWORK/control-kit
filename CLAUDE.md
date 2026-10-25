@@ -169,6 +169,10 @@ PR 10 (the right product):
 - **Mecanum sets.** `withKnownPack` treats a mecanum wheel set as a verified pack of 4, replacing only an unverified pack or the single-unit convention, never page wording. It runs at ingestion and when the matcher reads catalogs, so published catalogs need no re-crawl.
 - **Prices** are public list prices; team discounts shown to signed-in buyers (goBILDA FTC pricing) are not crawled.
 
+PR 11 (parts library vendor tags):
+- **Tags.** FRCDesign's FTC parts end their names with a vendor tag: "Servo Hub (GB)", "6000rpm Motor - Bare REX (GB)". `vendorTag` (`matching.ts`) reads GB/goBILDA, REV, AM/AndyMark, SC/ServoCity, Pitsco/Tetrix. A tagged part without an exact SKU is matched only against that vendor's catalog (before this, "Servo Hub (GB)" matched REV's $90 Servo Hub).
+- **Ranking.** Library names are terse, so `nameCoverage` counts how many of the part's words (name plus `configurationValues`, without colors) a product name contains, rather than the overlap of both names. The closest products (at most 4, within 0.25 of the best, best at least 0.5) become `choices` on a possible match; a person picks one. Nothing is priced until then.
+
 ## Tuning, tests, and release
 
 Match normalization, thresholds, and alternative ranking are in `packages/shared/src/matching.ts`; exact SKU still forces Commercial absent manual override. Print scoring thresholds and mechanism folders are in `packages/shared/src/classifier.ts`. Vendor stale hours and cron schedule are in `wrangler.toml`; catalog crawl batch limits are in `apps/worker/src/vendor-ingest.ts`. Scan request flow, source cache, and backoff are in `apps/worker/src/scan.ts`; BOM column mapping is in `packages/shared/src/bom.ts`; STEP export job bounds (per-call request budget, 5-minute translation timeout, 20 MB file cap) are in `apps/worker/src/step-export.ts`. Change these with fixture tests and record any changed data shape here.
