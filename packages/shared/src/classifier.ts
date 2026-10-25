@@ -152,7 +152,11 @@ export function decideDisposition(line: BomLine, teamNumber: string | null, asse
   }
   // "Screw Mount Bracket" or "Nut Holder" is a part the team makes: custom-part words keep hardware wording from buying it.
   if (hardwareWords.test(text) && !customWords.test(text)) return auto('buy', 'medium', 'standard hardware wording in name');
-  if (flatWords.test(text) && provenance !== 'linked-library') return { ...auto('cut-2d', 'low', 'flat-part wording in name'), evidence: [...base.evidence, 'flat-part wording in name', ...(team ? [team] : []), 'decided automatically; change it if wrong'] };
+  // A plate the name says is machined ("CNC milled side plate") is CNC; any other plate is 2D cut.
+  if (flatWords.test(text) && provenance !== 'linked-library') {
+    const machined = /\b(?:cnc|mill(?:ed|ing)?|machined|lathe)\b/i.test(text);
+    return { ...auto(machined ? 'cnc' : 'cut-2d', 'low', machined ? 'flat part with machining wording in name' : 'flat-part wording in name'), evidence: [...base.evidence, machined ? 'flat part with machining wording in name' : 'flat-part wording in name', ...(team ? [team] : []), 'decided automatically; change it if wrong'] };
+  }
   if (provenance === 'team-design' && (customWords.test(text) || team)) return { ...base, disposition: 'review', source: 'suggestion', confidence: 'low', suggestion: 'print', evidence: [...base.evidence, ...(team ? [team] : ['custom-part wording in name'])], reviewReason: 'Team-designed part: choose how it is made' };
   // Parts linked from another document (vendor and parts-library CAD) are almost always bought.
   if (provenance === 'linked-library') return auto('buy', 'low', 'linked from another document: parts libraries hold bought parts');

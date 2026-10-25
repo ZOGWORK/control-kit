@@ -46,6 +46,7 @@ describe('manufacturing disposition', () => {
     const plate = classify(line('Drivetrain side plate'));
     expect(plate).toMatchObject({ disposition: 'cut-2d', dispositionSource: 'suggestion', dispositionConfidence: 'low', reviewReason: null });
     expect(plate.dispositionEvidence).toContain('decided automatically; change it if wrong');
+    expect(classify(line('CNC milled side plate')).disposition).toBe('cnc');
     const bought = line('Pattern plate');
     bought.matchStatus = 'exact'; bought.vendor = vendor('1121-0016-0048');
     expect(classify(bought).disposition).toBe('buy');
