@@ -96,8 +96,9 @@ export async function spotCheck(records: VendorRecord[], fetcher: (url: string) 
   const results: SpotCheck[] = [];
   for (const record of sample) {
     const html = await fetcher(record.sourceUrl ?? record.url).then(response => response.ok ? response.text() : '').catch(() => '');
-    const price = record.priceUsd === null ? null : record.priceUsd.toFixed(2);
-    results.push({ sku: record.sku, url: record.url, price: record.priceUsd, skuOnPage: html.includes(record.sku), priceOnPage: price === null || html.includes(price) });
+    // Pages write prices with thousands separators ("$2,000.00"), so both forms count.
+    const prices = record.priceUsd === null ? [] : [record.priceUsd.toFixed(2), record.priceUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })];
+    results.push({ sku: record.sku, url: record.url, price: record.priceUsd, skuOnPage: html.includes(record.sku), priceOnPage: !prices.length || prices.some(price => html.includes(price)) });
     if (pauseMs) await new Promise(resolve => setTimeout(resolve, pauseMs));
   }
   return results;

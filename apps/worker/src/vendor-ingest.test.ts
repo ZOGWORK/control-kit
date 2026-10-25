@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { VendorId, VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
-import { batchKey, feedUrl, indexKey, packFromText, parseProductPage, parseShopifyFeed, pointerKey, runVendor, snapshotKey, vendorSources, type CatalogPointer, type IndexEntry, type VendorSnapshot } from './vendor-ingest';
+import { applyPackEvidence, batchKey, feedUrl, indexKey, packFromText, parseProductPage, parseShopifyFeed, pointerKey, runVendor, snapshotKey, vendorSources, type CatalogPointer, type IndexEntry, type VendorSnapshot } from './vendor-ingest';
 
 class MemoryKv implements Kv {
   values = new Map<string, string>();
@@ -63,7 +63,7 @@ describe('vendor product page parsing', () => {
     const rev = parseProductPage('rev', 'https://www.revrobotics.com/rev-41-1600/', page('rev-single-product'), at).records;
     expect(rev[0]).toMatchObject({ sku: 'REV-41-1600', normalizedSku: '411600', priceUsd: 50, stock: 'in', parser: 'jsonld' });
   });
-  it('takes pack size from a "Pack Info" product field or a -PKn SKU, and never assumes one unit for ServoCity', () => {
+  it('takes pack size from a "Pack Info" product field or a -PKn SKU, and otherwise one unit for vendors that state every pack', () => {
     const jsonld = (name: string, sku: string) => `<script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name, sku, offers: { price: '3.99', priceCurrency: 'USD' } })}</script>`;
     // As ServoCity embeds it: JSON inside a string (escaped quotes), the page's own product first, then related products.
     const own = (id: number, pack: string | null) => JSON.stringify({ add_to_wishlist_url: `https://www.servocity.com/wishlist.php?action=add&product_id=${id}`,
@@ -80,7 +80,10 @@ describe('vendor product page parsing', () => {
     const spaced = '<script>var data = { "add_to_wishlist_url": "/wishlist.php?action=add&product_id=77", "custom_fields": [ { "value": "12 Pack", "id": "1", "name": "Pack Info" } ] };</script>';
     expect(parseProductPage('servocity', 'https://www.servocity.com/nut/', jsonld('6-32 Hex Nut', '632000') + spaced, at).records[0]).toMatchObject({ packSize: 12, packSizeVerified: true });
     const plain = parseProductPage('servocity', 'https://www.servocity.com/spacer/', jsonld('1504 Series 32mm OD Pattern Spacer (4mm Length)', '1504-0032-0040'), at).records[0];
-    expect(plain).toMatchObject({ packSize: null, packSizeVerified: false });
+    // A record staged from an older dump, whose page fields were never read, stays unverified for ServoCity.
+    expect(applyPackEvidence({ ...plain, packSize: null, packSizeVerified: false, packEvidence: null })).toMatchObject({ packSizeVerified: false });
+    // ServoCity states every pack in that field, so a product without one is a single unit.
+    expect(plain).toMatchObject({ packSize: 1, packSizeVerified: true });
     const cables = parseProductPage('rev', 'https://www.revrobotics.com/rev-31-1413/', jsonld('JST VH 2-pin Motor Cables', 'REV-31-1413-PK4'), at).records[0];
     expect(cables).toMatchObject({ packSize: 4, packSizeVerified: true, packEvidence: 'SKU suffix "PK4"' });
     // Pack wording on the product itself still wins over the convention.

@@ -47,7 +47,7 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
               <a className="link num" href={vendor.url} target="_blank" rel="noopener noreferrer">{vendor.sku} <ExternalLink aria-hidden size={11} /></a>
               <span><span className="num">{line.qty}</span> needed</span>
               {vendor.packSizeVerified && vendor.packSize ? <span>pack of {vendor.packSize}{line.packsToOrder !== null ? `, order ${line.packsToOrder}` : ''}</span> : <span>pack size unknown</span>}
-              {line.order && line.order.lines > 1 && <span>covers {line.order.qty} pieces on {line.order.lines} CAD lines</span>}
+              {line.order && line.order.lines > 1 && <span>covers {line.order.qty} {line.order.qty === 1 ? 'piece' : 'pieces'} on {line.order.lines} CAD lines</span>}
               {line.orderedWith && <span>ordered with {group.lines.find(other => other.bomLineKey === line.orderedWith)?.name ?? 'another line'}</span>}
               {vendor.priceUsd !== null && <span className="num">{money(vendor.priceUsd)} per pack</span>}
               {vendor.stock === 'out' && <span style={{ color: 'var(--ck-danger)' }}>out of stock</span>}
