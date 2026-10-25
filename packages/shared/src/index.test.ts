@@ -69,6 +69,25 @@ describe('assembly traversal and aggregation', () => {
     expect(motor.purchasedAssembly?.reason).toBe('its name has a goBILDA/ServoCity part number');
     expect(motor).toMatchObject({ unresolvedSubassembly: false, metadataIssue: null });
   });
+  it('folds a body from an imported product\'s Part Studio, placed beside that product, into the product', () => {
+    // From HORS: "Motor Smol" holds the imported goBILDA motor as a subassembly ("5000-0002-0001 Motor", built from the
+    // Part Studio "Import 1") and, beside it, the output shaft "2107-4008-0001" taken straight from that same import.
+    const body = (id: string, name: string, elementId = 'import1') => ({ id, name, type: 'Part', documentId: 'doc1', elementId, partId: id });
+    const sub = (id: string, name: string, elementId: string) => ({ id, name, type: 'Assembly', documentId: 'doc1', elementId });
+    const definition = (shaftElement: string, besideMotor: boolean): AssemblyDefinition => ({
+      rootAssembly: { instances: [sub('w1', 'Motor Smol <1>', 'wrapper'), sub('w2', 'Motor Smol <2>', 'wrapper'), ...(besideMotor ? [] : [body('shaft', '2107-4008-0001 <1>', shaftElement)])] },
+      subAssemblies: [
+        { documentId: 'doc1', elementId: 'wrapper', instances: [sub('m', '5000-0002-0001 Motor <1>', 'motor'), ...(besideMotor ? [body('shaft', '2107-4008-0001 <1>', shaftElement)] : []), body('mount', 'Team motor mount', 'teamparts')] },
+        { documentId: 'doc1', elementId: 'motor', instances: [body('base', 'base'), body('endcap', 'endcap'), body('pin', 'Pin (1)')] },
+      ],
+    });
+    const folded = aggregateAssembly(definition('import1', true), context, 'Robot');
+    expect(folded.lines.map(line => [line.name, line.qty]).sort()).toEqual([['5000-0002-0001 Motor', 2], ['Team motor mount', 2]]);
+    expect(folded.lines.find(line => line.purchasedAssembly)!.purchasedAssembly).toMatchObject({ parts: 3, includes: ['2107-4008-0001'] });
+    // A body from a different Part Studio, or placed anywhere else, is a part of its own.
+    expect(aggregateAssembly(definition('teamparts', true), context, 'Robot').lines.map(line => line.name)).toContain('2107-4008-0001');
+    expect(aggregateAssembly(definition('import1', false), context, 'Robot').lines.map(line => line.name)).toContain('2107-4008-0001');
+  });
   it('does not count a resolved but empty child assembly as a part', () => {
     const definition: AssemblyDefinition = { rootAssembly: { instances: [{ id: 'empty', name: 'Empty Module', type: 'Assembly', documentId: 'doc1', elementId: 'module' }] }, subAssemblies: [{ documentId: 'doc1', elementId: 'module', instances: [] }] };
     expect(aggregateAssembly(definition, context, 'Robot').stats.totalInstances).toBe(0);

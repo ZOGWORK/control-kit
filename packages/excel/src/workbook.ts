@@ -53,9 +53,9 @@ function rels(target: Sheet) { return `<?xml version="1.0" encoding="UTF-8" stan
 const LOGO_DRAWING = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>47625</xdr:rowOff></xdr:from><xdr:ext cx="952500" cy="952500"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="Control Kit logo" descr="Black and yellow Control Kit hexagon logo"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="952500" cy="952500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>`;
 
 const vendorName: Record<VendorRecord['vendorId'], string> = { gobilda: 'goBILDA', servocity: 'ServoCity', andymark: 'AndyMark', rev: 'REV', pitsco: 'Pitsco' };
-const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', hardware: 'Fastener', review: 'Needs review' };
+const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', hardware: 'Fastener', ignore: 'Not needed', review: 'Needs review' };
 const matchText: Record<BomLine['matchStatus'], string> = { exact: 'Exact SKU', confirmed: 'Confirmed', possible: 'Possible, not confirmed', rejected: 'Rejected', unmatched: 'No match' };
-const order: Disposition[] = ['buy', 'hardware', 'print', 'cnc', 'cut-2d', 'fabricate', 'review'];
+const order: Disposition[] = ['buy', 'hardware', 'print', 'cnc', 'cut-2d', 'fabricate', 'review', 'ignore'];
 const date = (iso: string | null | undefined) => iso && Number.isFinite(Date.parse(iso)) ? iso.slice(0, 10) : 'unknown';
 /** Only an exact or confirmed match identifies the product a team orders; anything else is a candidate. */
 const ordered = (line: BomLine) => Boolean(line.vendor && (line.matchStatus === 'exact' || line.matchStatus === 'confirmed'));
@@ -81,7 +81,7 @@ function purchaseNotes(line: BomLine, result: ScanResult) {
   if (ordered(line) && line.vendor!.priceUsd === null) values.push('No price, so no total');
   if (result.stats.staleVendorData && ordered(line)) values.push('Vendor data may be out of date');
   if (line.disposition === 'hardware') values.push('Fastener from stock: CAD count can be low if Replicate or patterns placed some');
-  if (line.purchasedAssembly) values.push(`One product (${line.purchasedAssembly.parts} internal parts not listed)`);
+  if (line.purchasedAssembly) values.push(`One product (${line.purchasedAssembly.parts} internal parts not listed${line.purchasedAssembly.includes?.length ? `; includes ${line.purchasedAssembly.includes.join(', ')}` : ''})`);
   if (line.order && line.order.lines > 1) values.push(`Packs cover ${line.order.qty} pieces across ${line.order.lines} CAD lines with this SKU`);
   if (line.orderedWith) values.push(`Ordered with ${result.lines.find(other => other.bomLineKey === line.orderedWith)?.name ?? 'another row'} (same SKU)`);
   if (line.manualClassification) values.push('Set by your team');
@@ -264,6 +264,7 @@ function exceptionsSheet(result: ScanResult, now: Date) {
   heading(target, 'EXCEPTIONS', result, now, 1);
   headers(target, 6, names);
   const rows: Array<{ kind: string; line: BomLine; detail: string }> = [
+    ...result.lines.filter(line => line.disposition === 'ignore').map(line => ({ kind: 'Not needed', line, detail: 'Marked not needed by your team: not bought or made' })),
     ...result.lines.filter(line => ordered(line) && line.disposition === 'buy' && ['out', 'low'].includes(line.vendor!.stock))
       .map(line => ({ kind: line.vendor!.stock === 'out' ? 'Out of stock' : 'Low stock', line, detail: `${product(line.vendor!)} as of ${date(line.vendor!.updatedAt)}` })),
     ...result.lines.filter(line => line.unresolvedSubassembly).map(line => ({ kind: 'Unresolved subassembly', line, detail: line.missingMetadataReason ?? 'Its parts could not be read' })),

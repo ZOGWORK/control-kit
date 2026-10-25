@@ -5,10 +5,10 @@ export type View = 'overview' | 'review' | 'parts' | 'buy' | 'make';
 export const makeDispositions: Disposition[] = ['print', 'cnc', 'cut-2d', 'fabricate'];
 export const isMake = (line: BomLine) => makeDispositions.includes(line.disposition);
 export const vendorLabel: Record<VendorId, string> = { gobilda: 'goBILDA', servocity: 'ServoCity', andymark: 'AndyMark', rev: 'REV', pitsco: 'Pitsco' };
-export const chipClass = (line: BomLine) => line.suppressed ? 'suppressed' : line.disposition === 'buy' ? 'buy' : line.disposition === 'review' ? 'review' : 'make';
+export const chipClass = (line: BomLine) => line.suppressed || line.disposition === 'ignore' ? 'suppressed' : line.disposition === 'buy' ? 'buy' : line.disposition === 'review' ? 'review' : 'make';
 export const chipLabel = (line: BomLine) => line.suppressed ? 'Suppressed' : dispositionLabel[line.disposition];
 /** Short label for narrow chips: "2D cut" instead of the full "2D cut (laser/waterjet/router)". */
-export const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', hardware: 'Fastener', review: 'Needs review' };
+export const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', hardware: 'Fastener', ignore: 'Not needed', review: 'Needs review' };
 export const money = (value: number) => `$${value.toFixed(2)}`;
 
 /** A line can be paid for only with a confirmed or exact match, a verified pack size, and a price. */
@@ -79,7 +79,7 @@ export function makeGroups(result: ScanResult) {
     .filter(group => group.lines.length);
 }
 
-export type PartFilter = 'all' | 'buy' | 'hardware' | 'make' | 'review' | 'suppressed';
+export type PartFilter = 'all' | 'buy' | 'hardware' | 'make' | 'review' | 'ignore' | 'suppressed';
 export type PartSort = 'name' | 'qty';
 export function filterParts(result: ScanResult, filter: PartFilter, query: string, sort: PartSort) {
   const pool = filter === 'suppressed' ? result.suppressed

@@ -62,12 +62,13 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
   return <div className="stack">
     <PartPicture kit={kit} line={line} />
     {line.metadataIssue && <Alert tone="warning" title={line.missingMetadataReason ?? 'Missing data'} />}
-    {line.purchasedAssembly && <p className="small">Listed as one product because {line.purchasedAssembly.reason}. Its {line.purchasedAssembly.parts} internal part{line.purchasedAssembly.parts === 1 ? '' : 's'} (gearbox, bearings, screws inside it) are not listed separately.</p>}
+    {line.purchasedAssembly && <p className="small">Listed as one product because {line.purchasedAssembly.reason}. Its {line.purchasedAssembly.parts} internal part{line.purchasedAssembly.parts === 1 ? '' : 's'} (gearbox, bearings, screws inside it) are not listed separately.{line.purchasedAssembly.includes?.length ? ` It also includes ${line.purchasedAssembly.includes.join(', ')}, placed beside it from the same imported Part Studio.` : ''}</p>}
 
     <section className="stack" aria-labelledby="how">
       <div><h3 id="how">How the team gets it</h3><p className="muted small">{dispositionLabel[line.disposition]}. {sourceLabel[line.dispositionSource]}.</p></div>
       {line.reviewReason && <p className="small">{line.reviewReason}</p>}
       {line.dispositionEvidence.length > 0 && <ul className="evidence">{line.dispositionEvidence.map(item => <li key={item}>{item}</li>)}</ul>}
+      {line.disposition === 'ignore' && <p className="muted small">Marked not needed: it is listed but not bought, made, or reviewed. Choose another option to bring it back.</p>}
       {line.suppressed ? <p className="muted small">Suppressed parts are not bought or made. Unsuppress it in Onshape and rescan to include it.</p> : <>
         <div className="inline-actions" role="group" aria-label="Choose how this part is obtained">
           {dispositions.map(value => <Button key={value} size="sm" variant={line.disposition === value && line.manualClassification ? 'primary' : 'secondary'}

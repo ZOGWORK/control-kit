@@ -73,6 +73,61 @@ export function useControlKit(context: URLSearchParams) {
     return true;
   };
   useEffect(() => { onshapeMessage('applicationInit'); }, []);
+
+  // The last scan of this assembly reopens with the panel, so leaving and coming back does not need a rescan. It is
+  // kept per person and per assembly tab in this browser for a week, the same as the Worker's copy it relies on.
+  const savedKey = `control-kit:scan:${contextKeys.map(key => context.get(key) ?? '').join(':')}`;
+  const savedFor = session?.connected ? session.user?.id ?? null : null;
+  // The Worker's copy of a scan expires a week after the scan, so a saved scan is reopened only within that week
+  // (with an hour's margin), counted from the scan itself, however often it was saved since.
+  const reopenable = (scanned: ScanResult) => Date.now() - Date.parse(scanned.scannedAt) < 7 * 86400000 - 3600000;
+  useEffect(() => {
+    if (!savedFor || result || abort.current) return;
+    type Saved = { userId: string; result: ScanResult };
+    let saved: Saved | null;
+    try { saved = JSON.parse(localStorage.getItem(savedKey) ?? 'null') as Saved | null; } catch { saved = null; }
+    if (!saved || saved.userId !== savedFor || saved.result.vendorMatching === 'pending' || !reopenable(saved.result)) return;
+    const reopened = saved.result;
+    setResult(reopened);
+    void refreshChoices(reopened);
+  }, [savedFor]);
+  /** Applies the document's current shared choices and the person's match decisions to a reopened scan. */
+  async function refreshChoices(reopened: ScanResult) {
+    if (!reopened.scanId) return;
+    // Choices wait for the refresh, so nothing saved meanwhile can be overwritten by the older answer.
+    setPending('refresh');
+    try {
+      const response = await postJson('/api/choices', { documentId: reopened.documentId, scanId: reopened.scanId });
+      if (!response.ok) throw Error();
+      const { choices } = await response.json() as { choices: Record<string, { disposition: ClassificationOverride | null; decision: { status: 'confirmed' | 'rejected'; vendorId: string; normalizedSku: string } | null }> };
+      setResult(current => {
+        if (!current || current.scanId !== reopened.scanId) return current;
+        const lines = current.lines.map(line => {
+          const choice = choices[line.bomLineKey];
+          if (!choice) return line;
+          const next = { ...line, manualClassification: choice.disposition };
+          const decision = choice.decision;
+          if (decision && line.vendor && ['possible', 'confirmed', 'rejected'].includes(line.matchStatus) && decision.vendorId === line.vendor.vendorId && decision.normalizedSku === line.vendor.normalizedSku) {
+            next.matchStatus = decision.status;
+            if (decision.status === 'rejected') next.vendor = null;
+          }
+          return next;
+        });
+        const updated = { ...current, lines, stats: { ...current.stats } };
+        return classifyScan(updated, settings, overridesOf(updated));
+      });
+    } catch { setError('Could not load the latest shared choices for this scan. Rescan to be sure it is current.'); }
+    finally { setPending(null); }
+  }
+  useEffect(() => {
+    if (!savedFor || !result || result.vendorMatching === 'pending') return;
+    try { localStorage.setItem(savedKey, JSON.stringify({ userId: savedFor, result })); }
+    catch { /* Storage full or blocked: the scan still works, it just will not reopen. */ }
+  }, [result, savedFor]);
+  // Team settings can arrive after a reopened scan; its suggestions (team number in names) follow them.
+  useEffect(() => {
+    setResult(current => current && current.vendorMatching !== 'pending' ? classifyScan({ ...current, lines: current.lines.map(line => ({ ...line })), stats: { ...current.stats } }, settings, overridesOf(current)) : current);
+  }, [settings]);
   useEffect(() => {
     if (!session?.connected) return;
     api('/api/settings').then(async response => { if (!response.ok) throw Error(); return await response.json() as UserSettings; })
@@ -242,6 +297,14 @@ export function useControlKit(context: URLSearchParams) {
     scanGeneration.current++;
     abort.current?.abort(); abort.current = null; setProgress(null);
     stepRun.current = null;
+    // Every saved scan of this person's goes, not just this assembly's.
+    try {
+      const userId = session?.user?.id;
+      for (const key of Object.keys(localStorage).filter(item => item.startsWith('control-kit:scan:'))) {
+        try { if ((JSON.parse(localStorage.getItem(key) ?? 'null') as { userId?: string } | null)?.userId === userId) localStorage.removeItem(key); }
+        catch { localStorage.removeItem(key); }
+      }
+    } catch { /* Storage unavailable. */ }
     setStep(null); setResult(null); setError('');
     setSession({ connected: false });
   }

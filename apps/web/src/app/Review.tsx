@@ -61,6 +61,7 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
               <Button size="sm" variant="secondary" disabled={locked} onClick={() => void kit.setDisposition(line, 'print')}>3D print</Button>
               <Button size="sm" variant="ghost" disabled={locked} onClick={() => open(line.bomLineKey)}>Other</Button>
             </>}
+            <Button size="sm" variant="ghost" disabled={locked} title="Not a real part to buy or make, such as a body that is part of an imported product" onClick={() => void kit.setDisposition(line, 'ignore')}>Not needed</Button>
           </div>
         </div>;
       })}</div>

@@ -199,6 +199,29 @@ async function route(request: Request, env: Env): Promise<Response> {
     await env.APP_STATE.put(`settings:${current.data.user.id}`, JSON.stringify({ teamNumber: body.teamNumber }));
     return reply({ saved: true });
   }
+  if (url.pathname === '/api/choices' && request.method === 'POST') {
+    // Current shared dispositions and the person's match decisions for the lines of a scan they made: lets a reopened
+    // scan pick up teammates' changes without another Onshape request.
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const body = await request.json() as { documentId?: string; scanId?: string };
+    if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.scanId || !/^[a-f0-9-]{36}$/.test(body.scanId)) return reply({ error: 'Invalid scan identity.' }, 400);
+    const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${body.scanId}`);
+    if (!raw) return reply({ error: 'Scan this assembly again.' }, 409);
+    const scanned = JSON.parse(raw) as ScanResult;
+    if (scanned.documentId !== body.documentId) return reply({ error: 'Scan does not match this document.' }, 409);
+    const choices: Record<string, { disposition: ClassificationOverride | null; decision: MatchDecision | null }> = {};
+    for (let start = 0; start < scanned.lines.length; start += 20) {
+      await Promise.all(scanned.lines.slice(start, start + 20).map(async line => {
+        const decisionRaw = await env.APP_STATE.get(await matchDecisionKey(current.data.user.id, body.documentId!, line.bomLineKey));
+        let decision: MatchDecision | null = null;
+        try { decision = decisionRaw ? JSON.parse(decisionRaw) as MatchDecision : null; } catch { decision = null; }
+        choices[line.bomLineKey] = { disposition: await readDisposition(env, current.data.user.id, body.documentId!, classificationIdentity(line)), decision };
+      }));
+    }
+    return reply({ choices });
+  }
   if (url.pathname === '/api/classification/override' && request.method === 'POST') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const current = await getSession(request, env);
@@ -257,7 +280,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     };
     const scanId = random();
     return scanAssembly(request, context, env.ONSHAPE_API_VERSION, get, env.VENDOR_CATALOG, getDecision, Number(env.VENDOR_STALE_HOURS ?? 336), settings, getOverride,
-      async result => { result.scanId = scanId; await env.APP_STATE.put(`scan:${current.data.user.id}:${scanId}`, JSON.stringify(result), { expirationTtl: 3600 }); },
+      // Kept a week: the app reopens the last scan of an assembly, and choices, exports, and pictures need its server copy.
+      async result => { result.scanId = scanId; await env.APP_STATE.put(`scan:${current.data.user.id}:${scanId}`, JSON.stringify(result), { expirationTtl: 7 * 86400 }); },
       { summary: () => ledger.summary(), finish: () => persistLedger(env.APP_STATE, ledger) },
       // Scoped to the user: a cached BOM is only served to someone whose own Onshape access already read it.
       { get: key => env.APP_STATE.get(`${current.data.user.id}:${key}`), put: (key, value) => env.APP_STATE.put(`${current.data.user.id}:${key}`, value, { expirationTtl: 30 * 86400 }) });

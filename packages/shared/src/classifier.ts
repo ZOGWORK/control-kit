@@ -6,8 +6,10 @@ import { recalculatePurchasing } from './purchasing';
  * Suppression is an assembly state, not a disposition, and lives on `BomLine.suppressed`.
  * `hardware` is a fastener (screw, nut, washer, clip) that teams take from their hardware stock: it needs no decision,
  * and its CAD count is a guide only, since Replicate and patterns can place fasteners the count may not see.
+ * `ignore` ("Not needed") is set only by a person, for a body that is not a real part to buy or make (a shaft that is
+ * part of an imported motor, a reference body); it leaves Review, Buy, and Make but stays listed.
  */
-export type Disposition = 'buy' | 'print' | 'cnc' | 'cut-2d' | 'fabricate' | 'hardware' | 'review';
+export type Disposition = 'buy' | 'print' | 'cnc' | 'cut-2d' | 'fabricate' | 'hardware' | 'ignore' | 'review';
 /** Where the CAD model came from, as far as the evidence shows. */
 export type Provenance = 'vendor-catalog' | 'standard-content' | 'linked-library' | 'team-design' | 'unknown';
 /** What decided the disposition, in precedence order. */
@@ -17,8 +19,8 @@ export type Confidence = 'certain' | 'high' | 'medium' | 'low';
 export type ClassificationOverride = Disposition;
 export type UserSettings = { teamNumber: string | null };
 export type ClassificationOverrides = Record<string, ClassificationOverride>;
-export const dispositions: Disposition[] = ['buy', 'print', 'cnc', 'cut-2d', 'fabricate', 'hardware', 'review'];
-export const dispositionLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC machine', 'cut-2d': '2D cut (laser/waterjet/router)', fabricate: 'Other fabrication', hardware: 'Fastener', review: 'Needs review' };
+export const dispositions: Disposition[] = ['buy', 'print', 'cnc', 'cut-2d', 'fabricate', 'hardware', 'ignore', 'review'];
+export const dispositionLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC machine', 'cut-2d': '2D cut (laser/waterjet/router)', fabricate: 'Other fabrication', hardware: 'Fastener', ignore: 'Not needed', review: 'Needs review' };
 export function parseOverride(value: unknown): ClassificationOverride | null {
   if (value === 'commercial') return 'buy';
   if (value === 'printed') return 'print';
@@ -40,7 +42,7 @@ export function printCategory(name: string) {
 }
 
 /** Process vocabulary, matched as whole words only. */
-const processWords: Record<Exclude<Disposition, 'review' | 'hardware'>, string> = {
+const processWords: Record<Exclude<Disposition, 'review' | 'hardware' | 'ignore'>, string> = {
   print: '3dp|3d[ -]?print(?:ed|ing|s)?|print(?:ed|ing|s)?|fdm|sla|sls|additive(?:[ -]manufactur(?:ed|ing))?',
   cnc: 'cnc(?:[ -](?:machin(?:ed|ing)|mill(?:ed|ing)?))?|mill(?:ed|ing|s)?|machin(?:ed|ing)|lathe[sd]?|turn(?:ed|ing)',
   'cut-2d': 'laser(?:[ -]?cut(?:s|ting)?|ed|ing)?|water[ -]?jet(?:s|ted|ting)?|rout(?:er|ed|ing)|2d[ -]?cut(?:s|ting)?|plasma(?:[ -]?cut(?:s|ting)?)?|dxf',
@@ -78,9 +80,9 @@ const fastenerWords = /\b(?:screws?|bolts?|(?:lock|hex|nylock)?\s?nuts?|washers?
 const fastenedProductWords = /\b(?:pulleys?|collars?|hubs?|gears?|sprockets?|pinions?|bearings?|couplers?|mounts?|brackets?|wheels?|clamps?)\b/i;
 const customWords = /\b(?:custom|bracket|mount|spacer|adapter|holder|guide|cover)\b/i;
 /** Products a team buys whole even when the vendor's CAD models them as an assembly. */
-const productWords = /\b(?:bearings?|motors?|servos?|gearbox(?:es)?|wheels?|encoders?|sensors?|batter(?:y|ies)|cameras?|hubs?|actuators?)\b/i;
+const productWords = /\b(?:bearings?|motors?|servos?|gearbox(?:es)?|wheels?|encoders?|sensors?|batter(?:y|ies)|cameras?|hubs?|actuators?)\b|\b(?:axon(?: (?:max|mini|micro))?|yellow ?jacket|neverest|torquenado|ultra ?planetary|core hex|hd hex|spark ?mini|control hub|expansion hub|servo hub|limelight|pinpoint|octo ?quad|sparkfun otos|rev (?:color|distance|touch|2m)|smart robot servo|gobilda (?:motor|servo))\b/i;
 /** Names a team gives its own groupings; such a subassembly is never treated as one product by wording alone. */
-const groupingWords = /\b(?:stack|assembly|asm|sub-?assembly|pod|module|mechanism|system|side|left|right|front|back)\b/i;
+const groupingWords = /\b(?:stack|assembly|asm|sub-?assembly|pod|module|mechanism|system|side|left|right|front|back|case|plate|bracket|mount|holder|adapter|spacer|guide|cover|custom|printed|3dp|shroud|housing|cradle|clip)\b/i;
 
 /**
  * Why a subassembly should be one bought line instead of its internal parts, or null to list its parts. Vendor CAD
