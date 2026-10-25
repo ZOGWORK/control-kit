@@ -123,8 +123,12 @@ describe('generation bookkeeping', () => {
     const pointer = await publishStaged('gobilda', kv, 'feed1', { now: later(at) });
     expect(pointer.previous?.gen).toBe('crawl0');
     expect(pointer.retiring).toBeUndefined();
-    // The next cron run sees the fresh feed, drops the crawl, and must leave the rollback copy in place.
-    await runVendor('gobilda', kv, async () => new Response(''), { minRequestMs: 0, feedFreshHours: 1000000 });
+    // The next cron run (an hour later, inside the 24-hour rollback window; the clock is pinned so the test does not
+    // depend on today's date) sees the fresh feed, drops the crawl, and must leave the rollback copy in place.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(later(at, 3600));
+    try { await runVendor('gobilda', kv, async () => new Response(''), { minRequestMs: 0, feedFreshHours: 1000000 }); }
+    finally { vi.useRealTimers(); }
     const after = JSON.parse(kv.values.get(pointerKey('gobilda'))!) as CatalogPointer;
     expect(after.previous?.gen).toBe('crawl0');
     expect(after.retiring).toBeUndefined();

@@ -32,4 +32,7 @@ tag = "v1"
 new_sqlite_classes = ["AiAllowance"]
 
 [triggers]
-crons = ["0 * * * *", "12 * * * *", "24 * * * *", "36 * * * *", "48 * * * *"]
+# Vendor crawls are paused at the owner's request (2026-10-25): they used most of the free plan's daily KV writes,
+# and the published catalogs stay as they are. To resume, restore the hourly schedule that `cronVendors` maps:
+# ["0 * * * *", "12 * * * *", "24 * * * *", "36 * * * *", "48 * * * *"]
+crons = []
