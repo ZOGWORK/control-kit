@@ -247,7 +247,8 @@ export function useControlKit(context: URLSearchParams) {
     markSaving(line.bomLineKey, true);
     const generation = scanGeneration.current;
     const vendor = (pick ?? line.vendor)!;
-    const previous = { matchStatus: line.matchStatus, vendor: line.vendor, alternatives: line.alternatives, aiSuggestion: line.aiSuggestion ?? null };
+    const previous = { matchStatus: line.matchStatus, vendor: line.vendor, alternatives: line.alternatives };
+    const suggestions = aiSuggestionsOf(result, line);
     setResult(current => { if (!current) return current; const decided = withoutAi(applyMatchDecision(current, line.bomLineKey, decision, pick), line, options.keepAi); return classifyScan(decided, settings, overridesOf(decided)); });
     try {
       const response = await postJson('/api/matches/decision', { documentId: result.documentId, lineKey: line.bomLineKey, decision, vendorId: vendor.vendorId, normalizedSku: vendor.normalizedSku });
@@ -257,7 +258,7 @@ export function useControlKit(context: URLSearchParams) {
       // Only this line goes back; choices made on other lines meanwhile stay.
       if (scanGeneration.current === generation) setResult(current => {
         if (!current) return current;
-        const lines = current.lines.map(item => item.bomLineKey === line.bomLineKey ? { ...item, ...previous } : item);
+        const lines = restoreAi(current, suggestions).lines.map(item => item.bomLineKey === line.bomLineKey ? { ...item, ...previous } : item);
         const restored = { ...current, lines, stats: { ...current.stats } };
         return classifyScan(restored, settings, overridesOf(restored));
       });
@@ -309,15 +310,21 @@ export function useControlKit(context: URLSearchParams) {
 
   /** Applies one choice at once and saves it; on failure the line returns to its previous choice. */
   /** A person's own decision on a line ends its AI suggestion; accepting the suggestion keeps it until both saves succeed. */
+  // A choice applies to every row of the same part (two revisions of one part are two rows), so all of them lose it.
   function withoutAi(current: ScanResult, line: BomLine, keep = false): ScanResult {
-    return keep ? current : { ...current, lines: current.lines.map(item => item.bomLineKey === line.bomLineKey && item.aiSuggestion ? { ...item, aiSuggestion: null } : item) };
+    const identity = classificationIdentity(line);
+    return keep ? current : { ...current, lines: current.lines.map(item => classificationIdentity(item) === identity && item.aiSuggestion ? { ...item, aiSuggestion: null } : item) };
   }
+  /** The AI suggestions of every row of this part, to put back if a save fails. */
+  const aiSuggestionsOf = (current: ScanResult | null, line: BomLine) => new Map((current?.lines ?? []).filter(item => classificationIdentity(item) === classificationIdentity(line)).map(item => [item.bomLineKey, item.aiSuggestion ?? null]));
+  const restoreAi = (current: ScanResult, saved: Map<string, BomLine['aiSuggestion']>) => ({ ...current, lines: current.lines.map(item => saved.has(item.bomLineKey) ? { ...item, aiSuggestion: saved.get(item.bomLineKey) ?? null } : item) });
   async function saveChoice(line: BomLine, choice: ClassificationOverride | null, keepAi = false) {
     if (!result) return false;
     const scanId = result.scanId;
     const generation = scanGeneration.current;
     const identity = classificationIdentity(line);
     const previous = line.manualClassification ?? null;
+    const suggestions = aiSuggestionsOf(result, line);
     setResult(current => current && applyClassificationChoice(withoutAi(current, line, keepAi), identity, choice, settings));
     try {
       const response = await postJson('/api/classification/override', { documentId: result.documentId, scanId, identity, classification: choice });
@@ -329,7 +336,7 @@ export function useControlKit(context: URLSearchParams) {
         const active = current.lines.find(item => item.bomLineKey === line.bomLineKey);
         if (!active || active.manualClassification !== choice) return current;
         // The choice did not save, so the AI suggestion it replaced comes back too.
-        const restored = { ...current, lines: current.lines.map(item => item.bomLineKey === line.bomLineKey ? { ...item, aiSuggestion: line.aiSuggestion ?? null } : item) };
+        const restored = restoreAi(current, suggestions);
         return applyClassificationChoice(restored, identity, previous, settings);
       });
       return false;
@@ -438,7 +445,8 @@ export function useControlKit(context: URLSearchParams) {
     try {
       type Job = { jobId: string; done: boolean; rateLimited?: boolean; error?: string; assemblyName: string; documentName?: string; revision?: { type: string; id: string } | null; scannedAt: string; parts: ExportPart[] };
       const read = async (response: Response) => {
-        if (response.status === 401) { setSession({ connected: false }); throw Error('Your Onshape connection expired. Reconnect and export again.'); }
+        // Only this export's own session may be ended: a reply from an export the person already left is ignored.
+        if (response.status === 401) { if (active()) setSession({ connected: false }); throw Error('Your Onshape connection expired. Reconnect and export again.'); }
         const body = await response.json().catch(() => ({})) as Job;
         if (!response.ok || !body.jobId) throw Error(body.error ?? 'STEP export failed. Try again.');
         return body;
