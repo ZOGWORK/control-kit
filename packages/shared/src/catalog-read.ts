@@ -175,8 +175,9 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
     // A part named exactly like a known FTC product ("Pinpoint", "Control Hub") is that product; with several SKUs, a person picks.
     const known = !mapped && match.status !== 'exact' ? knownProduct(line.name) : null;
     const knownRecords = known ? (await Promise.all(known.skus.map(([vendor, sku]) => recordAt(vendor, sku)))).filter((record): record is VendorRecord => Boolean(record)) : [];
-    if (known && knownRecords.length === 1) match = { vendor: knownRecords[0], confidence: 1, status: 'exact', reasons: [`named as the ${known.product}, SKU ${knownRecords[0].sku}`] };
-    else if (known && knownRecords.length > 1) match = { vendor: knownRecords[0], confidence: 0.9, status: 'possible', reasons: [`named as the ${known.product}, sold as ${knownRecords.map(record => record.sku).join(' or ')}; confirm which one`], choices: knownRecords };
+    // A name sold as several SKUs stays a question even when only one of them is readable right now.
+    if (known && knownRecords.length === 1 && known.skus.length === 1) match = { vendor: knownRecords[0], confidence: 1, status: 'exact', reasons: [`named as the ${known.product}, SKU ${knownRecords[0].sku}`] };
+    else if (known && knownRecords.length) match = { vendor: knownRecords[0], confidence: 0.9, status: 'possible', reasons: [`named as the ${known.product}, sold as ${knownRecords.map(record => record.sku).join(' or ')}; confirm which one`], choices: knownRecords };
     // A product whose own bodies name a different SKU of the same family (an imported motor named 5000-0002-0001 whose
     // bodies say 5000-0002-4008) is a question: the name may be a template's, the bodies the real product's.
     if (match.status === 'exact' && match.vendor && !mapped && line.purchasedAssembly?.inside?.length) {

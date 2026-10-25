@@ -128,6 +128,12 @@ export function findBestMatch(line: { name: string; partNumber?: string | null }
   const skus = skuCandidates(line.name, line.partNumber);
   const exact = candidates.filter(vendor => skus.some(sku => normalizeSku(sku, vendor.vendorId) === vendor.normalizedSku));
   const exactVendors = new Set(exact.map(vendor => vendor.vendorId));
+  // Two different numbers on one line are a question even at a single vendor (a motor body named 5000-0002-0001 and -4008).
+  const exactSkus = new Set(exact.map(vendor => vendor.normalizedSku));
+  if (exactVendors.size === 1 && exactSkus.size > 1) {
+    const ranked = exact.sort(preferStockThenPrice);
+    return { vendor: ranked[0], confidence: 0.9, status: 'possible', reasons: [`different SKUs on this part (${ranked.map(item => item.sku).join(', ')}); confirm which one`], choices: ranked };
+  }
   if (exactVendors.size === 1) {
     const vendor = exact.sort(preferStockThenPrice)[0];
     const from = line.partNumber && normalizeSku(line.partNumber, vendor.vendorId) === vendor.normalizedSku ? 'part number' : 'part name';

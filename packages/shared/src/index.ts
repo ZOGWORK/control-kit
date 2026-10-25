@@ -166,10 +166,12 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
       return total + (child?.instances && !ancestry.has(key) ? countParts(child.instances, new Set([...ancestry, key])) : 0);
     }, 0);
   }
-  /** Names of the parts and subassemblies inside a subassembly, nested ones included (at most 50). */
+  /** Names of the active parts and subassemblies inside a subassembly, nested ones included (at most 50). */
   function namesInside(instances: AssemblyInstance[], ancestry: Set<string>, into = new Set<string>()): Set<string> {
     for (const instance of instances) {
       if (into.size >= 50) break;
+      // Suppressed bodies are not part of the product as placed.
+      if (instance.suppressed || instance.isSuppressed) continue;
       into.add(partNames.get(`${instance.documentId}:${instance.elementId}:${instance.partId}`) ?? instance.name.replace(/\s*<\d+>$/, ''));
       if (instance.type.toLowerCase() !== 'assembly') continue;
       const key = subassemblyKey(instance);

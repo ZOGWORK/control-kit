@@ -277,6 +277,20 @@ describe('known products and SKU choices', () => {
     expect(pinpoint.lineTotalUsd).toBeNull();
     expect(pinpointCase.matchStatus).not.toBe('exact');
   });
+  it('keeps a name sold as several SKUs a question when only one of them is in the catalog', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: 'Pinpoint' });
+    await enrichScan(result, catalog(shelf.filter(item => item.sku !== '3110-0002-0001')));
+    expect(result.lines[0].matchStatus).toBe('possible');
+    expect(result.lines[0].choices?.map(choice => choice.sku)).toEqual(['3110-0002-0002']);
+  });
+  it('asks which SKU when one part names two numbers sold by the same vendor', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: '5000-0002-0001 5000-0002-4008 Motor' });
+    await enrichScan(result, catalog(shelf));
+    expect(result.lines[0].matchStatus).toBe('possible');
+    expect(result.lines[0].choices?.map(choice => choice.sku).sort()).toEqual(['5000-0002-0001', '5000-0002-4008']);
+  });
   it('applies a saved decision that picks a choice other than the one shown', async () => {
     clearCatalogMemoryCache();
     const result = lines({ name: 'Pinpoint' });
