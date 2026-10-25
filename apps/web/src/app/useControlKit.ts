@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { applyClassificationChoice, applyMatchDecision, classificationIdentity, classifyScan, decisionRecord, matchCatalog, type BomLine, type ClassificationOverride, type ExportPart, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
+import { aiCandidateRecord, applyAiReview, applyClassificationChoice, applyMatchDecision, buildAiReviewRequest, classificationIdentity, classifyScan, decisionRecord, matchCatalog, type AiProvider, type AiReviewItem, type BomLine, type ClassificationOverride, type ExportPart, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
 /** Spreadsheet and ZIP builders load on first download, keeping them out of the initial bundle. */
 const exporters = () => import('@control-kit/excel');
 
@@ -43,6 +43,8 @@ export function useControlKit(context: URLSearchParams) {
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
   const [excel, setExcel] = useState<'idle' | 'working' | 'failed'>('idle');
   const [step, setStep] = useState<ExportState | null>(null);
+  /** The optional AI review: whether the server has a key, a request in flight, and the last outcome to show. */
+  const [ai, setAi] = useState<{ enabled: boolean; running: boolean; note: string }>({ enabled: false, running: false, note: '' });
   const abort = useRef<AbortController | null>(null);
   const scanGeneration = useRef(0);
   /** The STEP export in progress, if any. Sign-out ends it; a rescan leaves it to finish for the scan it started from. */
@@ -213,10 +215,10 @@ export function useControlKit(context: URLSearchParams) {
   /** Confirm or reject a possible vendor match; the line updates at once and rolls back if saving fails. */
   /** Confirms or rejects the line's match; `pick` confirms one of its choices instead. */
   async function decide(line: BomLine, decision: 'confirmed' | 'rejected', pick?: VendorRecord) {
-    if (!result || !line.vendor || pending || saving.has(line.bomLineKey)) return;
+    if (!result || !(pick ?? line.vendor) || pending || saving.has(line.bomLineKey)) return;
     markSaving(line.bomLineKey, true);
     const generation = scanGeneration.current;
-    const vendor = pick ?? line.vendor;
+    const vendor = (pick ?? line.vendor)!;
     const previous = { matchStatus: line.matchStatus, vendor: line.vendor, alternatives: line.alternatives };
     setResult(current => { if (!current) return current; const decided = applyMatchDecision(current, line.bomLineKey, decision, pick); return classifyScan(decided, settings, overridesOf(decided)); });
     try {
@@ -232,6 +234,42 @@ export function useControlKit(context: URLSearchParams) {
       });
       setError('Could not save the match choice. Try again.');
     } finally { markSaving(line.bomLineKey, false); }
+  }
+
+  useEffect(() => {
+    api('/api/ai/status').then(response => response.ok ? response.json() as Promise<{ enabled?: boolean }> : { enabled: false })
+      .then(status => setAi(current => ({ ...current, enabled: Boolean(status.enabled) }))).catch(() => { /* The review stays hidden. */ });
+  }, []);
+
+  /** One batched request for every uncertain line. Suggestions only: nothing is saved until a person accepts one. */
+  async function runAiReview() {
+    if (!result?.scanId || ai.running || result.vendorMatching === 'pending') return;
+    const { request, keys } = buildAiReviewRequest(result);
+    if (!request.lines.length) { setAi(current => ({ ...current, note: 'Nothing uncertain to recheck.' })); return; }
+    const scanId = result.scanId;
+    setAi(current => ({ ...current, running: true, note: '' }));
+    try {
+      const response = await postJson('/api/ai/review', { documentId: result.documentId, scanId, request });
+      const body = await response.json().catch(() => ({})) as { items?: AiReviewItem[]; provider?: AiProvider; cached?: boolean; error?: string };
+      if (!response.ok || !body.items || !body.provider) { setAi(current => ({ ...current, note: body.error ?? 'The AI review failed. Your parts are unchanged.' })); return; }
+      setResult(current => current && current.scanId === scanId ? applyAiReview(current, keys, body.items!, body.provider!) : current);
+      const who = body.provider === 'gemini' ? 'Gemini' : 'Claude';
+      setAi(current => ({ ...current, note: `${who} suggested ${body.items!.length} of ${request.lines.length} uncertain parts${body.cached ? ' (a saved answer, no new AI call)' : ''}${request.leftOut ? `; ${request.leftOut} more were not sent` : ''}. Nothing changes until you accept a suggestion.` }));
+    } catch { setAi(current => ({ ...current, note: 'Could not reach the AI review. Your parts are unchanged.' })); }
+    finally { setAi(current => ({ ...current, running: false })); }
+  }
+  /** Accepting saves the suggestion exactly like a person's own choice: the product as a confirmed match, the type as a shared choice. */
+  async function acceptAi(line: BomLine) {
+    const suggestion = line.aiSuggestion;
+    if (!suggestion) return;
+    const record = aiCandidateRecord(line, suggestion.candidateId);
+    const sameMatch = record && line.vendor && record.vendorId === line.vendor.vendorId && record.normalizedSku === line.vendor.normalizedSku;
+    if (record && line.matchStatus !== 'exact' && !(sameMatch && line.matchStatus === 'confirmed')) await decide(line, 'confirmed', record);
+    if (suggestion.disposition !== 'review') await setDisposition(line, suggestion.disposition);
+    dismissAi(line);
+  }
+  function dismissAi(line: BomLine) {
+    setResult(current => current && { ...current, lines: current.lines.map(item => item.bomLineKey === line.bomLineKey ? { ...item, aiSuggestion: null } : item) });
   }
 
   /** Applies one choice at once and saves it; on failure the line returns to its previous choice. */
@@ -414,7 +452,7 @@ export function useControlKit(context: URLSearchParams) {
     return URL.createObjectURL(await response.blob());
   }
 
-  return { saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
+  return { ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
     acceptSuggestions, bulk, pending, settings, savingSettings, saveSettings, signOut, excel, downloadExcel, downloadCsv, step, downloadStep };
 }
 export type ControlKit = ReturnType<typeof useControlKit>;
