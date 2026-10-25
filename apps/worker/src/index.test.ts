@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, { cronVendors, type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
-import { aggregateAssembly, classificationIdentity, type VendorId } from '@control-kit/shared';
+import { aggregateAssembly, classificationIdentity, matchCatalog, type ScanResult, type VendorId } from '@control-kit/shared';
 import { clearCatalogMemoryCache } from './catalog';
 import { batchKey, indexKey, pointerKey } from './vendor-ingest';
 import { readFileSync } from 'node:fs';
@@ -14,6 +14,12 @@ class MemoryKv implements Kv {
 }
 const mock = createMockOnshape();
 const env = { APP_STATE: new MemoryKv(), VENDOR_CATALOG: new MemoryKv(), ONSHAPE_OAUTH_CLIENT_ID: 'test-id', ONSHAPE_OAUTH_CLIENT_SECRET: 'test-secret', ONSHAPE_OAUTH_REDIRECT_URI: 'http://localhost:8787/oauth/redirect', ONSHAPE_API_BASE: 'http://localhost:8788', ONSHAPE_API_VERSION: 'v9', ONSHAPE_OAUTH_BASE: 'http://localhost:8788', SESSION_ENCRYPTION_KEY: btoa('12345678901234567890123456789012'), WEB_ORIGIN: 'http://localhost:5173' } as Env & { APP_STATE: MemoryKv; VENDOR_CATALOG: MemoryKv };
+/** What the browser does with a scan: read catalogs through /api/catalog/raw and match, applying the scan's saved decisions. */
+async function matchLikeBrowser(result: ScanResult) {
+  expect(result.vendorMatching).toBe('pending');
+  const reader = { get: async (key: string) => { const response = await call(`/api/catalog/raw?key=${encodeURIComponent(key)}`); return response.status === 404 ? null : response.text(); } };
+  return matchCatalog(result, reader, async key => result.lines.find(line => line.bomLineKey === key)?.matchDecision ?? null);
+}
 const call = (path: string, cookie?: string) => worker.fetch(new Request(`http://localhost:8787${path}`, { headers: { origin: env.WEB_ORIGIN, ...(cookie ? { cookie } : {}) } }), env);
 beforeEach(() => vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => mock.handle(new Request(input, init))));
 afterAll(() => vi.unstubAllGlobals());
@@ -164,26 +170,30 @@ describe('M3 match decisions against local catalog KV', () => {
     const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
     const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
     const path = '/api/scan?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1';
-    const first = (await (await call(path, cookie)).text()).trim().split('\n').map(line => JSON.parse(line)).find(event => event.type === 'result').result;
-    const line = first.lines.find((item: { partId: string }) => item.partId === 'bearing-8');
+    const first = await matchLikeBrowser((await (await call(path, cookie)).text()).trim().split('\n').map(line => JSON.parse(line)).find(event => event.type === 'result').result);
+    const line = first.lines.find(item => item.partId === 'bearing-8')!;
     expect(line.matchStatus).toBe('possible');
     expect(line.lineTotalUsd).toBeNull();
-    const body = JSON.stringify({ documentId: 'simple', lineKey: line.bomLineKey, decision: 'confirmed', vendorId: line.vendor.vendorId, normalizedSku: line.vendor.normalizedSku });
+    const body = JSON.stringify({ documentId: 'simple', lineKey: line.bomLineKey, decision: 'confirmed', vendorId: line.vendor!.vendorId, normalizedSku: line.vendor!.normalizedSku });
     const foreign = await worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: 'https://foreign.example', 'content-type': 'application/json' }, body }), env);
     expect(foreign.status).toBe(403);
     const saved = await worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' }, body }), env);
     expect(saved.status).toBe(200);
-    const secondBody = JSON.stringify({ documentId: 'simple', lineKey: 'second-line', decision: 'rejected', vendorId: line.vendor.vendorId, normalizedSku: line.vendor.normalizedSku });
+    const secondBody = JSON.stringify({ documentId: 'simple', lineKey: 'second-line', decision: 'rejected', vendorId: line.vendor!.vendorId, normalizedSku: line.vendor!.normalizedSku });
     const concurrent = await Promise.all([body, secondBody].map(value => worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' }, body: value }), env)));
     expect(concurrent.map(response => response.status)).toEqual([200, 200]);
     expect([...env.APP_STATE.values.keys()].filter(key => key.startsWith('match-decision:'))).toHaveLength(2);
     expect([...env.APP_STATE.values.keys()].filter(key => key.startsWith('match-decision:')).every(key => key.length < 512)).toBe(true);
-    const longBody = JSON.stringify({ documentId: 'simple', lineKey: `configured:${'size=10mm;'.repeat(100)}`, decision: 'confirmed', vendorId: line.vendor.vendorId, normalizedSku: line.vendor.normalizedSku });
+    const longBody = JSON.stringify({ documentId: 'simple', lineKey: `configured:${'size=10mm;'.repeat(100)}`, decision: 'confirmed', vendorId: line.vendor!.vendorId, normalizedSku: line.vendor!.normalizedSku });
     const longSave = await worker.fetch(new Request('http://localhost:8787/api/matches/decision', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' }, body: longBody }), env);
     expect(longSave.status).toBe(200);
     expect([...env.APP_STATE.values.keys()].filter(key => key.startsWith('match-decision:')).every(key => key.length < 512)).toBe(true);
-    const second = (await (await call(path, cookie)).text()).trim().split('\n').map(line => JSON.parse(line)).find(event => event.type === 'result').result;
-    expect(second.lines.find((item: { partId: string }) => item.partId === 'bearing-8').matchStatus).toBe('confirmed');
+    const second = await matchLikeBrowser((await (await call(path, cookie)).text()).trim().split('\n').map(line => JSON.parse(line)).find(event => event.type === 'result').result);
+    expect(second.lines.find(item => item.partId === 'bearing-8')!.matchStatus).toBe('confirmed');
+    // The catalog endpoint serves only catalog keys, with long caching for generation data.
+    expect((await call('/api/catalog/raw?key=session%3Aabc')).status).toBe(400);
+    expect((await call(`/api/catalog/raw?key=${encodeURIComponent(indexKey(vendor, 'g1'))}`)).headers.get('cache-control')).toContain('immutable');
+    expect((await call(`/api/catalog/raw?key=${encodeURIComponent(pointerKey(vendor))}`)).headers.get('cache-control')).toBe('public, max-age=60');
     env.VENDOR_CATALOG.values.clear(); clearCatalogMemoryCache();
   });
 });

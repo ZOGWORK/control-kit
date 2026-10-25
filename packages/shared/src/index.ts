@@ -5,6 +5,8 @@ import { purchasedAssemblyReason } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, Confidence, Disposition, DispositionSource, Provenance, UserSettings } from './classifier';
 export type { Attribution, LibraryMapping, LicensedImage, VendorId, VendorRecord, MatchResult } from './matching';
 export { buildControlPointPayload, MockControlPointAdapter } from './control-point';
+export { batchKey, catalogReadKey, catalogVendors, clearCatalogMemoryCache, indexKey, matchCatalog, pointerKey } from './catalog-read';
+export type { CatalogReader, IndexEntry } from './catalog-read';
 export type { ControlPointAdapter, ControlPointBomPayload } from './control-point';
 export { checkStep, exportManifest, stepDispositions, stepFileName, wantsStep } from './step';
 export type { ExportPart, StepCheck } from './step';
@@ -31,7 +33,9 @@ export type BomLine = { bomLineKey: string; name: string; description: string | 
   /** Set when a parts library's mapping supplied the SKU, with the library's credit. */
   libraryMatch?: { library: string; attribution: Attribution } | null;
   /** A licensed picture of the product (library or vendor feed). Empty until a source grants permission. */
-  thumbnail?: LicensedImage | null };
+  thumbnail?: LicensedImage | null;
+  /** The person's saved confirm/reject for a possible match on this line, applied when the line is matched. */
+  matchDecision?: MatchDecision | null };
 /** Why a line lacks data. Codes are stable for UI, export, and diagnostics; the user-facing text lives in `metadataIssueText`. */
 export type MetadataIssueCode = 'unresolved-subassembly' | 'unresolved-reference' | 'source-revision-unavailable' | 'not-in-bom' | 'bom-unavailable';
 export type MetadataIssue = { code: MetadataIssueCode; httpStatus: number | null };
@@ -73,7 +77,11 @@ export type VendorHealth = { vendorId: VendorRecord['vendorId']; state: VendorHe
   progress: { sitemapsDone: number; sitemapsTotal: number; pagesDoneInSitemap: number; pagesInSitemap: number; recordsCollected: number } | null };
 export type CatalogHealth = { checkedAt: string; vendors: VendorHealth[] };
 export const catalogUsable = (health: CatalogHealth | undefined, vendorId: VendorRecord['vendorId']) => health?.vendors.find(vendor => vendor.vendorId === vendorId)?.state === 'published';
-export type ScanResult = { scanId?: string; diagnostics?: ScanDiagnostics; catalogHealth?: CatalogHealth; documentName?: string; assemblyName: string; documentId: string; elementId: string; scannedAt: string; vendorDataUpdatedAt: string | null; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
+/**
+ * `vendorMatching: 'pending'` marks a Worker scan whose lines still need catalog matching (done in the browser, since
+ * matching a large assembly against every catalog exceeds the Worker's CPU limit); `'done'` once matched.
+ */
+export type ScanResult = { vendorMatching?: 'pending' | 'done'; scanId?: string; diagnostics?: ScanDiagnostics; catalogHealth?: CatalogHealth; documentName?: string; assemblyName: string; documentId: string; elementId: string; scannedAt: string; vendorDataUpdatedAt: string | null; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
 export type MatchDecision = { status: 'confirmed' | 'rejected'; vendorId: VendorRecord['vendorId']; normalizedSku: string };
 
 export function updatePurchasing(line: BomLine): BomLine {
