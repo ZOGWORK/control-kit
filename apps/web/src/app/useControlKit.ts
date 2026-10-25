@@ -258,7 +258,8 @@ export function useControlKit(context: URLSearchParams) {
       // Only this line goes back; choices made on other lines meanwhile stay.
       if (scanGeneration.current === generation) setResult(current => {
         if (!current) return current;
-        const lines = restoreAi(current, suggestions).lines.map(item => item.bomLineKey === line.bomLineKey ? { ...item, ...previous } : item);
+        // The decided row goes back first, so the check below compares it with its state from before the save.
+        const lines = restoreAi({ ...current, lines: current.lines.map(item => item.bomLineKey === line.bomLineKey ? { ...item, ...previous } : item) }, suggestions).lines;
         const restored = { ...current, lines, stats: { ...current.stats } };
         return classifyScan(restored, settings, overridesOf(restored));
       });
@@ -316,8 +317,17 @@ export function useControlKit(context: URLSearchParams) {
     return keep ? current : { ...current, lines: current.lines.map(item => classificationIdentity(item) === identity && item.aiSuggestion ? { ...item, aiSuggestion: null } : item) };
   }
   /** The AI suggestions of every row of this part, to put back if a save fails. */
-  const aiSuggestionsOf = (current: ScanResult | null, line: BomLine) => new Map((current?.lines ?? []).filter(item => classificationIdentity(item) === classificationIdentity(line)).map(item => [item.bomLineKey, item.aiSuggestion ?? null]));
-  const restoreAi = (current: ScanResult, saved: Map<string, BomLine['aiSuggestion']>) => ({ ...current, lines: current.lines.map(item => saved.has(item.bomLineKey) ? { ...item, aiSuggestion: saved.get(item.bomLineKey) ?? null } : item) });
+  type AiSnapshot = { suggestion: BomLine['aiSuggestion']; manual: BomLine['manualClassification']; match: BomLine['matchStatus'] };
+  const aiSuggestionsOf = (current: ScanResult | null, line: BomLine) => new Map<string, AiSnapshot>((current?.lines ?? []).filter(item => classificationIdentity(item) === classificationIdentity(line))
+    .map(item => [item.bomLineKey, { suggestion: item.aiSuggestion ?? null, manual: item.manualClassification, match: item.matchStatus }]));
+  /**
+   * Puts suggestions back after a failed save, but only on rows still as they were when the save began: a row that
+   * got a newer decision meanwhile keeps it, and no old suggestion can come back to overwrite that.
+   */
+  const restoreAi = (current: ScanResult, saved: Map<string, AiSnapshot>) => ({ ...current, lines: current.lines.map(item => {
+    const before = saved.get(item.bomLineKey);
+    return before && !item.aiSuggestion && item.manualClassification === before.manual && item.matchStatus === before.match ? { ...item, aiSuggestion: before.suggestion } : item;
+  }) });
   async function saveChoice(line: BomLine, choice: ClassificationOverride | null, keepAi = false) {
     if (!result) return false;
     const scanId = result.scanId;
@@ -336,8 +346,8 @@ export function useControlKit(context: URLSearchParams) {
         const active = current.lines.find(item => item.bomLineKey === line.bomLineKey);
         if (!active || active.manualClassification !== choice) return current;
         // The choice did not save, so the AI suggestion it replaced comes back too.
-        const restored = restoreAi(current, suggestions);
-        return applyClassificationChoice(restored, identity, previous, settings);
+        // The choice is reverted first, so the check in restoreAi compares rows with their state from before the save.
+        return restoreAi(applyClassificationChoice(current, identity, previous, settings), suggestions);
       });
       return false;
     }
