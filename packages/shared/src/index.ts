@@ -1,5 +1,5 @@
 export const productName = 'Control Kit';
-export { classifyMatchScore, findBestMatch, findLibraryMapping, libraryMapKey, nameSimilarity, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates } from './matching';
+export { classifyMatchScore, configurationValues, findBestMatch, findLibraryMapping, libraryMapKey, nameCoverage, nameSimilarity, vendorTag, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates } from './matching';
 export { applyClassificationChoice, classificationIdentity, classifyLine, classifyScan, decideDisposition, dispositionLabel, dispositions, parseOverride, printCategory, purchasedAssemblyReason } from './classifier';
 import { purchasedAssemblyReason } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, Confidence, Disposition, DispositionSource, Provenance, UserSettings } from './classifier';

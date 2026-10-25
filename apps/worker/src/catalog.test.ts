@@ -316,3 +316,46 @@ describe('known products and SKU choices', () => {
     expect(result.lines[0].vendor?.packEvidence).toMatch(/4 wheels/);
   });
 });
+
+describe('parts library vendor tags', () => {
+  const record = (vendorId: VendorId, sku: string, name: string, priceUsd = 10): VendorRecord => ({ vendorId, sku, normalizedSku: normalizeSku(sku, vendorId), name, normalizedName: normalizeName(name), url: 'https://www.gobilda.com/x/', priceUsd, packSize: 1, packSizeVerified: true, stock: 'in', stockQty: null, category: 'motion', updatedAt: new Date().toISOString(), source: 'sitemap' });
+  // Real names from the goBILDA and REV catalogs (2026-10-25).
+  const shelf = [
+    record('rev', 'REV-11-1855', 'Servo Hub', 90),
+    record('gobilda', '1908-0025-0032', '1908 Series Servo Hub (25 Tooth Spline, 32mm Diameter)', 8.99),
+    record('gobilda', '1908-0024-0032', '1908 Series Servo Hub (24 Tooth Spline, 32mm Diameter)', 8.99),
+    record('gobilda', '3109-0004-0002', 'Servo Commander', 39.99),
+    record('gobilda', '5203-2402-0001', '5203 Series Yellow Jacket Motor (1:1 Ratio, 24mm Length 8mm REX® Shaft, 6000 RPM, 3.3 - 5V Encoder)', 54.99),
+    record('gobilda', '5202-0002-0001', '5202 Series Yellow Jacket Motor (1:1 Ratio, 24mm Length 6mm D-Shaft, 6000 RPM, 3.3 - 5V Encoder)', 44.99),
+    record('gobilda', '5203-2402-0139', '5203 Series Yellow Jacket Planetary Gear Motor (139:1 Ratio, 24mm Length 8mm REX® Shaft, 43 RPM, 3.3 - 5V Encoder)', 54.99),
+  ];
+  const lines = (...specs: Array<Partial<BomLine> & { name: string }>) => {
+    const result = aggregateAssembly(fixture('empty'), context, 'Robot');
+    const base = aggregateAssembly(fixture('simple'), context, 'Robot').lines[0];
+    result.lines = specs.map((spec, n) => ({ ...base, partNumber: null, configuration: null, bomLineKey: `line-${n}`, qty: 1, ...spec }));
+    return result;
+  };
+  it('matches only the tagged vendor and offers its closest products as choices', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: 'Servo Hub (GB)' }, { name: '6000rpm Motor - Bare REX (GB)', configuration: 'Encoder_Cap_Color=4D4D4D;Flux_Ring_Color=FFC10E;List_a1=Medium;List_b2=_6000rpm_Bare_REX;List_c3=New' }, { name: 'Servo Hub (REV)' });
+    await enrichScan(result, catalog(shelf));
+    const [hub, motor, revHub] = result.lines;
+    expect(hub.matchStatus).toBe('possible');
+    expect(hub.choices?.map(choice => choice.sku).sort()).toEqual(['1908-0024-0032', '1908-0025-0032']);
+    expect(motor.matchStatus).toBe('possible');
+    expect(motor.vendor?.sku).toBe('5203-2402-0001');
+    expect(motor.choices?.map(choice => choice.sku)).not.toContain('5203-2402-0139');
+    expect(revHub.vendor?.sku).toBe('REV-11-1855');
+  });
+  it('keeps exact SKU choices, never falls back to another vendor, and keeps known products at the tagged vendor', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: '5203-2402-0001 5202-0002-0001 Motor (GB)' }, { name: 'Control Hub (GB)' });
+    await enrichScan(result, catalog([...shelf, record('rev', 'REV-31-1595', 'Control Hub', 375)]));
+    expect(result.lines[0].choices?.map(choice => choice.sku).sort()).toEqual(['5202-0002-0001', '5203-2402-0001']);
+    expect(result.lines[1].vendor?.sku).not.toBe('REV-31-1595');
+    clearCatalogMemoryCache();
+    const missing = lines({ name: 'Servo Hub (GB)' });
+    await enrichScan(missing, catalog(shelf.filter(item => item.vendorId !== 'gobilda')));
+    expect(missing.lines[0]).toMatchObject({ matchStatus: 'unmatched', vendor: null });
+  });
+});

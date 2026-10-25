@@ -115,6 +115,40 @@ function candidateScore(name: string, vendor: VendorRecord) {
   return { score: Math.max(0, Math.min(1, score)), reasons };
 }
 
+/**
+ * A vendor named by a parts library's tag at the end of a part name: FRCDesign's FTC parts read "Servo Hub (GB)" or
+ * "6000rpm Motor - Bare REX (GB)". Returns the vendor and the name without the tag.
+ */
+export function vendorTag(name: string): { vendor: VendorId; name: string } | null {
+  const found = name.match(/^(.*?)\s*\((gb|gobilda|rev|am|andymark|sc|servocity|pitsco|tetrix)\)\s*$/i);
+  if (!found || !found[1].trim()) return null;
+  const tags: Record<string, VendorId> = { gb: 'gobilda', gobilda: 'gobilda', rev: 'rev', am: 'andymark', andymark: 'andymark', sc: 'servocity', servocity: 'servocity', pitsco: 'pitsco', tetrix: 'pitsco' };
+  return { vendor: tags[found[2].toLowerCase()], name: found[1].trim() };
+}
+
+/** Normalized words of a library part name, with "6000rpm" and "Yellowjacket" split the way vendors write them. */
+const libraryWords = (value: string) => normalizeName(value.replace(/(\d)(rpm)\b/gi, '$1 $2').replace(/yellow ?jacket/gi, 'yellow jacket')).split(' ').filter(Boolean);
+
+/**
+ * How much of a short library part name a vendor product name covers. Library names are terse ("Servo Hub") and vendor
+ * names long, so this counts the part's words found in the product rather than the overlap of both, minus a penalty
+ * when one of the part's numbers is missing and a tiny one per extra product word, so the plainer product ranks first.
+ */
+export function nameCoverage(partName: string, normalizedProductName: string) {
+  const part = libraryWords(partName);
+  const product = new Set(libraryWords(normalizedProductName));
+  if (!part.length) return 0;
+  const missingNumber = part.some(word => /\d/.test(word) && !product.has(word));
+  return part.filter(word => product.has(word)).length / part.length - (missingNumber ? 0.3 : 0) - product.size * 0.005;
+}
+
+/** Configuration values that describe the product ("6000rpm Bare REX", "25 Tooth"), without colors or plain "Default". */
+export function configurationValues(configuration: string | null): string[] {
+  if (!configuration || configuration === 'default') return [];
+  return configuration.split(';').map(pair => pair.split('=')).filter(([key, value]) => value && !/^default$/i.test(value) && !/colou?r/i.test(key) && !/^[0-9a-f]{6}$/i.test(value))
+    .map(([key, value]) => (/^List_[A-Za-z0-9]+$/.test(key) ? value : `${key} ${value}`).replace(/_/g, ' ').trim());
+}
+
 /** The vendor whose own numbering a SKU follows, when the format says so. */
 function makerOf(sku: string): VendorId | null {
   if (/^\d{4}-\d{4}-\d{4}/.test(sku)) return 'gobilda';
