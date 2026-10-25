@@ -28,8 +28,9 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       // Keys act only on the list itself: not while typing, not with a drawer or dialog open, not with modifiers.
+      // Nor on a focused button or link (Enter and Space keep their normal meaning), nor once another control handled the key.
       const target = event.target as HTMLElement | null;
-      if (event.ctrlKey || event.metaKey || event.altKey || target?.closest('input, textarea, select, [contenteditable], [role="dialog"]') || document.querySelector('[role="dialog"]')) return;
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || target?.closest('input, textarea, select, button, a, [role="button"], [contenteditable], [role="dialog"]') || document.querySelector('[role="dialog"]')) return;
       if (!current) return;
       const { line, kind } = current;
       const ready = !kit.pending && Boolean(kit.result!.scanId) && !kit.saving.has(line.bomLineKey);
@@ -84,10 +85,8 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
               <Button size="sm" variant="ghost" disabled={locked} onClick={() => void kit.decide(line, 'rejected')}>Not this</Button>
             </>}
             {kind === 'suggested' && <Button size="sm" disabled={locked} onClick={() => void kit.setDisposition(line, line.suggestedDisposition!)}>Mark {shortLabel[line.suggestedDisposition!]}</Button>}
-            {kind !== 'match' && <>
-              {line.suggestedDisposition !== 'buy' && <Button size="sm" variant="secondary" disabled={locked} onClick={() => void kit.setDisposition(line, 'buy')}>Buy</Button>}
-              {line.suggestedDisposition !== 'print' && <Button size="sm" variant="secondary" disabled={locked} onClick={() => void kit.setDisposition(line, 'print')}>3D print</Button>}
-            </>}
+            {(kind === 'match' || line.suggestedDisposition !== 'buy') && <Button size="sm" variant="secondary" disabled={locked} onClick={() => void kit.setDisposition(line, 'buy')}>Buy</Button>}
+            {line.suggestedDisposition !== 'print' && <Button size="sm" variant="secondary" disabled={locked} onClick={() => void kit.setDisposition(line, 'print')}>3D print</Button>}
             <Button size="sm" variant="ghost" disabled={locked} title="Not a real part to buy or make, such as a body that is part of an imported product" onClick={() => void kit.setDisposition(line, 'ignore')}>Not needed</Button>
             <Button size="sm" variant="ghost" disabled={locked} onClick={() => open(line.bomLineKey)}>Other</Button>
           </div>

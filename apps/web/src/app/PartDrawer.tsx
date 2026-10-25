@@ -57,7 +57,8 @@ export function PartDrawer({ kit, line, onClose }: { kit: ControlKit; line: BomL
 }
 
 function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
-  const locked = Boolean(kit.pending) || !kit.result?.scanId || line.suppressed;
+  const saving = kit.saving.has(line.bomLineKey);
+  const locked = Boolean(kit.pending) || saving || !kit.result?.scanId || line.suppressed;
   const vendor = line.vendor;
   return <div className="stack">
     <PartPicture kit={kit} line={line} />
@@ -65,7 +66,7 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
     {line.purchasedAssembly && <p className="small">Listed as one product because {line.purchasedAssembly.reason}. Its {line.purchasedAssembly.parts} internal part{line.purchasedAssembly.parts === 1 ? '' : 's'} (gearbox, bearings, screws inside it) are not listed separately.{line.purchasedAssembly.includes?.length ? ` It also includes ${line.purchasedAssembly.includes.join(', ')}, placed beside it from the same imported Part Studio.` : ''}</p>}
 
     <section className="stack" aria-labelledby="how">
-      <div><h3 id="how">How the team gets it</h3><p className="muted small">{dispositionLabel[line.disposition]}. {sourceLabel[line.dispositionSource]}.</p></div>
+      <div><h3 id="how">How the team gets it</h3><p className="muted small">{dispositionLabel[line.disposition]}. {sourceLabel[line.dispositionSource]}.{saving && ' Saving…'}</p></div>
       {line.reviewReason && <p className="small">{line.reviewReason}</p>}
       {line.dispositionEvidence.length > 0 && <ul className="evidence">{line.dispositionEvidence.map(item => <li key={item}>{item}</li>)}</ul>}
       {line.disposition === 'ignore' && <p className="muted small">Marked not needed: it is listed but not bought, made, or reviewed. Choose another option to bring it back.</p>}
