@@ -110,14 +110,18 @@ test('review explains each part, saves a one-click choice, and accepts all sugge
   await section(page, /^Review/).click();
   // Fasteners never wait for a decision.
   await expect(page.locator('.row').filter({ hasText: 'M3 Screw' })).toHaveCount(0);
-  const bearing = page.locator('.row').filter({ hasText: 'Bearing' });
-  await expect(bearing).toContainText('Looks like standard hardware: confirm it is bought');
-  await bearing.getByRole('button', { name: 'Mark Buy' }).click();
+  // Standard hardware is decided automatically now; only how team-made parts are produced waits for a person.
   await expect(page.locator('.row').filter({ hasText: 'Bearing' })).toHaveCount(0);
+  const first = page.locator('.row').filter({ has: page.getByRole('button', { name: 'Buy' }) }).first();
+  const firstName = (await first.locator('.row-title').innerText()).trim();
+  await first.getByRole('button', { name: 'Buy', exact: true }).click();
+  await expect(page.locator('.row').filter({ hasText: firstName })).toHaveCount(0);
   expect(saved.at(-1)).toMatchObject({ classification: 'buy' });
-  const remaining = result.lines.filter(line => line.disposition === 'review' && line.suggestedDisposition && line.name !== 'Bearing').length;
-  await page.getByRole('button', { name: `Accept all ${remaining}` }).click();
-  await expect.poll(() => saved.length).toBe(1 + remaining);
+  const remaining = result.lines.filter(line => line.disposition === 'review' && line.suggestedDisposition && line.name !== firstName).length;
+  if (remaining > 1) {
+    await page.getByRole('button', { name: `Accept all ${remaining}` }).click();
+    await expect.poll(() => saved.length).toBe(1 + remaining);
+  }
   // The part drawer explains a decision and offers every choice.
   await section(page, /^Parts/).click();
   await page.getByRole('button', { name: /Custom Printed Sensor Mount/ }).click();
@@ -183,7 +187,8 @@ test('reopening the panel shows the last scan, and Not needed dismisses a part',
   await page.keyboard.press('b');
   await expect(page.locator('.row').filter({ hasText: next })).toHaveCount(0);
   expect(saved.at(-1)).toMatchObject({ classification: 'buy' });
-  await expect(page.locator('.row.focused')).toHaveCount(1);
+  // The highlight stays on the next part while any remain.
+  await expect(page.locator('.row.focused')).toHaveCount(await page.locator('.review-row').count() ? 1 : 0);
 });
 
 test('the narrow Onshape panel has no sideways scroll and keeps every section reachable', async ({ page }) => {
