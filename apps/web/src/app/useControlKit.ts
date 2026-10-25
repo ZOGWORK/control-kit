@@ -251,7 +251,7 @@ export function useControlKit(context: URLSearchParams) {
     const scanId = result.scanId;
     setAi(current => ({ ...current, running: true, note: '' }));
     try {
-      const response = await postJson('/api/ai/review', { documentId: result.documentId, scanId, request });
+      const response = await postJson('/api/ai/review', { documentId: result.documentId, scanId, request, keys });
       const body = await response.json().catch(() => ({})) as { items?: AiReviewItem[]; provider?: AiProvider; cached?: boolean; error?: string };
       if (!response.ok || !body.items || !body.provider) { setAi(current => ({ ...current, note: body.error ?? 'The AI review failed. Your parts are unchanged.' })); return; }
       setResult(current => current && current.scanId === scanId ? applyAiReview(current, keys, body.items!, body.provider!) : current);

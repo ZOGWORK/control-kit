@@ -272,7 +272,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
     const text = await request.text();
     if (text.length > 150_000) return reply({ error: 'Too many parts for one AI review.' }, 413);
-    let body: { documentId?: string; scanId?: string; request?: unknown };
+    let body: { documentId?: string; scanId?: string; request?: unknown; keys?: unknown };
     try { body = JSON.parse(text); } catch { return reply({ error: 'Invalid AI review request.' }, 400); }
     if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.scanId || !/^[a-f0-9-]{36}$/.test(body.scanId) || !validAiRequest(body.request)) return reply({ error: 'Invalid AI review request.' }, 400);
     // Only someone who scanned this document (and so can read it in Onshape) may send its parts for review.
@@ -280,7 +280,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const scanned = raw ? JSON.parse(raw) as ScanResult : null;
     if (!scanned || scanned.documentId !== body.documentId) return reply({ error: 'Scan this assembly again.' }, 409);
     // The review is rebuilt from that scan, so the key cannot be used to send arbitrary text to a model.
-    const trusted = trustedAiRequest(body.request, scanned);
+    const trusted = trustedAiRequest(body.request, body.keys, scanned);
     if (!trusted) return reply({ error: 'These parts are not in your scan. Rescan and try again.' }, 409);
     // A saved answer is free; anything else takes one of the person's daily reviews, reserved before the call.
     let outcome = await cachedAiReview(env, trusted);
@@ -432,14 +432,11 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (error instanceof SessionExpiredError) return reply({ error: 'Reconnect Onshape.' }, 401);
       throw error;
     } finally { await persistLedger(env.APP_STATE, ledger).catch(() => undefined); }
-    // A poll that changed nothing writes nothing. One that only moved the polling position (a large export whose
-    // translations are still running) saves that position at most every 15 seconds; parts' progress always saves.
-    const progress = (value: ExportJob) => JSON.stringify({ ...value, cursor: undefined, positionSavedAt: undefined });
-    const moved = before && progress(job) === progress(JSON.parse(before) as ExportJob);
-    if (JSON.stringify(job) !== before && (!before || !moved || Date.now() - (job.positionSavedAt ?? 0) > 15_000)) {
-      job.positionSavedAt = Date.now();
-      await env.APP_STATE.put(jobKey(userId, job.jobId), JSON.stringify(job), { expirationTtl: 3600 });
-    }
+    // A poll that changed nothing writes nothing: with translations still running and every one of them checked, the
+    // polling position wraps back to where it was. It moves only when more parts run than one poll covers, and then
+    // saving it is what lets the next poll reach the others.
+    const after = JSON.stringify(job);
+    if (after !== before) await env.APP_STATE.put(jobKey(userId, job.jobId), after, { expirationTtl: 3600 });
     return reply(jobSummary(job));
   }
   return reply({ error: 'Not found' }, 404);

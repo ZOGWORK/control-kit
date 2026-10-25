@@ -142,7 +142,7 @@ const refusals: Record<Exclude<AllowanceReply, { ok: true }>['reason'], (limit: 
 /** Reserves one of the person's daily reviews and one of everyone's, atomically, before any provider is asked. */
 export async function reserveAiReview(env: AiEnv, userId: string, limit = 20): Promise<string | null> {
   // The lock outlasts the slowest review (Gemini, then Anthropic, 90 seconds each).
-  const reply = await allowance(env, { action: 'reserve', userId, day: new Date().toISOString().slice(0, 10), perUser: limit, global: AI_GLOBAL_DAILY_LIMIT, lockMs: 200_000 });
+  const reply = await allowance(env, { action: 'reserve', userId, perUser: limit, global: AI_GLOBAL_DAILY_LIMIT, lockMs: 200_000 });
   return reply.ok ? null : refusals[reply.reason](limit);
 }
 export const releaseAiReview = async (env: AiEnv, userId: string) => { await allowance(env, { action: 'release', userId }); };
@@ -151,17 +151,21 @@ export const releaseAiReview = async (env: AiEnv, userId: string) => { await all
 const plain = (value: unknown, max: number) => typeof value === 'string' ? [...value].map(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? ' ' : char).join('').slice(0, max) : '';
 /**
  * The request as it is sent: every line rebuilt from the caller's own stored scan (name, description, material, part
- * number, configuration, places used, quantity, source, review reason), with only the browser's catalog candidates
+ * number, configuration, places used, quantity, source, review reason; matched by the line key the browser sends for
+ * each id), with only the browser's catalog candidates
  * and conclusion kept, both shape-checked. Unknown fields are dropped. Null when a line is not in that scan.
  */
-export function trustedAiRequest(request: AiReviewRequest, scan: ScanResult): AiReviewRequest | null {
-  if (request.assembly !== scan.assemblyName) return null;
-  const byName = new Map([...scan.lines, ...scan.suppressed].map(line => [line.name, line]));
+export function trustedAiRequest(request: AiReviewRequest, keys: unknown, scan: ScanResult): AiReviewRequest | null {
+  if (request.assembly !== scan.assemblyName || !keys || typeof keys !== 'object') return null;
+  // Lines join the scan by line key, not name: two configurations or revisions of one part share a name.
+  const byKey = new Map([...scan.lines, ...scan.suppressed].map(line => [line.bomLineKey, line]));
+  const lineKeys = keys as Record<string, unknown>;
   const statuses = ['unmatched', 'possible', 'confirmed', 'exact', 'rejected'];
   const lines: AiReviewLine[] = [];
   for (const asked of request.lines) {
-    const line = byName.get(asked.name);
-    if (!line || !/^L\d{1,3}$/.test(asked.id)) return null;
+    const key = lineKeys[asked.id];
+    const line = typeof key === 'string' ? byKey.get(key) : undefined;
+    if (!line || line.name !== asked.name || !/^L\d{1,3}$/.test(asked.id)) return null;
     const current = asked.current ?? {} as AiReviewLine['current'];
     lines.push({
       id: asked.id, name: line.name, description: line.description, material: line.material, partNumber: line.partNumber,

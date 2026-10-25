@@ -14,8 +14,6 @@ export type JobPart = ExportPart & { documentId: string; elementId: string; expo
 export type ExportJob = { jobId: string; documentId: string; scanId: string; assemblyName: string; documentName?: string; revision: { type: 'v' | 'm'; id: string } | null; scannedAt: string; createdAt: string; parts: JobPart[];
   /** Where the next poll resumes among running translations. */
   cursor?: number;
-  /** When the polling position was last saved (ms), so position-only polls save at most every 15 seconds. */
-  positionSavedAt?: number;
   /** When Onshape last rate-limited this job; the app keeps waiting rather than calling the job stuck. */
   rateLimitedAt?: number | null };
 type FetchOnshape = (path: string, init?: RequestInit) => Promise<Response>;
