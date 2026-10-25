@@ -67,7 +67,8 @@ describe('vendor product page parsing', () => {
     const jsonld = (name: string, sku: string) => `<script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name, sku, offers: { price: '3.99', priceCurrency: 'USD' } })}</script>`;
     // As ServoCity embeds it: JSON inside a string (escaped quotes), the page's own product first, then related products.
     const own = (id: number, pack: string | null) => JSON.stringify({ add_to_wishlist_url: `https://www.servocity.com/wishlist.php?action=add&product_id=${id}`,
-      custom_fields: [{ id: '1', name: 'spec_Material', value: 'Steel' }, ...(pack ? [{ id: '2', name: 'Pack Info', value: pack }] : [])] });
+      // A dimension with an inch mark, as ServoCity writes lengths: it must survive the double escaping.
+      custom_fields: [{ id: '1', name: 'spec_Length', value: '0.750" (3/4)' }, { id: '3', name: 'spec_Material', value: 'Steel' }, ...(pack ? [{ id: '2', name: 'Pack Info', value: pack }] : [])] });
     const related = JSON.stringify({ sku: '2806-0005-0004', custom_fields: [{ id: '9', name: 'Pack Info', value: '25 Pack' }] });
     const embedded = (...objects: string[]) => `<script>window.stencil = ${JSON.stringify(objects.join(','))};</script>`;
     const screw = parseProductPage('servocity', 'https://www.servocity.com/screw/', jsonld('6-32 x 0.750" Zinc-Plated Socket Head Machine Screw', '632120') + embedded(own(3803, '25 Pack')), at).records[0];

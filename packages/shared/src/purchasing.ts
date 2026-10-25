@@ -35,7 +35,8 @@ export function recalculatePurchasing(result: ScanResult): ScanResult {
   for (const lines of groups.values()) {
     const studios = new Map<string, number>();
     for (const line of lines) {
-      const studio = `${line.documentId}:${line.elementId}:${line.sourceId ?? ''}`;
+      // Configurations are separate parts (two lengths of one product are two products), so they never collapse together.
+      const studio = `${line.documentId}:${line.elementId}:${line.configuration ?? ''}:${line.sourceId ?? ''}`;
       studios.set(studio, Math.max(studios.get(studio) ?? 0, line.qty));
     }
     const qty = [...studios.values()].reduce((sum, value) => sum + value, 0);

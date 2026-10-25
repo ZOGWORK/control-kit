@@ -32,6 +32,11 @@ describe('purchase orders', () => {
     expect(lead).toMatchObject({ packsToOrder: 2, lineTotalUsd: 35 });
     expect(result.stats.totalCostUsd).toBe(35);
   });
+  it('keeps configurations of one Part Studio apart', () => {
+    const sw = record('rev', 'REV-31-1462', 1, 17.5);
+    const instances = [...placed('Switch', 1, 'revdoc', 'switch', 'body'), ...placed('Switch', 1, 'revdoc', 'switch', 'body')].map((instance, n) => ({ ...instance, id: `s${n}`, configuration: n ? 'mount=left' : 'mount=right' }));
+    expect(scan(instances, () => sw).lines.find(line => line.order)?.order).toEqual({ qty: 2, lines: 2 });
+  });
   it('adds separate Part Studios: four bearings in four elements need 2 packs of 2', () => {
     const bearing = record('gobilda', '1611-0514-0008', 2, 3.99);
     const result = scan(['a', 'b', 'c', 'd'].flatMap(element => placed(`Bearing ${element}`, 1, 'robot', element)), () => bearing);
