@@ -142,7 +142,10 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         // request may use. The scan supplies what the browser needs: catalog health and the person's saved match decisions.
         try { result.catalogHealth = await catalogHealth(catalog, staleHours, request.signal); }
         catch (error) { if (request.signal.aborted) throw error; console.error('Catalog health read failed', error instanceof Error ? error.name : 'unknown'); }
-        for (const line of result.lines) line.matchDecision = await getDecision(line.bomLineKey, request.signal);
+        // Saved decisions are read twenty at a time, so the stage waits for a few KV round trips, not one per line.
+        for (let start = 0; start < result.lines.length; start += 20) {
+          await Promise.all(result.lines.slice(start, start + 20).map(async line => { line.matchDecision = await getDecision(line.bomLineKey, request.signal); }));
+        }
         result.vendorMatching = 'pending';
         classifyScan(result, settings, await loadClassificationOverrides(result.lines, getOverride, request.signal));
         result.diagnostics = { onshapeRequests: requests?.summary() ?? null, metadataIssues: summarizeMetadataIssues(all), bom: reconciliation, revision, cache };

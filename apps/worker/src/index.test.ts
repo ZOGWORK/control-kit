@@ -192,7 +192,11 @@ describe('M3 match decisions against local catalog KV', () => {
     expect(second.lines.find(item => item.partId === 'bearing-8')!.matchStatus).toBe('confirmed');
     // The catalog endpoint serves only catalog keys, with long caching for generation data.
     expect((await call('/api/catalog/raw?key=session%3Aabc')).status).toBe(400);
-    expect((await call(`/api/catalog/raw?key=${encodeURIComponent(indexKey(vendor, 'g1'))}`)).headers.get('cache-control')).toContain('immutable');
+    expect((await call(`/api/catalog/raw?key=${encodeURIComponent(batchKey(vendor, 'g1', 0))}`)).headers.get('cache-control')).toContain('immutable');
+    expect((await call(`/api/catalog/raw?key=${encodeURIComponent(indexKey(vendor, 'g1'))}`)).headers.get('cache-control')).toBe('public, max-age=60');
+    // A linked document's library mappings read through the same endpoint (none here: 404, not an error), only when connected.
+    expect((await call('/api/catalog/raw?key=library-map%3Asome-doc', cookie)).status).toBe(404);
+    expect((await call('/api/catalog/raw?key=library-map%3Asome-doc')).status).toBe(401);
     expect((await call(`/api/catalog/raw?key=${encodeURIComponent(pointerKey(vendor))}`)).headers.get('cache-control')).toBe('public, max-age=60');
     env.VENDOR_CATALOG.values.clear(); clearCatalogMemoryCache();
   });

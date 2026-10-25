@@ -175,9 +175,14 @@ async function route(request: Request, env: Env): Promise<Response> {
     // change, so they are cached for a year; pointers move, so for a minute.
     const key = url.searchParams.get('key') ?? '';
     if (!catalogReadKey.test(key)) return reply({ error: 'Not a catalog key.' }, 400);
+    // Library mappings may hold licensed data, so only a connected person reads them.
+    if (key.startsWith('library-map:') && !await getSession(request, env)) return reply({ error: 'Reconnect Onshape.' }, 401);
     const value = await env.VENDOR_CATALOG.get(key);
-    if (value === null) return new Response('', { status: 404, headers: { 'cache-control': 'no-store' } });
-    return new Response(value, { headers: { 'content-type': 'application/json', 'cache-control': key.endsWith(':pointer') ? 'public, max-age=60' : 'public, max-age=31536000, immutable' } });
+    if (value === null) return new Response('', { status: 404, headers: { 'cache-control': 'public, max-age=60' } });
+    // A batch is written once and never changes. An index is rewritten while a first crawl publishes in parts, and
+    // pointers and mappings move, so those are cached for a minute only.
+    const cache = /:batch:\d+$/.test(key) ? 'public, max-age=31536000, immutable' : key.startsWith('library-map:') ? 'private, max-age=60' : 'public, max-age=60';
+    return new Response(value, { headers: { 'content-type': 'application/json', 'cache-control': cache } });
   }
   if (url.pathname === '/api/settings' && request.method === 'GET') {
     const current = await getSession(request, env);

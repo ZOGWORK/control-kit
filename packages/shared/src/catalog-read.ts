@@ -14,8 +14,8 @@ export const catalogVendors: VendorId[] = ['gobilda', 'servocity', 'andymark', '
 export const pointerKey = (vendor: VendorId) => `cat:${vendor}:pointer`;
 export const batchKey = (vendor: VendorId, gen: string, batch: number) => `cat:${vendor}:gen:${gen}:batch:${batch}`;
 export const indexKey = (vendor: VendorId, gen: string) => `cat:${vendor}:gen:${gen}:index`;
-/** The keys a catalog reader may fetch: a vendor pointer, or an index or batch of a generation. */
-export const catalogReadKey = /^cat:(?:gobilda|servocity|andymark|rev|pitsco):(?:pointer|gen:[a-z0-9]{1,16}:(?:index|batch:\d{1,5}))$/;
+/** The keys a catalog reader may fetch: a vendor pointer, an index or batch of a generation, or a document's library mappings. */
+export const catalogReadKey = /^(?:cat:(?:gobilda|servocity|andymark|rev|pitsco):(?:pointer|gen:[a-z0-9]{1,16}:(?:index|batch:\d{1,5}))|library-map:[\w-]{1,128})$/;
 type ReaderPointer = { gen: string; records: number; batches?: number };
 const vendors = catalogVendors;
 type Kv = CatalogReader;

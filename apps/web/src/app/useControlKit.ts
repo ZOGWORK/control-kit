@@ -137,10 +137,12 @@ export function useControlKit(context: URLSearchParams) {
       return response.text();
     } };
     const decisions = new Map(scanned.lines.map(line => [line.bomLineKey, line.matchDecision ?? null]));
+    // Matching works on a copy, so a read that fails partway never shows a half-matched result.
+    const copy = structuredClone(scanned);
     try {
-      await matchCatalog(scanned, reader, async key => decisions.get(key) ?? null, signal);
-      scanned.vendorMatching = 'done';
-      return classifyScan(scanned, settings, overridesOf(scanned));
+      await matchCatalog(copy, reader, async key => decisions.get(key) ?? null, signal);
+      copy.vendorMatching = 'done';
+      return classifyScan(copy, settings, overridesOf(copy));
     } catch (cause) {
       if (signal.aborted) throw cause;
       setError('Vendor catalogs could not be read, so parts are not matched or priced. Rescan to try again.');
