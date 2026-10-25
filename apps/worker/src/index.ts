@@ -3,16 +3,18 @@ import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from '
 import { applyMatchDecision, catalogReadKey, decisionRecord, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings, type VendorId } from '@control-kit/shared';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
-import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, reviewWithAi, validAiRequest } from './ai-review';
+import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, reviewWithAi, trustedAiRequest, validAiRequest, type AiEnv } from './ai-review';
+export { AiAllowance } from './ai-allowance';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 import { linePreview, previewCacheKey, PreviewUnavailableError } from './preview';
 
 export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string;
   /** Optional AI review keys (Worker secrets). Without either, the review is off and nothing else changes. */
-  GEMINI_API_KEY?: string; ANTHROPIC_API_KEY?: string; GEMINI_MODEL?: string; ANTHROPIC_MODEL?: string }
+  GEMINI_API_KEY?: string; ANTHROPIC_API_KEY?: string; GEMINI_MODEL?: string; ANTHROPIC_MODEL?: string; AI_ALLOWANCE?: AiEnv['AI_ALLOWANCE'] }
 type Tokens = { access_token: string; refresh_token: string };
-type Session = { tokens: Tokens; user: { id: string; name: string } };
+/** `savedAt` (ms) lets a session refresh its KV TTL at most once a day instead of on every request. */
+type Session = { tokens: Tokens; user: { id: string; name: string }; savedAt?: number };
 type OAuthState = { context?: Record<string, string>; redirectOnshapeUri?: string };
 const cookieName = 'controlkit_session';
 // SameSite=None is required because Onshape embeds Control Kit in a cross-site iframe.
@@ -75,7 +77,36 @@ async function getSession(request: Request, env: Env) {
   if (!id || !value) return null;
   try { return { id, data: await decrypt(env, value) }; } catch { return null; }
 }
-async function save(env: Env, id: string, data: Session) { await env.APP_STATE.put(`session:${id}`, await encrypt(env, data), { expirationTtl: 2592000 }); }
+async function save(env: Env, id: string, data: Session) { data.savedAt = Date.now(); await env.APP_STATE.put(`session:${id}`, await encrypt(env, data), { expirationTtl: 2592000 }); }
+const b64url = (data: Uint8Array) => b64(data).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const fromB64url = (data: string) => bytes(data.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - data.length % 4) % 4));
+/** HMAC key for the OAuth state cookie, derived from the session key so no new secret is needed. */
+async function stateKey(env: Env) {
+  const material = await crypto.subtle.digest('SHA-256', new Uint8Array([...encode.encode('control-kit oauth-state v1:'), ...bytes(env.SESSION_ENCRYPTION_KEY)]));
+  return crypto.subtle.importKey('raw', material, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+}
+const stateCookieName = 'controlkit_oauth';
+/**
+ * OAuth state lives in a signed, HttpOnly cookie on the browser that started sign-in, not in KV: starting sign-in
+ * writes nothing (so nobody can spend the daily KV writes by opening /oauth/start), and a redirect only completes in
+ * the browser that started it (no login CSRF).
+ */
+async function stateCookie(env: Env, state: string, data: OAuthState) {
+  const payload = encode.encode(JSON.stringify({ state, exp: Date.now() + 600_000, data }));
+  const signature = new Uint8Array(await crypto.subtle.sign('HMAC', await stateKey(env), payload));
+  return `${stateCookieName}=${b64url(payload)}.${b64url(signature)}; HttpOnly; Secure; SameSite=None; Path=/oauth; Max-Age=600`;
+}
+async function readStateCookie(request: Request, env: Env, state: string): Promise<OAuthState | null> {
+  const value = request.headers.get('cookie')?.match(new RegExp(`(?:^|;\\s*)${stateCookieName}=([^;]+)`))?.[1];
+  const [payload, signature] = value?.split('.') ?? [];
+  if (!payload || !signature) return null;
+  try {
+    const body = fromB64url(payload);
+    if (!await crypto.subtle.verify('HMAC', await stateKey(env), fromB64url(signature), body)) return null;
+    const parsed = JSON.parse(decode.decode(body)) as { state: string; exp: number; data: OAuthState };
+    return parsed.state === state && parsed.exp > Date.now() ? parsed.data : null;
+  } catch { return null; }
+}
 function authParams(env: Env, grant: Record<string, string>) { return new URLSearchParams({ client_id: env.ONSHAPE_OAUTH_CLIENT_ID.trim(), client_secret: env.ONSHAPE_OAUTH_CLIENT_SECRET.trim(), ...grant }); }
 async function exchange(env: Env, grant: Record<string, string>): Promise<Tokens> {
   const response = await fetch(`${env.ONSHAPE_OAUTH_BASE}/oauth/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: authParams(env, grant), signal: AbortSignal.timeout(10000) });
@@ -133,40 +164,48 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
     const state = random();
     const stateData: OAuthState = { ...(hasContext ? { context: context as Record<string, string> } : {}), ...(returnUri ? { redirectOnshapeUri: returnUri } : {}) };
-    await env.APP_STATE.put(`oauth-state:${state}`, JSON.stringify(stateData), { expirationTtl: 600 });
     const destination = new URL('/oauth/authorize', env.ONSHAPE_OAUTH_BASE);
     destination.search = new URLSearchParams({ response_type: 'code', client_id: env.ONSHAPE_OAUTH_CLIENT_ID.trim(), redirect_uri: env.ONSHAPE_OAUTH_REDIRECT_URI, state }).toString();
-    return Response.redirect(destination, 302);
+    return new Response(null, { status: 302, headers: { location: destination.toString(), 'set-cookie': await stateCookie(env, state, stateData) } });
   }
   if (url.pathname === '/oauth/redirect') {
     const state = url.searchParams.get('state');
     const code = url.searchParams.get('code');
     if (!state || !code) return reply({ error: 'Authorization was cancelled or incomplete.' }, 400);
-    const stored = await env.APP_STATE.get(`oauth-state:${state}`);
-    if (!stored) return reply({ error: 'Authorization expired. Reconnect Onshape.' }, 400);
-    await env.APP_STATE.delete(`oauth-state:${state}`);
+    const stateData = await readStateCookie(request, env, state);
+    if (!stateData) return reply({ error: 'Authorization expired. Reconnect Onshape.' }, 400);
+    // One use: a replayed redirect (same state) is refused. Written only after Onshape sent the person back.
+    if (await env.APP_STATE.get(`oauth-used:${state}`)) return reply({ error: 'Authorization expired. Reconnect Onshape.' }, 400);
     const tokens = await exchange(env, { grant_type: 'authorization_code', code, redirect_uri: env.ONSHAPE_OAUTH_REDIRECT_URI });
+    // Written only once Onshape accepted the code, so made-up callbacks write nothing.
+    await env.APP_STATE.put(`oauth-used:${state}`, '1', { expirationTtl: 600 });
     const ledger = new RequestLedger('oauth-profile');
     const profile = await countedFetch(ledger, `${env.ONSHAPE_API_BASE}/api/users/sessioninfo`, { headers: { authorization: `Bearer ${tokens.access_token}` }, signal: AbortSignal.timeout(10000) })
       .finally(() => persistLedger(env.APP_STATE, ledger).catch(() => undefined));
     if (!profile.ok) return reply({ error: 'Could not read Onshape profile.' }, 502);
-    const user = await profile.json() as Session['user'];
-    if (!user.id) return reply({ error: 'Onshape profile has no ID.' }, 502);
+    // Only the id and name are kept: sessioninfo also carries email and company, which Control Kit never needs.
+    const info = await profile.json() as Partial<Session['user']>;
+    if (!info.id) return reply({ error: 'Onshape profile has no ID.' }, 502);
+    const user = { id: String(info.id), name: String(info.name ?? '') };
     const id = random();
     await save(env, id, { tokens, user });
-    const stateData = JSON.parse(stored) as OAuthState;
     const destination = stateData.redirectOnshapeUri ? new URL(stateData.redirectOnshapeUri) : new URL('/', env.WEB_ORIGIN);
     for (const [k, v] of Object.entries(stateData.context ?? {})) destination.searchParams.set(k, v);
-    return new Response(null, { status: 302, headers: { location: destination.toString(), 'set-cookie': `${cookieName}=${id}; ${cookieFlags}` } });
+    const headers = new Headers({ location: destination.toString() });
+    headers.append('set-cookie', `${cookieName}=${id}; ${cookieFlags}`);
+    headers.append('set-cookie', `${stateCookieName}=; HttpOnly; Secure; SameSite=None; Path=/oauth; Max-Age=0`);
+    return new Response(null, { status: 302, headers });
   }
   if (url.pathname === '/api/session') {
     if (!env.ONSHAPE_OAUTH_CLIENT_ID || !env.ONSHAPE_OAUTH_CLIENT_SECRET) return reply({ connected: false, setupPending: true });
     const current = await getSession(request, env);
     if (!current) return reply({ connected: false }, 401);
-    await save(env, current.id, current.data);
-    return reply({ connected: true, user: current.data.user });
+    // Keep an active session alive, but write it at most once a day rather than on every panel load.
+    if (!current.data.savedAt || Date.now() - current.data.savedAt > 86_400_000) await save(env, current.id, current.data);
+    return reply({ connected: true, user: { id: current.data.user.id, name: current.data.user.name } });
   }
   if (url.pathname === '/api/logout' && request.method === 'POST') {
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const id = sessionId(request);
     if (id) await env.APP_STATE.delete(`session:${id}`);
     return new Response(null, { status: 204, headers: { 'set-cookie': `${cookieName}=; ${cookieFlags}; Max-Age=0` } });
@@ -244,19 +283,23 @@ async function route(request: Request, env: Env): Promise<Response> {
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
     const text = await request.text();
-    if (text.length > 400_000) return reply({ error: 'Too many parts for one AI review.' }, 413);
-    let body: { documentId?: string; scanId?: string; request?: unknown };
+    if (text.length > 150_000) return reply({ error: 'Too many parts for one AI review.' }, 413);
+    let body: { documentId?: string; scanId?: string; request?: unknown; keys?: unknown };
     try { body = JSON.parse(text); } catch { return reply({ error: 'Invalid AI review request.' }, 400); }
     if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.scanId || !/^[a-f0-9-]{36}$/.test(body.scanId) || !validAiRequest(body.request)) return reply({ error: 'Invalid AI review request.' }, 400);
     // Only someone who scanned this document (and so can read it in Onshape) may send its parts for review.
     const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${body.scanId}`);
-    if (!raw || (JSON.parse(raw) as ScanResult).documentId !== body.documentId) return reply({ error: 'Scan this assembly again.' }, 409);
+    const scanned = raw ? JSON.parse(raw) as ScanResult : null;
+    if (!scanned || scanned.documentId !== body.documentId) return reply({ error: 'Scan this assembly again.' }, 409);
+    // The review is rebuilt from that scan, so the key cannot be used to send arbitrary text to a model.
+    const trusted = trustedAiRequest(body.request, body.keys, scanned);
+    if (!trusted) return reply({ error: 'These parts are not in your scan. Rescan and try again.' }, 409);
     // A saved answer is free; anything else takes one of the person's daily reviews, reserved before the call.
-    let outcome = await cachedAiReview(env, body.request);
+    let outcome = await cachedAiReview(env, trusted);
     if (!outcome) {
       const refused = await reserveAiReview(env, current.data.user.id);
       if (refused) return reply({ error: refused }, 429);
-      try { outcome = await reviewWithAi(env, body.request); }
+      try { outcome = await reviewWithAi(env, trusted); }
       finally { await releaseAiReview(env, current.data.user.id); }
     }
     return outcome.ok ? reply({ items: outcome.items, provider: outcome.provider, cached: outcome.cached, usage: outcome.usage }) : reply({ error: outcome.error }, outcome.status);
@@ -271,7 +314,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     // Shared choices may only be written by someone whose own recent scan read this document from Onshape.
     if (!body.scanId || !/^[a-f0-9-]{36}$/.test(body.scanId)) return reply({ error: 'Scan this assembly before changing a part type.' }, 409);
     const scanned = await env.APP_STATE.get(`scan:${current.data.user.id}:${body.scanId}`);
-    if (!scanned || (JSON.parse(scanned) as ScanResult).documentId !== body.documentId) return reply({ error: 'Scan this assembly before changing a part type.' }, 409);
+    const scan = scanned ? JSON.parse(scanned) as ScanResult : null;
+    if (!scan || scan.documentId !== body.documentId) return reply({ error: 'Scan this assembly before changing a part type.' }, 409);
+    // Only a part that is in that scan can be set.
+    if (![...scan.lines, ...scan.suppressed].some(line => classificationIdentity(line) === body.identity)) return reply({ error: 'This part is not in your scan. Rescan and try again.' }, 409);
     const now = new Date().toISOString();
     const saved: SavedDisposition = { disposition: choice, by: current.data.user.name, byId: current.data.user.id, at: now };
     // KV has no atomic read-modify-write, so history is append-only: one never-overwritten key per change (kept a year).
@@ -387,6 +433,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       job = JSON.parse(raw) as ExportJob;
     } else return reply({ error: 'Not found' }, 404);
     const ledger = new RequestLedger('export');
+    const before = request.method === 'GET' ? JSON.stringify(job) : '';
     // Creating a job does no Onshape work, so the app shows progress from its first poll instead of waiting on a long start.
     const budget: RequestBudget = { remaining: request.method === 'POST' ? 0 : pollBudget };
     try { await advanceExport(job, userId, env.APP_STATE, onshapeFetcher(env, current, ledger, budget), env.ONSHAPE_API_VERSION, budget); }
@@ -394,7 +441,11 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (error instanceof SessionExpiredError) return reply({ error: 'Reconnect Onshape.' }, 401);
       throw error;
     } finally { await persistLedger(env.APP_STATE, ledger).catch(() => undefined); }
-    await env.APP_STATE.put(jobKey(userId, job.jobId), JSON.stringify(job), { expirationTtl: 3600 });
+    // A poll that changed nothing writes nothing: with translations still running and every one of them checked, the
+    // polling position wraps back to where it was. It moves only when more parts run than one poll covers, and then
+    // saving it is what lets the next poll reach the others.
+    const after = JSON.stringify(job);
+    if (after !== before) await env.APP_STATE.put(jobKey(userId, job.jobId), after, { expirationTtl: 3600 });
     return reply(jobSummary(job));
   }
   return reply({ error: 'Not found' }, 404);
