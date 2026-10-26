@@ -12,16 +12,19 @@ import { BuyList } from './BuyList';
 import { Make } from './Make';
 import { PartDrawer } from './PartDrawer';
 import { SettingsDrawer } from './SettingsDrawer';
+import { Landing } from './Landing';
 
 const views: View[] = ['overview', 'review', 'parts', 'buy', 'make'];
 const viewLabel: Record<View, string> = { overview: 'Overview', review: 'Review', parts: 'Parts', buy: 'Buy list', make: 'Make' };
 const viewIcon: Record<View, ReactNode> = { overview: <LayoutDashboard aria-hidden />, review: <ListChecks aria-hidden />, parts: <Boxes aria-hidden />, buy: <ShoppingCart aria-hidden />, make: <Wrench aria-hidden /> };
+/** Inside Onshape the app is framed; opened on its own, it is a visitor reading about Control Kit. */
+const framed = () => { try { return window.self !== window.top; } catch { return true; } };
 const Logo = () => <img className="brand-mark" src="/control-kit-logo.png" alt="" />;
 
 export function App() {
   const context = useMemo(() => new URLSearchParams(location.search), []);
   const kit = useControlKit(context);
-  if (contextKeys.some(key => !context.get(key))) return <Centered title="Open Control Kit from an assembly">Open an Assembly tab in Onshape, then choose Control Kit in its right panel.</Centered>;
+  if (contextKeys.some(key => !context.get(key))) return framed() ? <Centered title="Open Control Kit from an assembly">Open an Assembly tab in Onshape, then choose Control Kit in its right panel.</Centered> : <Landing />;
   if (!kit.session) return <Centered title="Control Kit"><span className="muted">Checking your Onshape connection…</span></Centered>;
   if (kit.session.setupPending) return <Centered title="Control Kit is being set up">Onshape sign-in is not configured yet. Try again after the app is linked.</Centered>;
   if (!kit.session.connected) return <Connect kit={kit} />;
@@ -64,9 +67,9 @@ const scanSteps: Array<{ step: ScanStep; label: string }> = [
 const number = (value: number) => value.toLocaleString();
 /** What each step has read so far, from the counts the Worker and the matcher report. */
 function stepDetail(step: ScanStep, counts: ScanCounts): string | null {
-  if (step === 'assembly' && counts.parts !== undefined) return `${number(counts.parts)} parts in ${number(counts.subassemblies ?? 0)} subassemblies`;
+  if (step === 'assembly' && counts.parts !== undefined) return counts.subassemblies === undefined ? `${number(counts.parts)} parts` : `${number(counts.parts)} parts in ${number(counts.subassemblies)} subassemblies`;
   if (step === 'assembly' && counts.subassemblies !== undefined) return `${number(counts.subassemblies)} subassemblies`;
-  if (step === 'bom' && counts.bomRows !== undefined) return counts.cached ? `${number(counts.bomRows)} rows, from the saved copy of this revision` : `${number(counts.bomRows)} rows`;
+  if (step === 'bom' && counts.bomRows !== undefined) return counts.cached ? `${number(counts.bomRows)} rows, saved copy` : `${number(counts.bomRows)} rows`;
   if (step === 'choices' && counts.lines !== undefined) return `${number(counts.lines)} unique parts`;
   if (step === 'catalogs' && counts.catalogs !== undefined) return `${counts.catalogs} of ${counts.catalogsTotal} catalogs, ${number(counts.products ?? 0)} products`;
   if (step === 'matching' && counts.matched !== undefined) return `${number(counts.matched)} of ${number(counts.lines ?? 0)} parts`;
