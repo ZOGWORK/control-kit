@@ -46,8 +46,11 @@ test('embedded connection opens outside the panel and can be rechecked', async (
 
 test('overview totals, next steps, and Excel and CSV downloads', async ({ page }) => {
   await connected(page);
-  await expect(page.locator('.tile').filter({ hasText: 'Needs review' })).toContainText(String(result.lines.filter(line => line.disposition === 'review').length));
-  await expect(page.locator('.tile').filter({ hasText: 'Known subtotal' })).toContainText('None yet');
+  const review = result.lines.filter(line => line.disposition === 'review').length;
+  // One primary action, led by the parts still waiting for a decision; the money card never shows a $0 total.
+  await expect(page.locator('.primary-bar button')).toHaveText(review ? new RegExp(`^Review ${review} parts?$`) : /./);
+  await expect(page.locator('.share-legend')).toContainText(`Needs review ${review}`);
+  await expect(page.locator('.money-value')).toHaveText('None priced');
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Excel BOM' }).click();
   const workbook = await download;
@@ -78,13 +81,14 @@ test('an unpublished vendor catalog is called out even when no line matched', as
     catalogHealth: { checkedAt: now, vendors: [vendor('gobilda', 'failing'), vendor('servocity', 'building'), vendor('andymark', 'building'), vendor('rev', 'published'), vendor('pitsco', 'never-run')] } } as ScanResult;
   let scan = unmatched;
   await connected(page, () => scan);
-  const step = page.locator('.step').filter({ hasText: 'vendor catalogs are still loading' });
+  const step = page.locator('.move').filter({ hasText: 'vendor catalogs are still loading' });
   await expect(step).toContainText('goBILDA (failing), ServoCity (loading), AndyMark (loading), Pitsco (loading)');
   await expect(step).not.toContainText('REV (');
+  await page.locator('.catalog-strip summary').click();
   await expect(page.locator('.vendor.published')).toContainText('REV');
   scan = { ...unmatched, catalogHealth: { ...unmatched.catalogHealth!, vendors: unmatched.catalogHealth!.vendors.map(item => item.vendorId === 'rev' ? { ...item, complete: false } : item) } };
   await page.getByRole('button', { name: 'Rescan' }).click();
-  await expect(page.locator('.step').filter({ hasText: 'vendor catalogs are still loading' })).toContainText('REV (partial)');
+  await expect(page.locator('.move').filter({ hasText: 'vendor catalogs are still loading' })).toContainText('REV (partial)');
 });
 
 test('an out-of-date catalog never reads as ready', async ({ page }) => {
@@ -92,7 +96,8 @@ test('an out-of-date catalog never reads as ready', async ({ page }) => {
   const vendors = ['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'].map(vendorId => ({ vendorId, state: 'published', complete: true, skipped: {}, recordCount: 10, updatedAt: now, lastRunAt: now,
     stale: vendorId === 'gobilda', lastRunFailed: vendorId === 'rev', error: null, progress: null }));
   await connected(page, { ...result, catalogHealth: { checkedAt: now, vendors } } as ScanResult);
-  await expect(page.locator('.step').filter({ hasText: 'prices may be out of date' })).toContainText('goBILDA (out of date), REV (last update failed)');
+  await expect(page.locator('.stale-note')).toContainText('goBILDA (out of date), REV (last update failed)');
+  await page.locator('.catalog-strip summary').click();
   await expect(page.locator('.vendor.stale')).toHaveCount(2);
   await expect(page.locator('.vendor.stale').first()).not.toContainText('Ready');
 });
