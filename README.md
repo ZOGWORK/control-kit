@@ -171,7 +171,7 @@ On free Onshape plans, documents must be public for some API operations and rate
 - Add an **Element right panel** extension for **Assembly** using the iframe Action URL below. Create the private store entry and subscribe for an in-document test.
 - Verify connect, iframe reload, a real FTC assembly scan, Excel export, and STEP export after the owner supplies a validation document. Check actual API permissions before requesting any additional scope.
 - Include a privacy note: the Worker stores encrypted Onshape tokens server-side under an opaque session cookie, caches a completed scan and STEP export files for one hour, caches the assembly definition and BOM per user for 30 days by revision, and uses catalog data for vendor enrichment. Control Kit sends a scan's BOM to Control Point only when a person who linked their Control Point account presses Send.
-- Confirm Pages/Worker HTTPS URLs, free-plan wording, support contact, and screenshots before public submission.
+- Store entry copy, icon, feature graphic, and screenshots are in [docs/app-store/listing.md](docs/app-store/listing.md). Privacy, terms (the EULA Onshape asks for), and support pages are served at `/privacy`, `/terms`, and `/support` on the Pages site.
 
 ## Owner's Onshape Developer Portal step
 
@@ -186,4 +186,4 @@ These clicks and fields follow [Onshape Developer settings](https://cad.onshape.
 
 ## Repository and review
 
-The private repository is [`ZOGWORK/control-kit`](https://github.com/ZOGWORK/control-kit). Every PR is merged only after Greptile reviews its exact head commit at 5/5 confidence with zero unresolved threads.
+The public repository is [`ZOGWORK/control-kit`](https://github.com/ZOGWORK/control-kit). Every PR is merged only after Greptile reviews its exact head commit at 5/5 confidence with zero unresolved threads.
