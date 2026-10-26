@@ -145,6 +145,15 @@ describe('Control Point linking', () => {
       const late = await (await call('/api/control-point/link?refresh=1', { cookie })).json() as { workspaces: Array<{ id: number }>; refreshAfter: string };
       expect(late.workspaces).toEqual([joined]);
       expect(Date.parse(late.refreshAfter)).toBe(Date.now() + 30_000);
+      // A refresh Control Point fails also starts the pause: the next "Check again" within 30 seconds asks nothing.
+      vi.setSystemTime(Date.now() + 31_000);
+      cp.setFailure(503);
+      const asked = cp.requests.length;
+      const failed = await (await call('/api/control-point/link?refresh=1', { cookie })).json() as { stale?: boolean; refreshAfter: string };
+      expect(failed).toMatchObject({ stale: true, refreshAfter: new Date(Date.now() + 30_000).toISOString() });
+      expect(cp.requests.length).toBe(asked + 1);
+      await call('/api/control-point/link?refresh=1', { cookie });
+      expect(cp.requests.length).toBe(asked + 1);
     } finally { vi.useRealTimers(); }
   });
   it('picks only a listed workspace that can edit CAD', async () => {
@@ -200,6 +209,20 @@ describe('Control Point linking', () => {
       expect(await (await late).json()).toMatchObject({ linked: true, workspace: null });
       expect((await storedLink())?.token).toBe(after);
     } finally { vi.useRealTimers(); }
+  });
+  it('keeps a link finished in another window while an unlink waited on revoke', async () => {
+    const cookie = await session();
+    await link(cookie);
+    const before = (await storedLink())!.token;
+    const held = holdOnce(/\/revoke$/);
+    const unlinking = call('/api/control-point/unlink', { cookie, method: 'POST' });
+    await held.arrived;
+    await link(cookie);
+    const after = (await storedLink())!.token;
+    expect(after).not.toBe(before);
+    held.release();
+    expect(await (await unlinking).json()).toMatchObject({ linked: true });
+    expect((await storedLink())?.token).toBe(after);
   });
   it('unlinks on request, revoking at Control Point, and keeps sent records', async () => {
     const cookie = await session();
