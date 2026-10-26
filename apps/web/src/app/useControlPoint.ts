@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { buildControlPointPayload, type AssemblyContext } from '@control-kit/shared';
+import { buildControlPointPayload, controlPointIdempotencyKey, type AssemblyContext } from '@control-kit/shared';
 import { api, postJson, workerUrl, type ControlKit } from './useControlKit';
 import { workspaceAccent, type Accent } from './model';
 
@@ -8,10 +8,11 @@ export type Workspace = { id: number; name: string; ftcNumber: string | null; ac
 /** `GET /api/control-point/link`. `available: false` means the Worker has no client secret, so linking is off. */
 export type LinkState =
   | { linked: false; available?: boolean }
-  | { linked: true; account: { email: string; name: string }; workspace: Workspace | null; workspaces: Workspace[]; linkedAt: string };
+  | { linked: true; account: { email: string; name: string }; workspace: Workspace | null; workspaces: Workspace[]; linkedAt: string; refreshAfter?: string };
 /** The last import of this assembly into Control Point. */
 export type SentRecord = { importId: number; workspaceId: number; sentAt: string; idempotencyKey: string; url: string; created?: number; updated?: number; duplicate?: boolean };
 
+const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const workerOrigin = () => new URL(workerUrl || location.origin, location.href).origin;
 /** The Worker's own wording for a failure when it gave one. */
 const message = async (response: Response, fallback: string) => (await response.json().catch(() => null) as { error?: string } | null)?.error ?? fallback;
@@ -30,9 +31,10 @@ export function useControlPoint(kit: ControlKit) {
   const connected = Boolean(kit.session?.connected);
   const result = kit.result;
 
-  async function refresh() {
+  /** `fresh` asks Control Point for the workspace list now (for "Check again"); the Worker allows it every 30 seconds. */
+  async function refresh(fresh = false) {
     try {
-      const response = await api('/api/control-point/link');
+      const response = await api(fresh ? '/api/control-point/link?refresh=1' : '/api/control-point/link');
       // An older Worker without the link routes reads as "not available", never as an error on every page.
       setLink(response.ok ? await response.json() as LinkState : { linked: false, available: false });
     } catch { setLink({ linked: false, available: false }); }
@@ -65,6 +67,19 @@ export function useControlPoint(kit: ControlKit) {
 
   // A linked workspace's colour becomes the brand accent; unlinked, or with a colour that fails contrast, it stays volt.
   const workspace = link?.linked ? link.workspace : null;
+  // The key a send would carry now: it changes with the BOM, the workspace, and which files would go inline (the
+  // workbook always, the STEP ZIP once exported this session), so "sent" means this exact BOM went to this workspace.
+  const [currentKey, setCurrentKey] = useState<string | null>(null);
+  const zipReady = Boolean(kit.step?.zipMade) && kit.lastStepZip.current?.scanId === result?.scanId;
+  useEffect(() => {
+    setCurrentKey(null);
+    if (!result || !workspace) return;
+    let live = true;
+    void controlPointIdempotencyKey(result, { workspaceId: workspace.id, inlineMediaTypes: [XLSX_TYPE, ...(zipReady ? ['application/zip'] : [])] })
+      .then(key => { if (live) setCurrentKey(key); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [result, workspace?.id, zipReady]);
+  const sentCurrent = Boolean(sent && workspace && currentKey && sent.workspaceId === workspace.id && sent.idempotencyKey === currentKey);
   const accent: Accent | null = workspaceAccent(workspace?.accentColor);
   useEffect(() => {
     const root = document.documentElement;
@@ -100,14 +115,16 @@ export function useControlPoint(kit: ControlKit) {
       const context = Object.fromEntries(['documentId', 'workspaceOrVersion', 'workspaceOrVersionId', 'elementId'].map(key => [key, kit.context.get(key) ?? ''])) as AssemblyContext;
       const files: Array<{ name: string; mediaType: string; bytes: Uint8Array }> = [];
       const filesNotIncluded: Array<{ name: string; reason: string }> = [];
-      try { const book = await kit.buildWorkbook(); files.push({ name: book.filename, mediaType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes: book.bytes }); }
+      try { const book = await kit.buildWorkbook(); files.push({ name: book.filename, mediaType: XLSX_TYPE, bytes: book.bytes }); }
       catch { filesNotIncluded.push({ name: 'Excel BOM', reason: 'The workbook could not be built in the browser.' }); }
       const zip = kit.lastStepZip.current;
       if (zip && zip.scanId === result.scanId) files.push({ name: zip.name, mediaType: 'application/zip', bytes: zip.bytes });
       else filesNotIncluded.push({ name: 'STEP files', reason: 'Not exported in this session. Download STEP files from Make, then send again to attach them.' });
       const payload = await buildControlPointPayload(result, { context, workspaceId: workspace.id, files, filesNotIncluded });
-      const response = await api(`/api/control-point/send?${new URLSearchParams({ scanId: result.scanId })}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      // The workspace named on the button travels with the send; the Worker refuses it if the saved one changed meanwhile.
+      const response = await api(`/api/control-point/send?${new URLSearchParams({ scanId: result.scanId, workspaceId: String(workspace.id) })}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       if (response.status === 409 && (await response.clone().json().catch(() => null) as { code?: string } | null)?.code === 'revoked') { await refresh(); throw new Error('Control Point ended the link. Link it again to send.'); }
+      if (response.status === 409 && (await response.clone().json().catch(() => null) as { code?: string } | null)?.code === 'workspace_changed') { await refresh(); throw new Error('The workspace changed while sending. Check where it goes and send again.'); }
       if (response.status === 413) throw new Error('This BOM with its files is over 12 MB. Send it without the STEP files, or ask for a larger limit.');
       if (!response.ok) throw new Error(await message(response, 'The send failed. Your scan, Excel, and STEP files are untouched; try again.'));
       const body = await response.json() as { importId: number; url: string; sentAt: string; created: number; updated: number; duplicate: boolean };
@@ -126,6 +143,6 @@ export function useControlPoint(kit: ControlKit) {
     finally { setBusy(null); }
   }
 
-  return { refresh, link, workspace, accent, sent, busy, error, clearError: () => setError(''), startLink, chooseWorkspace, send, unlink };
+  return { refresh, link, workspace, accent, sent, sentCurrent, busy, error, clearError: () => setError(''), startLink, chooseWorkspace, send, unlink };
 }
 export type ControlPoint = ReturnType<typeof useControlPoint>;

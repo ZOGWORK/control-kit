@@ -87,13 +87,17 @@ function Preview({ kit }: { kit: ControlKit }) {
 /** After linking: pick the workspace. One workspace is shown chosen but still confirmed; none gets create and join links. */
 function Picker({ cp }: { cp: ControlPoint }) {
   const link = cp.link as Extract<ControlPoint['link'], { linked: true }>;
-  const [chosen, setChosen] = useState<number | null>(link.workspaces.length === 1 ? link.workspaces[0].id : null);
+  const only = link.workspaces.length === 1 ? link.workspaces[0].id : null;
+  const [chosen, setChosen] = useState<number | null>(only);
+  // A single workspace that appears after "Check again" is preselected too, still waiting for confirmation.
+  useEffect(() => { if (only !== null) setChosen(current => current ?? only); }, [only]);
   if (!link.workspaces.length) return <>
     <p className="small">Linked as {link.account.email}. You don't have a Control Point workspace yet.</p>
+    {link.refreshAfter && Date.parse(link.refreshAfter) > Date.now() && <p className="muted small">Control Point was just checked; you can check again at {new Date(link.refreshAfter).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.</p>}
     <div className="inline-actions">
       <a className="button-link" href={createWorkspaceUrl} {...external}>Create a workspace <ExternalLink aria-hidden size={12} /></a>
       <a className="button-link" href={joinWorkspaceUrl} {...external}>Join one with a code <ExternalLink aria-hidden size={12} /></a>
-      <Button variant="ghost" size="sm" onClick={() => void cp.refresh()}>Check again</Button>
+      <Button variant="ghost" size="sm" onClick={() => void cp.refresh(true)}>Check again</Button>
     </div>
   </>;
   return <>
@@ -110,7 +114,7 @@ function Picker({ cp }: { cp: ControlPoint }) {
 function Linked({ kit, cp, now }: { kit: ControlKit; cp: ControlPoint; now: number | null }) {
   const workspace = cp.workspace!;
   const sent = cp.sent && cp.sent.workspaceId === workspace.id ? cp.sent : null;
-  const current = sent && Date.parse(sent.sentAt) >= Date.parse(kit.result!.scannedAt);
+  const current = Boolean(sent) && cp.sentCurrent;
   return <>
     <div className="workspace-line"><WorkspaceMark workspace={workspace} size={28} /><div><strong>{workspace.name}</strong><span className="muted small">{workspace.ftcNumber ? `FTC ${workspace.ftcNumber}` : 'No FTC number'}</span></div></div>
     {!workspace.canEditCad && <Alert tone="warning" title="You can't edit CAD parts in this workspace">Ask a workspace admin for CAD access, or switch workspace in Settings.</Alert>}
