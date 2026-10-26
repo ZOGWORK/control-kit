@@ -506,3 +506,5 @@ button.row:hover { background: var(--ck-raised); }
   .landing-feature, .landing-feature.flip { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .landing-feature.flip .landing-copy { order: 0; }
 }
+a.nav-item { text-decoration: none; }
+.control-point .panel-head > .link { white-space: nowrap; flex: none; }
