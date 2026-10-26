@@ -317,6 +317,19 @@ describe('known products and SKU choices', () => {
   });
 });
 
+describe('bundles', () => {
+  it('never prices a bundle of different pieces as one CAD part (REV C Channel Bundle, $918 for two channels)', async () => {
+    clearCatalogMemoryCache();
+    const bundle: VendorRecord = { vendorId: 'rev', sku: 'REV-45-1896', normalizedSku: normalizeSku('REV-45-1896', 'rev'), name: 'C Channel Bundle', normalizedName: normalizeName('C Channel Bundle'), url: 'https://www.revrobotics.com/rev-45-1896/', priceUsd: 229.5, packSize: 1, packSizeVerified: true, packEvidence: 'sold individually: no pack wording, and this vendor names every multi-unit product', stock: 'in', stockQty: null, category: 'structure', updatedAt: new Date().toISOString(), source: 'sitemap' };
+    const result = aggregateAssembly(fixture('empty'), context, 'Robot');
+    result.lines = [{ ...aggregateAssembly(fixture('simple'), context, 'Robot').lines[0], name: 'C Channel 408mm', partNumber: 'REV-45-1896', bomLineKey: 'channel', qty: 2 }];
+    classifyScan(await enrichScan(result, catalog([bundle])), { teamNumber: null }, {});
+    expect(result.lines[0]).toMatchObject({ matchStatus: 'exact', lineTotalUsd: null });
+    expect(result.lines[0].vendor?.packSizeVerified).toBe(false);
+    expect(result.stats.totalCostUsd).toBeNull();
+  });
+});
+
 describe('parts library vendor tags', () => {
   const record = (vendorId: VendorId, sku: string, name: string, priceUsd = 10): VendorRecord => ({ vendorId, sku, normalizedSku: normalizeSku(sku, vendorId), name, normalizedName: normalizeName(name), url: 'https://www.gobilda.com/x/', priceUsd, packSize: 1, packSizeVerified: true, stock: 'in', stockQty: null, category: 'motion', updatedAt: new Date().toISOString(), source: 'sitemap' });
   // Real names from the goBILDA and REV catalogs (2026-10-25).

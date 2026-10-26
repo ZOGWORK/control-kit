@@ -1,4 +1,4 @@
-import { batchKey, indexKey, pointerKey, normalizeName, normalizeSku, withKnownPack, type VendorId, type VendorRecord, type IndexEntry } from '@control-kit/shared';
+import { batchKey, indexKey, isBundle, pointerKey, normalizeName, normalizeSku, withKnownPack, type VendorId, type VendorRecord, type IndexEntry } from '@control-kit/shared';
 export { batchKey, indexKey, pointerKey };
 export type { IndexEntry };
 import type { Kv } from './index';
@@ -153,6 +153,7 @@ const labelsEveryPack: VendorId[] = ['gobilda', 'servocity', 'rev'];
  * suffix (REV), then the single-unit convention above. Records that already carry wording-based evidence are unchanged.
  */
 export function applyPackEvidence(record: VendorRecord, packInfo: string | null = null, page: { fieldsRead: boolean } = { fieldsRead: false }): VendorRecord {
+  if (isBundle(record.name)) return withKnownPack(record);
   if (record.packSizeVerified) return record;
   const field = packInfo ? packFromText(packInfo) : null;
   if (field) return { ...record, packSize: field.size, packSizeVerified: true, packEvidence: `product field "Pack Info: ${packInfo}"` };

@@ -12,9 +12,11 @@ const size = { outputWidth: '480', outputHeight: '320' };
 export function previewPath(line: BomLine, apiVersion: string, scanned?: { type: 'v' | 'm'; id: string } | null) {
   if (!line.sourceType || !line.sourceId || (!line.purchasedAssembly && !line.partId)) return null;
   const [type, id] = line.sourceType === 'w' && scanned ? [scanned.type, scanned.id] : [line.sourceType, line.sourceId];
-  const base = `/api/${apiVersion}/${line.purchasedAssembly || !line.partId ? 'assemblies' : 'parts'}/d/${encodeURIComponent(line.documentId)}/${type}/${encodeURIComponent(id)}/e/${encodeURIComponent(line.elementId)}`;
+  // A product folded from one Part Studio's bodies (it keeps a partId) is drawn as the whole Part Studio.
+  const kind = line.purchasedAssembly && line.partId ? 'partstudios' : line.purchasedAssembly || !line.partId ? 'assemblies' : 'parts';
+  const base = `/api/${apiVersion}/${kind}/d/${encodeURIComponent(line.documentId)}/${type}/${encodeURIComponent(id)}/e/${encodeURIComponent(line.elementId)}`;
   const query = new URLSearchParams({ viewMatrix: 'isometric', pixelSize: '0', ...size, ...(line.configuration && line.configuration !== 'default' ? { configuration: line.configuration } : {}) });
-  return `${base}${line.purchasedAssembly ? '' : `/partid/${encodeURIComponent(line.partId!)}`}/shadedviews?${query}`;
+  return `${base}${kind === 'parts' ? `/partid/${encodeURIComponent(line.partId!)}` : ''}/shadedviews?${query}`;
 }
 
 /**

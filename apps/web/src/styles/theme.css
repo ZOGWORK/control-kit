@@ -183,6 +183,8 @@ button.row:hover { background: var(--ck-raised); }
 .step-icon svg { width: 16px; height: 16px; }
 .step-icon.attention { color: var(--ck-volt); background: var(--ck-volt-soft); }
 .step-icon.warning { color: var(--ck-warning); background: color-mix(in srgb, var(--ck-warning) 14%, transparent); }
+/* A count the app will not price (more of an expensive product than an FTC robot uses). */
+.warn { color: var(--ck-warning); }
 .step-icon.done { color: var(--ck-success); background: color-mix(in srgb, var(--ck-success) 14%, transparent); }
 @media (max-width: 520px) { .step { grid-template-columns: auto minmax(0, 1fr); } .step > :last-child { grid-column: 2; justify-self: start; } }
 

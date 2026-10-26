@@ -37,6 +37,9 @@ export function knownProduct(name: string): { product: string; skus: Array<[Vend
  * It replaces only an unverified pack or the "sold individually" convention, never wording on the product page.
  */
 export function withKnownPack(record: VendorRecord): VendorRecord {
+  // A bundle or assortment holds different pieces (REV's C Channel Bundle; goBILDA's "Bundle (17 Pcs)"), so neither
+  // "sold individually" nor a piece count is the pack of any one CAD part: it stays unverified and unpriced.
+  if (isBundle(record.name)) return { ...record, packSize: null, packSizeVerified: false, packEvidence: 'a bundle of different pieces, so no pack size for one part' };
   if (record.packSizeVerified && !record.packEvidence?.startsWith('sold individually')) return record;
   // Roller sets, pairs, and intake wheels are other products; parenthesized details ("Bearing Supported Rollers") are not.
   const product = record.name.replace(/\([^)]*\)/g, ' ');
@@ -45,3 +48,6 @@ export function withKnownPack(record: VendorRecord): VendorRecord {
   }
   return record;
 }
+
+/** Products that bundle different pieces under one SKU. */
+export const isBundle = (name: string) => /\b(?:bundle|assortment)\b/i.test(name);
