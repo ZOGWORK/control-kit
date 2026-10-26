@@ -7,9 +7,11 @@ import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, revi
 export { AiAllowance } from './ai-allowance';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
-import { linePreview, previewCacheKey, PreviewUnavailableError } from './preview';
+import { assemblyPreview, assemblyPreviewCacheKey, linePreview, previewCacheKey, PreviewUnavailableError } from './preview';
+import { clearCookie, readSignedEnvelope, seal, signedCookie, unseal, type SignedCookie } from './secrets';
+import { controlPointRoute, type ControlPointEnv } from './control-point';
 
-export interface Env { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string;
+export interface Env extends ControlPointEnv { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string;
   /** Optional AI review keys (Worker secrets). Without either, the review is off and nothing else changes. */
   GEMINI_API_KEY?: string; ANTHROPIC_API_KEY?: string; GEMINI_MODEL?: string; ANTHROPIC_MODEL?: string; AI_ALLOWANCE?: AiEnv['AI_ALLOWANCE'] }
 type Tokens = { access_token: string; refresh_token: string };
@@ -20,7 +22,6 @@ const cookieName = 'controlkit_session';
 // SameSite=None is required because Onshape embeds Control Kit in a cross-site iframe.
 const cookieFlags = 'HttpOnly; Secure; SameSite=None; Path=/';
 const encode = new TextEncoder();
-const decode = new TextDecoder();
 const random = () => crypto.randomUUID();
 async function lineKeyDigest(lineKey: string) {
   const digest = await crypto.subtle.digest('SHA-256', encode.encode(lineKey));
@@ -54,58 +55,25 @@ async function readDisposition(env: Env, userId: string, documentId: string, ide
   return parseOverride(await env.APP_STATE.get(await legacyClassificationKey(userId, documentId, identity)));
 }
 const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
-const b64 = (data: Uint8Array) => btoa(String.fromCharCode(...data));
-const bytes = (data: string) => Uint8Array.from(atob(data), x => x.charCodeAt(0));
-async function aesKey(env: Env) {
-  const raw = bytes(env.SESSION_ENCRYPTION_KEY);
-  if (raw.length !== 32) throw new Error('SESSION_ENCRYPTION_KEY must contain 32 base64-encoded bytes');
-  return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
-}
-async function encrypt(env: Env, value: Session) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const body = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await aesKey(env), encode.encode(JSON.stringify(value)));
-  return `${b64(iv)}.${b64(new Uint8Array(body))}`;
-}
-async function decrypt(env: Env, value: string): Promise<Session> {
-  const [iv, body] = value.split('.');
-  return JSON.parse(decode.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes(iv) }, await aesKey(env), bytes(body)))) as Session;
-}
 function sessionId(request: Request) { return request.headers.get('cookie')?.match(/(?:^|;\s*)controlkit_session=([^;]+)/)?.[1] ?? null; }
 async function getSession(request: Request, env: Env) {
   const id = sessionId(request);
   const value = id && await env.APP_STATE.get(`session:${id}`);
   if (!id || !value) return null;
-  try { return { id, data: await decrypt(env, value) }; } catch { return null; }
+  try { return { id, data: await unseal<Session>(env, value) }; } catch { return null; }
 }
-async function save(env: Env, id: string, data: Session) { data.savedAt = Date.now(); await env.APP_STATE.put(`session:${id}`, await encrypt(env, data), { expirationTtl: 2592000 }); }
-const b64url = (data: Uint8Array) => b64(data).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const fromB64url = (data: string) => bytes(data.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - data.length % 4) % 4));
-/** HMAC key for the OAuth state cookie, derived from the session key so no new secret is needed. */
-async function stateKey(env: Env) {
-  const material = await crypto.subtle.digest('SHA-256', new Uint8Array([...encode.encode('control-kit oauth-state v1:'), ...bytes(env.SESSION_ENCRYPTION_KEY)]));
-  return crypto.subtle.importKey('raw', material, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
-}
-const stateCookieName = 'controlkit_oauth';
+async function save(env: Env, id: string, data: Session) { data.savedAt = Date.now(); await env.APP_STATE.put(`session:${id}`, await seal(env, data), { expirationTtl: 2592000 }); }
 /**
  * OAuth state lives in a signed, HttpOnly cookie on the browser that started sign-in, not in KV: starting sign-in
  * writes nothing (so nobody can spend the daily KV writes by opening /oauth/start), and a redirect only completes in
  * the browser that started it (no login CSRF).
  */
-async function stateCookie(env: Env, state: string, data: OAuthState) {
-  const payload = encode.encode(JSON.stringify({ state, exp: Date.now() + 600_000, data }));
-  const signature = new Uint8Array(await crypto.subtle.sign('HMAC', await stateKey(env), payload));
-  return `${stateCookieName}=${b64url(payload)}.${b64url(signature)}; HttpOnly; Secure; SameSite=None; Path=/oauth; Max-Age=600`;
-}
+const stateCookie: SignedCookie = { name: 'controlkit_oauth', path: '/oauth', label: 'control-kit oauth-state v1:' };
 async function readStateCookie(request: Request, env: Env, state: string): Promise<OAuthState | null> {
-  const value = request.headers.get('cookie')?.match(new RegExp(`(?:^|;\\s*)${stateCookieName}=([^;]+)`))?.[1];
-  const [payload, signature] = value?.split('.') ?? [];
-  if (!payload || !signature) return null;
-  try {
-    const body = fromB64url(payload);
-    if (!await crypto.subtle.verify('HMAC', await stateKey(env), fromB64url(signature), body)) return null;
-    const parsed = JSON.parse(decode.decode(body)) as { state: string; exp: number; data: OAuthState };
-    return parsed.state === state && parsed.exp > Date.now() ? parsed.data : null;
-  } catch { return null; }
+  const envelope = await readSignedEnvelope<OAuthState & { state?: string }>(request, env, stateCookie);
+  // Cookies signed before the move to secrets.ts kept `state` beside `data`; they stay valid for their ten minutes.
+  const signed = envelope?.data.state ?? (typeof envelope?.state === 'string' ? envelope.state : null);
+  return envelope && signed === state ? envelope.data : null;
 }
 function authParams(env: Env, grant: Record<string, string>) { return new URLSearchParams({ client_id: env.ONSHAPE_OAUTH_CLIENT_ID.trim(), client_secret: env.ONSHAPE_OAUTH_CLIENT_SECRET.trim(), ...grant }); }
 async function exchange(env: Env, grant: Record<string, string>): Promise<Tokens> {
@@ -166,7 +134,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const stateData: OAuthState = { ...(hasContext ? { context: context as Record<string, string> } : {}), ...(returnUri ? { redirectOnshapeUri: returnUri } : {}) };
     const destination = new URL('/oauth/authorize', env.ONSHAPE_OAUTH_BASE);
     destination.search = new URLSearchParams({ response_type: 'code', client_id: env.ONSHAPE_OAUTH_CLIENT_ID.trim(), redirect_uri: env.ONSHAPE_OAUTH_REDIRECT_URI, state }).toString();
-    return new Response(null, { status: 302, headers: { location: destination.toString(), 'set-cookie': await stateCookie(env, state, stateData) } });
+    return new Response(null, { status: 302, headers: { location: destination.toString(), 'set-cookie': await signedCookie(env, stateCookie, { state, ...stateData }) } });
   }
   if (url.pathname === '/oauth/redirect') {
     const state = url.searchParams.get('state');
@@ -193,7 +161,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     for (const [k, v] of Object.entries(stateData.context ?? {})) destination.searchParams.set(k, v);
     const headers = new Headers({ location: destination.toString() });
     headers.append('set-cookie', `${cookieName}=${id}; ${cookieFlags}`);
-    headers.append('set-cookie', `${stateCookieName}=; HttpOnly; Secure; SameSite=None; Path=/oauth; Max-Age=0`);
+    headers.append('set-cookie', clearCookie(stateCookie));
     return new Response(null, { status: 302, headers });
   }
   if (url.pathname === '/api/session') {
@@ -369,6 +337,30 @@ async function route(request: Request, env: Env): Promise<Response> {
       { summary: () => ledger.summary(), finish: () => persistLedger(env.APP_STATE, ledger) },
       // Scoped to the user: a cached BOM is only served to someone whose own Onshape access already read it.
       { get: key => env.APP_STATE.get(`${current.data.user.id}:${key}`), put: (key, value) => env.APP_STATE.put(`${current.data.user.id}:${key}`, value, { expirationTtl: 30 * 86400 }) });
+  }
+  if (url.pathname.startsWith('/control-point/') || url.pathname.startsWith('/api/control-point/')) {
+    const current = await getSession(request, env);
+    return controlPointRoute(request, url, env, current ? current.data.user : null);
+  }
+  if (url.pathname === '/api/preview/assembly' && request.method === 'GET') {
+    // The assembly's own picture for the scan's header, at the revision the scan read.
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    const current = await getSession(request, env);
+    if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const scanId = url.searchParams.get('scanId');
+    if (!scanId || !/^[a-f0-9-]{36}$/.test(scanId)) return reply({ error: 'Invalid scan.' }, 400);
+    const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${scanId}`);
+    if (!raw) return reply({ error: 'Scan this assembly again to see its picture.' }, 409);
+    const result = JSON.parse(raw) as ScanResult;
+    const ledger = new RequestLedger('preview');
+    try {
+      const png = await assemblyPreview(result, assemblyPreviewCacheKey(current.data.user.id, result), env.APP_STATE, onshapeFetcher(env, current, ledger, { remaining: 3 }), env.ONSHAPE_API_VERSION);
+      return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png', 'cache-control': 'private, max-age=3600' } });
+    } catch (error) {
+      if (error instanceof SessionExpiredError) return reply({ error: 'Reconnect Onshape.' }, 401);
+      if (error instanceof PreviewUnavailableError || error instanceof BudgetExhaustedError) return reply({ error: error instanceof PreviewUnavailableError ? error.message : 'Onshape is busy. Try again shortly.' }, 404);
+      throw error;
+    } finally { await persistLedger(env.APP_STATE, ledger).catch(() => undefined); }
   }
   if (url.pathname === '/api/preview' && request.method === 'GET') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);

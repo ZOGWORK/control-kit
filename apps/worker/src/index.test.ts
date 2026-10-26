@@ -142,6 +142,19 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     expect(day.byPurpose['oauth-profile']).toBeGreaterThanOrEqual(1);
     expect(day.byKind['session-info']).toBe(day.byPurpose['oauth-profile']);
   });
+  it('finishes a sign-in whose state cookie was signed in the earlier format, before a deploy', async () => {
+    // The earlier Worker kept `state` beside `data`; the same key signs both formats.
+    const state = 'pre-deploy-state';
+    const text = new TextEncoder();
+    const key = await crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', new Uint8Array([...text.encode('control-kit oauth-state v1:'), ...Uint8Array.from(atob(env.SESSION_ENCRYPTION_KEY), c => c.charCodeAt(0))])),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const payload = text.encode(JSON.stringify({ state, exp: Date.now() + 600_000, data: { context: { documentId: 'doc1', workspaceOrVersion: 'w', workspaceOrVersionId: 'work1', elementId: 'elem1' } } }));
+    const url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const signature = new Uint8Array(await crypto.subtle.sign('HMAC', key, payload));
+    const callback = await call(`/oauth/redirect?code=mock-code&state=${state}`, `controlkit_oauth=${url(payload)}.${url(signature)}`);
+    expect(callback.status).toBe(302);
+    expect(callback.headers.get('location')).toContain('elementId=elem1');
+  });
   it('supports the Applications-page OAuth URL without Assembly context', async () => {
     const target = 'https://cad.onshape.com/user/applications?grant=1';
     const start = await call(`/oauth/start?redirectOnshapeUri=${encodeURIComponent(target)}`);
