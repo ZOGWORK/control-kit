@@ -4,6 +4,8 @@ compatibility_date = "2026-10-22"
 
 [secrets]
 required = ["ONSHAPE_OAUTH_CLIENT_ID", "ONSHAPE_OAUTH_CLIENT_SECRET", "SESSION_ENCRYPTION_KEY"]
+# Optional secrets, not in `required` so a deploy without them still works (each feature stays off until set):
+# CONTROL_KIT_CLIENT_SECRET (Control Point linking, docs/control-point-link.md), GEMINI_API_KEY and ANTHROPIC_API_KEY (AI review).
 
 [vars]
 ONSHAPE_API_BASE = "https://cad.onshape.com"
@@ -13,6 +15,7 @@ WEB_ORIGIN = "https://control-kit.pages.dev"
 ONSHAPE_OAUTH_REDIRECT_URI = "https://control-kit.control-kit-worker.workers.dev/oauth/redirect"
 VENDOR_STALE_HOURS = "336"
 SCAN_TARGET_MS = "10000"
+CONTROL_POINT_ORIGIN = "https://tryctrlpoint.org"
 
 [[kv_namespaces]]
 binding = "VENDOR_CATALOG"
