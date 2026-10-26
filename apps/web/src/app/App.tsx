@@ -155,7 +155,7 @@ function Workspace({ kit }: { kit: ControlKit }) {
       <main className="content">
         {kit.error && <Alert tone="danger" title={kit.error} onDismiss={kit.clearError} />}
         {kit.progress && <section className="panel"><div className="panel-body" style={{ paddingTop: 16 }}><ScanProgress kit={kit} /></div></section>}
-        {view === 'overview' && <Overview kit={kit} summary={summary} go={setView} now={now} />}
+        {view === 'overview' && <Overview kit={kit} summary={summary} go={setView} open={open} now={now} />}
         {view === 'review' && <Review kit={kit} open={open} />}
         {view === 'parts' && <Parts kit={kit} open={open} />}
         {view === 'buy' && <BuyList kit={kit} open={open} go={setView} />}

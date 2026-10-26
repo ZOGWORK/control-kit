@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowRight, Check, ChevronDown, FileSpreadsheet, ListChecks, PackageX, Store, Tag, Wrench } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, ChevronDown, FileSpreadsheet, History, ListChecks, PackageX, Search, Store, Tag, Wrench } from 'lucide-react';
 import { metadataIssueText, type BomLine } from '@control-kit/shared';
 import { Alert } from '../components/arc/alert/alert';
-import { Button } from './bits';
+import { Button, DispositionChip } from './bits';
 import type { ControlKit } from './useControlKit';
-import { ago, buyList, catalogsComplete, catalogState, catalogStateText, composition, money, percent, primaryAction, readiness, staleCatalogs, topCosts, unmatchedParts, vendorLabel,
+import { ago, buyList, catalogsComplete, catalogState, catalogStateText, composition, findParts, hasChanges, money, percent, primaryAction, readiness, scanChanges, staleCatalogs, topCosts, unmatchedParts, vendorLabel,
   type PrimaryAction, type Readiness, type Summary, type View } from './model';
 
 /** "1 part", "3 parts". */
@@ -16,7 +16,7 @@ const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month
 /** A problem still standing between this scan and a complete order and build list. */
 type Move = { key: string; icon: ReactNode; tone: 'attention' | 'blocked'; title: string; detail: string; action?: ReactNode; lines?: BomLine[] };
 
-export function Overview({ kit, summary, go, now }: { kit: ControlKit; summary: Summary; go: (view: View) => void; now: number | null }) {
+export function Overview({ kit, summary, go, open, now }: { kit: ControlKit; summary: Summary; go: (view: View) => void; open: (key: string) => void; now: number | null }) {
   const result = kit.result!;
   const ready = readiness(result, summary);
   const primary = primaryAction(summary, ready);
@@ -52,7 +52,9 @@ export function Overview({ kit, summary, go, now }: { kit: ControlKit; summary: 
     action: <Button variant="secondary" size="sm" onClick={() => go('parts')}>See parts</Button> });
 
   return <div className="overview">
+    <FindPart kit={kit} open={open} />
     <StatusCard result={result} summary={summary} ready={ready} />
+    {kit.previous && <Changes kit={kit} />}
     <PrimaryBar kit={kit} primary={primary} summary={summary} go={go} />
     {stale.length > 0 && <div className="stale-note"><Alert tone="warning" title="Some vendor prices may be out of date">
       {stale.map(vendor => `${vendorLabel[vendor.vendorId]} (${catalogStateText(vendor).toLowerCase()})`).join(', ')}. Prices are as of {result.vendorDataUpdatedAt ? day(result.vendorDataUpdatedAt) : 'an earlier date'}; check prices and stock on the vendor's site before ordering.
@@ -66,6 +68,37 @@ export function Overview({ kit, summary, go, now }: { kit: ControlKit; summary: 
       {health && <CatalogStrip kit={kit} now={now} />}
     </div>
   </div>;
+}
+
+/** Jump straight to a part by name, part number, or SKU, without opening the Parts list. */
+function FindPart({ kit, open }: { kit: ControlKit; open: (key: string) => void }) {
+  const [query, setQuery] = useState('');
+  const found = findParts(kit.result!, query);
+  return <div className="find-part" role="search">
+    <label className="find-field"><Search aria-hidden size={15} /><span className="sr-only">Find a part</span>
+      <input type="search" value={query} placeholder="Find a part by name, part number, or SKU" onChange={event => setQuery(event.target.value)}
+        onKeyDown={event => { if (event.key === 'Enter' && found[0]) { open(found[0].bomLineKey); setQuery(''); } if (event.key === 'Escape') setQuery(''); }} /></label>
+    {query.trim() && <ul className="find-results panel">{found.length ? found.map(line => <li key={line.bomLineKey}>
+      <button type="button" onClick={() => { open(line.bomLineKey); setQuery(''); }}><span className="find-name">{line.name}</span><span className="num muted small">×{line.qty}</span><DispositionChip line={line} /></button>
+    </li>) : <li className="muted small find-empty">No part matches “{query.trim()}”.</li>}</ul>}
+  </div>;
+}
+
+/** What the last rescan changed, so a team iterating on the robot does not compare two BOMs by eye. */
+function Changes({ kit }: { kit: ControlKit }) {
+  const changes = scanChanges(kit.previous!, kit.result!);
+  if (!hasChanges(changes)) return <p className="changes muted small"><History aria-hidden size={14} />No changes since your last scan.</p>;
+  const items = [
+    changes.added.length && `${parts(changes.added.length)} added`, changes.removed.length && `${parts(changes.removed.length)} removed`,
+    changes.quantity && `${changes.quantity} quantity ${changes.quantity === 1 ? 'change' : 'changes'}`, changes.decided && `${parts(changes.decided)} decided`,
+    changes.newlyPriced && `${parts(changes.newlyPriced)} newly priced`,
+    changes.subtotalDelta && `subtotal ${changes.subtotalDelta > 0 ? '+' : '−'}${money(Math.abs(changes.subtotalDelta))}`,
+  ].filter(Boolean);
+  const names = [...changes.added.slice(0, 3).map(line => `+ ${line.name}`), ...changes.removed.slice(0, 3).map(line => `− ${line.name}`)];
+  return <section className="panel changes-card" aria-label="Since your last scan">
+    <p className="changes"><History aria-hidden size={14} /><strong>Since your last scan:</strong> {items.join(' · ')}</p>
+    {names.length > 0 && <p className="muted small changes-names">{names.join('   ')}</p>}
+  </section>;
 }
 
 /** What the scan found, as one bar that adds up, then how ready the team is to order and to build. */

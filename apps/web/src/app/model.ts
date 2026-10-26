@@ -175,6 +175,36 @@ export function composition(summary: Summary): Share[] {
   return shares.filter(share => share.count);
 }
 
+/**
+ * What a rescan changed. Lines are compared by the part itself (document, Part Studio, part, configuration), not by
+ * the line key, whose revision changes on every edit.
+ */
+export type ScanChanges = { added: BomLine[]; removed: BomLine[]; quantity: number; decided: number; newlyPriced: number; subtotalDelta: number | null };
+const partOf = (line: BomLine) => `${line.documentId}:${line.elementId}:${line.partId ?? line.name}:${line.configuration ?? ''}`;
+export function scanChanges(before: ScanResult, after: ScanResult): ScanChanges {
+  const old = new Map(before.lines.map(line => [partOf(line), line]));
+  const now = new Map(after.lines.map(line => [partOf(line), line]));
+  const kept = after.lines.filter(line => old.has(partOf(line)));
+  const total = (result: ScanResult) => summarize(result).subtotal;
+  const [was, is] = [total(before), total(after)];
+  return {
+    added: after.lines.filter(line => !old.has(partOf(line))),
+    removed: before.lines.filter(line => !now.has(partOf(line))),
+    quantity: kept.filter(line => line.qty !== old.get(partOf(line))!.qty).length,
+    decided: kept.filter(line => line.disposition !== 'review' && old.get(partOf(line))!.disposition === 'review').length,
+    newlyPriced: kept.filter(line => priced(line) && !priced(old.get(partOf(line))!)).length,
+    subtotalDelta: was === null && is === null ? null : Math.round(((is ?? 0) - (was ?? 0)) * 100) / 100,
+  };
+}
+export const hasChanges = (changes: ScanChanges) => Boolean(changes.added.length || changes.removed.length || changes.quantity || changes.decided || changes.newlyPriced || changes.subtotalDelta);
+
+/** Overview search: parts whose name, part number, or SKU contain the text, best (name starts with it) first. */
+export function findParts(result: ScanResult, query: string, count = 6) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  return filterParts(result, 'all', needle, 'name').sort((a, b) => Number(!a.name.toLowerCase().startsWith(needle)) - Number(!b.name.toLowerCase().startsWith(needle))).slice(0, count);
+}
+
 /** "4 minutes ago", for scan and catalog times. Never used in the first render, which has no clock yet. */
 export function ago(iso: string, now: number) {
   const minutes = Math.round((now - Date.parse(iso)) / 60000);

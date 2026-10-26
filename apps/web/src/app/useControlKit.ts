@@ -36,6 +36,10 @@ export function useControlKit(context: URLSearchParams) {
   const [checkingSession, setCheckingSession] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<ScanResult | null>(null);
+  /** The scan this one replaced, for "since your last scan". Only kept for the same assembly, and only in memory. */
+  const [previous, setPrevious] = useState<ScanResult | null>(null);
+  const resultRef = useRef(result);
+  resultRef.current = result;
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [settings, setSettings] = useState<UserSettings>({ teamNumber: null });
   /** The latest settings, for updaters that run after a later render (a reopened scan's choices arriving late). */
@@ -207,7 +211,11 @@ export function useControlKit(context: URLSearchParams) {
                 step: progress.catalogs < progress.catalogsTotal ? 'catalogs' : 'matching', counts: { ...previous.counts, ...progress },
               }));
             }
-            if (generation === scanGeneration.current) setResult(scanned);
+            if (generation === scanGeneration.current) {
+              const before = resultRef.current;
+              setPrevious(before && before.scanId !== scanned.scanId && before.documentId === scanned.documentId && before.elementId === scanned.elementId ? before : null);
+              setResult(scanned);
+            }
           }
           if (event.type === 'session-expired') { setSession({ connected: false }); throw new Error('Your Onshape connection expired. Reconnect and scan again.'); }
           if (event.type === 'error') throw new Error(event.message);
@@ -425,7 +433,7 @@ export function useControlKit(context: URLSearchParams) {
         catch { localStorage.removeItem(key); }
       }
     } catch { /* Storage unavailable. */ }
-    setStep(null); setResult(null); setError('');
+    setStep(null); setResult(null); setPrevious(null); setError('');
     setAi(current => ({ ...current, running: false, note: '' })); setExcel('idle'); setBulk(null); setSettings({ teamNumber: null });
     setSession({ connected: false });
   }
@@ -529,7 +537,7 @@ export function useControlKit(context: URLSearchParams) {
     return URL.createObjectURL(await response.blob());
   }
 
-  return { ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
+  return { previous, ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
     acceptSuggestions, bulk, pending, settings, savingSettings, saveSettings, signOut, excel, downloadExcel, downloadCsv, step, downloadStep };
 }
 export type ControlKit = ReturnType<typeof useControlKit>;

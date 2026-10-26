@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateAssembly, classifyScan, recalculatePurchasing, type AssemblyInstance, type BomLine, type ScanResult, type VendorRecord } from '@control-kit/shared';
-import { buyList, catalogState, catalogStateText, catalogsComplete, composition, filterParts, money, primaryAction, readiness, reviewQueue, staleCatalogs, summarize, topCosts } from './model';
+import { buyList, catalogState, catalogStateText, catalogsComplete, composition, filterParts, findParts, hasChanges, money, primaryAction, readiness, reviewQueue, scanChanges, staleCatalogs, summarize, topCosts } from './model';
 
 const vendor = (sku: string, packSize: number | null, priceUsd: number | null): VendorRecord => ({ vendorId: 'gobilda', sku, normalizedSku: sku.replace(/\D/g, ''), name: 'Screw', normalizedName: 'screw', url: 'https://www.gobilda.com/x/',
   priceUsd, packSize, packSizeVerified: packSize !== null, stock: 'in', stockQty: null, category: 'hardware', updatedAt: '2026-10-24T00:00:00Z', source: 'sitemap' });
@@ -46,6 +46,20 @@ describe('Control Kit view model', () => {
     expect(primaryAction({ ...summary, review: 0 }, { ...ready, order: { ...ready.order, outOfStock: 0 } }).kind).toBe('build-pack');
     expect(topCosts(result).map(line => line.partId)).toEqual(['screw', 'bearing']);
     expect(money(1768.05)).toBe('$1,768.05');
+  });
+  it('reports what a rescan changed by part, not by revision', () => {
+    const before = scan([...parts('M4 screw', 12, 'screw'), ...parts('Old bracket', 1, 'old')]);
+    const after = scan([...parts('M4 screw', 16, 'screw'), ...parts('Sensor mount', 1, 'mount')], lines => {
+      const screw = lines.find(line => line.partId === 'screw')!;
+      screw.bomLineKey += ':new-microversion';
+      screw.vendor = vendor('2802-0004-0010', 10, 8.99); screw.matchStatus = 'exact';
+    });
+    const changes = scanChanges(before, after);
+    expect(changes.added.map(line => line.name)).toEqual(['Sensor mount']);
+    expect(changes.removed.map(line => line.name)).toEqual(['Old bracket']);
+    expect(changes).toMatchObject({ quantity: 1, newlyPriced: 1, subtotalDelta: 17.98 });
+    expect(hasChanges(scanChanges(before, before))).toBe(false);
+    expect(findParts(after, 'mount').map(line => line.name)).toEqual(['Sensor mount']);
   });
   it('never puts a possible match under a vendor or into a total', () => {
     const result = scan(parts('Wheel', 4, 'wheel'), lines => { lines[0].vendor = vendor('3606-0014-0096', 1, 12); lines[0].matchStatus = 'possible'; });

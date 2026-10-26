@@ -1,9 +1,9 @@
-import { ExternalLink, FileSpreadsheet } from 'lucide-react';
+import { ExternalLink, FileSpreadsheet, ShoppingCart } from 'lucide-react';
 import { Alert } from '../components/arc/alert/alert';
 import { EmptyState } from '../components/arc/empty-state/empty-state';
 import type { ControlKit } from './useControlKit';
 import { buyList, catalogsComplete, fasteners, money, summarize, type View } from './model';
-import { Button, LineCost } from './bits';
+import { Button, LineCost, SectionHead, StockNote } from './bits';
 
 /**
  * What to order, by vendor. Only exact or confirmed matches sit under a vendor, and only priced lines count toward a
@@ -15,29 +15,32 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
   const stock = fasteners(result);
   const summary = summarize(result);
   const complete = summary.buyLines > 0 && summary.pricedLines === summary.buyLines;
+  const outOfStock = vendors.flatMap(group => group.lines).filter(line => line.vendor?.stock === 'out').length;
 
   return <>
-    <div className="section-head">
-      <div><h2>Buy list</h2><p>Quantities are pieces needed; packs to order round up to whole packs. A part is priced only when its vendor match, pack size, and price are all verified.</p></div>
-      <div className="inline-actions">
-        <Button variant="secondary" size="sm" loading={kit.excel === 'working'} onClick={() => void kit.downloadExcel()}><FileSpreadsheet aria-hidden size={14} /> Excel BOM</Button>
-        <Button variant="ghost" size="sm" onClick={() => void kit.downloadCsv()}>CSV</Button>
-      </div>
-    </div>
+    <SectionHead icon={<ShoppingCart />} tone="buy" title="Buy list" actions={<>
+      <Button variant="secondary" size="sm" loading={kit.excel === 'working'} onClick={() => void kit.downloadExcel()}><FileSpreadsheet aria-hidden size={14} /> Excel BOM</Button>
+      <Button variant="ghost" size="sm" onClick={() => void kit.downloadCsv()}>CSV</Button>
+    </>}>What to order, by vendor. Quantities are pieces needed; packs round up. A part is priced only when its match, pack size, and price are all verified.</SectionHead>
     {kit.excel === 'failed' && <Alert tone="warning" title="The Excel file could not be built">Download the CSV instead; it has the same rows without formatting.</Alert>}
-    <div className="tiles">
-      <div className={`tile ${complete ? '' : 'incomplete'}`}><span className="tile-label">{complete ? 'Purchasing total' : 'Known subtotal'}</span>
-        <span className="tile-value">{summary.subtotal === null ? 'None yet' : money(summary.subtotal)}</span>
-        <span className="tile-context">{summary.pricedLines} of {summary.buyLines} parts priced{complete ? '' : ', so the real total is higher'}. Public list prices, before shipping and tax.</span></div>
-      <div className="tile"><span className="tile-label">Vendors</span><span className="tile-value">{vendors.length}</span><span className="tile-context">{vendors.map(vendor => vendor.label).join(', ') || 'none matched yet'}</span></div>
-      <div className={`tile ${needsSku.length ? 'attention' : ''}`}><span className="tile-label">No vendor match</span><span className="tile-value">{needsSku.length}</span><span className="tile-context">parts to buy without a SKU match</span></div>
-    </div>
+    {summary.buyLines > 0 && <section className="panel buy-summary" aria-label="Order summary">
+      <div className="money-figure"><span className={`money-value num ${summary.subtotal === null ? 'none' : ''}`}>{summary.subtotal === null ? 'None priced' : money(summary.subtotal)}</span>
+        <span className="small muted">{complete ? 'purchasing total' : 'known subtotal'}, list prices before shipping and tax</span></div>
+      <div className="split-bar" role="img" aria-label={`${summary.pricedLines} of ${summary.buyLines} parts priced`}>
+        <span className="split priced" style={{ flexGrow: summary.pricedLines }} /><span className="split unpriced" style={{ flexGrow: summary.buyLines - summary.pricedLines }} /></div>
+      <ul className="figures-row">
+        <li><span className="num">{summary.pricedLines} of {summary.buyLines}</span> priced</li>
+        <li><span className="num">{vendors.length}</span> {vendors.length === 1 ? 'vendor' : 'vendors'}</li>
+        {needsSku.length > 0 && <li className="attention-text"><span className="num">{needsSku.length}</span> without a match</li>}
+        {outOfStock > 0 && <li className="blocked-text"><span className="num">{outOfStock}</span> out of stock</li>}
+      </ul>
+    </section>}
 
     {!vendors.length && !needsSku.length && <section className="panel"><EmptyState title="Nothing to buy yet" description="Parts appear here once they are marked Buy, by a vendor SKU, a library part number, or your choice in Review." action={<Button size="sm" onClick={() => go('review')}>Review parts</Button>} /></section>}
 
-    {vendors.map(group => <section key={group.vendorId} className="panel" aria-label={group.label}>
-      <div className="panel-head"><div><h2>{group.label}</h2><p>{group.lines.length} part{group.lines.length === 1 ? '' : 's'}{group.unpriced ? `, ${group.unpriced} without a verified price or pack size` : ''}</p></div>
-        {group.subtotal !== null && <span className="num">{money(group.subtotal)}</span>}</div>
+    {vendors.map(group => <section key={group.vendorId} className="panel tone-buy" aria-label={group.label}>
+      <div className="panel-head"><div><h2><span className="dot buy" aria-hidden /> {group.label}</h2><p>{group.lines.length} part{group.lines.length === 1 ? '' : 's'}{group.unpriced ? `, ${group.unpriced} without a verified price or pack size` : ''}</p></div>
+        {group.subtotal !== null && <span className="num group-total">{money(group.subtotal)}</span>}</div>
       <div className="rows">{group.lines.map(line => {
         const vendor = line.vendor!;
         return <div key={line.bomLineKey} className="row">
@@ -51,7 +54,7 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
               {line.orderedWith && <span>ordered with {group.lines.find(other => other.bomLineKey === line.orderedWith)?.name ?? 'another line'}</span>}
               {line.priceCheck && <span className="warn">{line.priceCheck}</span>}
               {vendor.priceUsd !== null && <span className="num">{money(vendor.priceUsd)} per pack</span>}
-              {vendor.stock === 'out' && <span style={{ color: 'var(--ck-danger)' }}>out of stock</span>}
+              <StockNote stock={vendor.stock} />
             </span>
           </div>
           <div className="row-aside"><LineCost line={line} /></div>
@@ -59,8 +62,8 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
       })}</div>
     </section>)}
 
-    {needsSku.length > 0 && <section className="panel" aria-labelledby="needs-sku">
-      <div className="panel-head"><div><h2 id="needs-sku">No vendor match yet</h2><p>{catalogsComplete(result.catalogHealth) ? 'These parts are marked Buy but no catalog product matched. Add the vendor SKU to the part number in Onshape and rescan.' : 'Some vendor catalogs are still loading. Rescan later, or add the vendor SKU to the part number in Onshape.'}</p></div></div>
+    {needsSku.length > 0 && <section className="panel tone-attention" aria-labelledby="needs-sku">
+      <div className="panel-head"><div><h2 id="needs-sku"><span className="dot attention" aria-hidden /> No vendor match yet</h2><p>{catalogsComplete(result.catalogHealth) ? 'These parts are marked Buy but no catalog product matched. Add the vendor SKU to the part number in Onshape and rescan.' : 'Some vendor catalogs are still loading. Rescan later, or add the vendor SKU to the part number in Onshape.'}</p></div></div>
       <div className="rows">{needsSku.map(line => <button key={line.bomLineKey} type="button" className="row" onClick={() => open(line.bomLineKey)}>
         <span className="row-main"><span className="row-title"><span>{line.name}</span></span>
           <span className="row-meta"><span><span className="num">{line.qty}</span> needed</span>{line.partNumber ? <span className="num">{line.partNumber}</span> : <span>no part number</span>}{line.matchStatus === 'possible' && <span>possible match to confirm</span>}</span></span>

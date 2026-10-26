@@ -5,7 +5,8 @@ import SegmentedControl from '../components/arc/segmented-control/segmented-cont
 import { Select } from '../components/arc/select/select';
 import type { ControlKit } from './useControlKit';
 import { filterParts, isMake, type PartFilter, type PartSort } from './model';
-import { Button, DispositionChip, LineCost, PartMeta, Thumbnail } from './bits';
+import { Boxes } from 'lucide-react';
+import { Button, DispositionChip, LineCost, PartMeta, SectionHead, Thumbnail } from './bits';
 
 const page = 50;
 
@@ -21,7 +22,7 @@ export function Parts({ kit, open }: { kit: ControlKit; open: (key: string) => v
     review: result.lines.filter(line => line.disposition === 'review').length, ignore: result.lines.filter(line => line.disposition === 'ignore').length, suppressed: result.suppressed.length };
 
   return <>
-    <div className="section-head"><div><h2>Parts</h2><p>{result.lines.length} distinct parts, {result.stats.totalInstances} in the assembly. Quantities count every active instance, including inside subassemblies.</p></div></div>
+    <SectionHead icon={<Boxes />} tone="neutral" title="Parts">Every part in the assembly: {result.lines.length} unique, {result.stats.totalInstances} placed. Quantities count every active instance, including inside subassemblies.</SectionHead>
     <SegmentedControl label="Show" value={filter} onValueChange={value => { setFilter(value as PartFilter); setShown(page); }} options={[
       { value: 'all', label: `All ${count.all}` }, { value: 'buy', label: `Buy ${count.buy}` }, { value: 'hardware', label: `Fasteners ${count.hardware}` }, { value: 'make', label: `Make ${count.make}` },
       { value: 'review', label: `Review ${count.review}` }, ...(count.ignore ? [{ value: 'ignore', label: `Not needed ${count.ignore}` }] : []), { value: 'suppressed', label: `Suppressed ${count.suppressed}` },
@@ -34,7 +35,7 @@ export function Parts({ kit, open }: { kit: ControlKit; open: (key: string) => v
     <section className="panel">
       <div className="rows">{rows.slice(0, shown).map(line => <button key={line.bomLineKey} type="button" className={`row ${line.suppressed ? 'dim' : ''}`} onClick={() => open(line.bomLineKey)}>
         <span className="row-main"><span className="row-title"><Thumbnail line={line} /><span>{line.name}</span></span><PartMeta line={line} />
-          {line.metadataIssue && !line.suppressed && <span className="small" style={{ color: 'var(--ck-warning)' }}>{line.missingMetadataReason}</span>}</span>
+          {line.metadataIssue && !line.suppressed && <span className="small blocked-text">{line.missingMetadataReason}</span>}</span>
         <span className="row-aside"><LineCost line={line} /><DispositionChip line={line} /></span>
       </button>)}</div>
       {rows.length > shown && <div className="subtotal"><span className="muted">Showing {shown} of {rows.length}</span><Button size="sm" variant="ghost" onClick={() => setShown(shown + page)}>Show more</Button></div>}

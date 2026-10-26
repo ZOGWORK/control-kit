@@ -1,4 +1,4 @@
-import type { ComponentProps } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import { Button as ArcButton } from '../components/arc/button/button';
 import type { BomLine } from '@control-kit/shared';
 import { chipClass, chipLabel, money, shortLabel } from './model';
@@ -45,4 +45,22 @@ export function PartMeta({ line }: { line: BomLine }) {
  */
 export function Button({ variant = 'primary', className, ...props }: ComponentProps<typeof ArcButton>) {
   return <ArcButton variant={variant} className={[variant === 'primary' ? 'btn-volt' : '', className].filter(Boolean).join(' ') || undefined} {...props} />;
+}
+
+/**
+ * The top of each section: an icon in the section's colour job (sky buy, gold make, orange review), what the section
+ * is for in one line, and its actions. It is how a person tells which list they are looking at.
+ */
+export function SectionHead({ icon, tone, title, children, actions }: { icon: ReactNode; tone: 'buy' | 'make' | 'attention' | 'done' | 'neutral'; title: string; children?: ReactNode; actions?: ReactNode }) {
+  return <div className={`section-head section-${tone}`}>
+    <div className="section-title"><span className="section-icon" aria-hidden>{icon}</span><div><h2>{title}</h2>{children && <p>{children}</p>}</div></div>
+    {actions && <div className="inline-actions">{actions}</div>}
+  </div>;
+}
+
+/** Stock as a coloured word: red when out, orange when low; nothing when in stock or unknown. */
+export function StockNote({ stock }: { stock: 'in' | 'out' | 'low' | 'unknown' }) {
+  if (stock === 'out') return <span className="stock out">out of stock</span>;
+  if (stock === 'low') return <span className="stock low">low stock</span>;
+  return null;
 }
