@@ -16,6 +16,8 @@ export const sendLimitBytes = 12 * 1024 * 1024;
 /** How much of a send's body is read before streaming the rest: the payload's key and assembly ids are at its start. */
 const prefixBytes = 64 * 1024;
 const workspacesFreshMs = 10 * 60_000;
+/** "Check again" (`?refresh=1`) asks Control Point at most this often per person; sooner, the cached list is served. */
+const refreshGapMs = 30_000;
 const defaultOrigin = 'https://tryctrlpoint.org';
 const stateCookie: SignedCookie = { name: 'controlkit_cp', path: '/control-point', label: 'control-kit control-point-state v1:' };
 const linkKey = (userId: string) => `cp-link:${userId}`;
@@ -145,7 +147,9 @@ const pick = ({ id, name, ftcNumber, accentColor, canEditCad }: ControlPointWork
 function linkView(link: Link, stale = false) {
   const workspaces = link.workspaces ?? [];
   const workspace = workspaces.find(item => item.id === link.workspaceId);
-  return { linked: true, available: true, account: link.account, workspace: workspace ? pick(workspace) : null, workspaces, linkedAt: link.linkedAt, ...(stale ? { stale: true } : {}) };
+  // When "Check again" may next ask Control Point for a fresh list.
+  const refreshAfter = new Date((link.workspacesAt ?? 0) + refreshGapMs).toISOString();
+  return { linked: true, available: true, account: link.account, workspace: workspace ? pick(workspace) : null, workspaces, linkedAt: link.linkedAt, refreshAfter, ...(stale ? { stale: true } : {}) };
 }
 /**
  * Refreshes the cached workspace list when it is older than ten minutes (or always, with `force`). A revoked token
@@ -261,7 +265,8 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);
     const link = await readLink(env, user.id);
     if (!link) return reply({ linked: false, available: true });
-    const fresh = await refreshedLink(env, adapter, user.id, link);
+    const force = url.searchParams.get('refresh') === '1' && Date.now() - (link.workspacesAt ?? 0) >= refreshGapMs;
+    const fresh = await refreshedLink(env, adapter, user.id, link, force);
     return fresh.link ? reply(linkView(fresh.link, fresh.stale)) : reply({ linked: false, available: true, ...(fresh.revoked ? { revoked: true } : {}) });
   }
   if (url.pathname === '/api/control-point/workspace' && request.method === 'POST') {
@@ -292,6 +297,10 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);
     const scanId = url.searchParams.get('scanId');
     if (!scanId || !/^[a-f0-9-]{36}$/.test(scanId)) return failure(400, 'bad_request', 'Invalid scan.');
+    // The workspace the Send button named: a bundle never goes anywhere else.
+    const named = url.searchParams.get('workspaceId');
+    const workspaceId = named && /^[1-9]\d{0,15}$/.test(named) ? Number(named) : null;
+    if (workspaceId === null || !Number.isSafeInteger(workspaceId)) return failure(400, 'bad_request', 'Name the workspace to send to.');
     const declared = request.headers.get('content-length');
     const length = declared && /^\d{1,9}$/.test(declared) ? Number(declared) : null;
     if (length === null) return failure(411, 'length_required', 'Control Kit could not size this bundle. Try again.');
@@ -304,6 +313,7 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     const link = await readLink(env, user.id);
     if (!link) return failure(409, 'not_linked', 'Link Control Point first.', { linked: false });
     if (link.workspaceId === null) return failure(409, 'no_workspace', 'Pick a Control Point workspace first.');
+    if (link.workspaceId !== workspaceId) return failure(409, 'workspace_changed', 'The workspace changed while sending. Check where it goes and send again.');
     const body = await splitBody(request.body, length);
     if (body.oversized) return failure(400, 'bad_payload', 'The bundle is longer than its declared size.');
     if (!body.idempotencyKey) return failure(400, 'bad_payload', 'Build the Control Point bundle from this scan.');

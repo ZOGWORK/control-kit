@@ -159,16 +159,32 @@ async function file(name: string, mediaType: string, bytes: Uint8Array): Promise
     : { ...base, delivery: 'reference', reason: `Larger than ${INLINE_FILE_LIMIT_BYTES / 1024 / 1024} MB, so it is uploaded separately once the file-upload contract is confirmed.` };
 }
 
+/** A scan's three line lists as the bundle carries them, sorted by line key. */
+const bundleLines = (result: ScanResult) => ({ lines: result.lines.map(toLine).sort(byKey), suppressedLines: result.suppressed.map(toLine).sort(byKey), missingMetadataLines: result.missingMetadata.map(toLine).sort(byKey) });
+async function idempotencyKeyOf(result: ScanResult, listed: ReturnType<typeof bundleLines>, workspaceId: number | null, inlineMediaTypes: string[]) {
+  const suppressedCount = result.suppressed.reduce((total, line) => total + line.qty, 0);
+  const totals = { uniqueLines: result.stats.uniqueLines, totalInstances: result.stats.totalInstances, totalCostUsd: result.stats.totalCostUsd, outOfStockLines: result.stats.outOfStockLines };
+  const revision = result.diagnostics?.revision ?? null;
+  const contentHash = await sha256(JSON.stringify({ name: result.assemblyName, suppressedCount, totals, ...listed,
+    revisions: result.lines.map(line => [line.bomLineKey, line.sourceType, line.sourceId]).sort(([a], [b]) => String(a).localeCompare(String(b))) }));
+  const files = [...inlineMediaTypes].sort().join(',');
+  return sha256(`${workspaceId ?? ''}:${result.documentId}:${result.elementId}:${revision ? `${revision.type}/${revision.id}` : ''}:${contentHash}:${files}`);
+}
 /**
  * Stable for identical BOM data across rescans: the key is the Control Point workspace, document, element, revision,
- * and a hash of the scan's content (lines, suppressed and missing-metadata lines, totals), so one scan sent to two
- * workspaces is two imports. Timestamps, scan ids, and file bytes are left out. `workspaceId` is null only for a
- * preview that is never sent.
+ * a hash of the scan's content (lines, suppressed and missing-metadata lines, totals), and the media types of the
+ * files sent inline. So one scan sent to two workspaces is two imports, and sending it again with the STEP zip
+ * attached is a new import rather than a duplicate that drops the zip. Timestamps, scan ids, file names (they carry a
+ * date), and file bytes (the workbook's change on every build) are left out. `workspaceId` is null only for a preview
+ * that is never sent. The browser can call this to learn the key a send would carry without building any file.
  */
+export function controlPointIdempotencyKey(result: ScanResult, options: { workspaceId: number | null; inlineMediaTypes: string[] }): Promise<string> {
+  return idempotencyKeyOf(result, bundleLines(result), options.workspaceId, options.inlineMediaTypes);
+}
+/** The bundle for one scan; its `idempotencyKey` is `controlPointIdempotencyKey` over the files it ends up inlining. */
 export async function buildControlPointPayload(result: ScanResult, options: { workspaceId: number | null; context?: AssemblyContext; files?: Array<{ name: string; mediaType: string; bytes: Uint8Array }>; filesNotIncluded?: Array<{ name: string; reason: string }> }): Promise<ControlPointBomPayload> {
-  const lines = result.lines.map(toLine).sort(byKey);
-  const suppressedLines = result.suppressed.map(toLine).sort(byKey);
-  const missingMetadataLines = result.missingMetadata.map(toLine).sort(byKey);
+  const listed = bundleLines(result);
+  const { lines, suppressedLines, missingMetadataLines } = listed;
   const documentUrl = `https://cad.onshape.com/documents/${encodeURIComponent(result.documentId)}`;
   // A workspace or version link opens from outside Onshape; a microversion link does not, so it falls back to the document.
   const context = options.context;
@@ -177,9 +193,8 @@ export async function buildControlPointPayload(result: ScanResult, options: { wo
   const suppressedCount = result.suppressed.reduce((total, line) => total + line.qty, 0);
   const totals = { uniqueLines: result.stats.uniqueLines, totalInstances: result.stats.totalInstances, totalCostUsd: result.stats.totalCostUsd, outOfStockLines: result.stats.outOfStockLines };
   const revision = result.diagnostics?.revision ?? null;
-  const contentHash = await sha256(JSON.stringify({ name: assembly.name, suppressedCount, totals, lines, suppressedLines, missingMetadataLines,
-    revisions: result.lines.map(line => [line.bomLineKey, line.sourceType, line.sourceId]).sort(([a], [b]) => String(a).localeCompare(String(b))) }));
-  const idempotencyKey = await sha256(`${options.workspaceId ?? ''}:${result.documentId}:${result.elementId}:${revision ? `${revision.type}/${revision.id}` : ''}:${contentHash}`);
+  const files = await Promise.all((options.files ?? []).map(item => file(item.name, item.mediaType, item.bytes)));
+  const idempotencyKey = await idempotencyKeyOf(result, listed, options.workspaceId, files.filter(item => item.delivery === 'inline').map(item => item.mediaType));
   const sorted = [...result.lines].sort((a, b) => a.bomLineKey.localeCompare(b.bomLineKey));
   return {
     idempotencyKey, source: 'control-kit', bundleVersion: 2, assembly, revision, generatedAt: result.scannedAt,
@@ -187,7 +202,7 @@ export async function buildControlPointPayload(result: ScanResult, options: { wo
     lines, suppressedLines, missingMetadataLines, suppressedCount, totals,
     cadParts: byIdentity(sorted, lines).map(cadPart),
     controlPointCadUrl: CONTROL_POINT_CAD_URL,
-    files: await Promise.all((options.files ?? []).map(item => file(item.name, item.mediaType, item.bytes))),
+    files,
     filesNotIncluded: expectedFiles(options.files ?? [], options.filesNotIncluded ?? []),
   };
 }

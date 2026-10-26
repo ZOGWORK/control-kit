@@ -4,7 +4,7 @@ export { applyClassificationChoice, classificationIdentity, classifyLine, classi
 import { purchasedAssemblyReason } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, Confidence, Disposition, DispositionSource, Provenance, UserSettings } from './classifier';
 export type { Attribution, LibraryMapping, LicensedImage, VendorId, VendorRecord, MatchResult } from './matching';
-export { buildControlPointPayload, CONTROL_POINT_CAD_URL, ControlPointError, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter } from './control-point';
+export { buildControlPointPayload, controlPointIdempotencyKey, CONTROL_POINT_CAD_URL, ControlPointError, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter } from './control-point';
 export { recalculatePurchasing, updatePurchasing } from './purchasing';
 export { isBundle, knownProduct, withKnownPack } from './known-products';
 export { AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, aiCandidateRecord, aiDispositions, aiReviewHash, aiReviewInstructions, aiReviewSchema, applyAiReview, buildAiReviewRequest, lineCandidates, needsAiReview, parseAiReview } from './ai-review';
