@@ -10,7 +10,7 @@ export type ControlPointEnv = { APP_STATE: Kv; WEB_ORIGIN: string; SESSION_ENCRY
 type User = { id: string; name: string };
 /**
  * `workspaces` and `workspacesAt` (ms) cache Control Point's list for ten minutes. `refreshTriedAt` (ms) is the last
- * "Check again" that failed, so a Control Point outage still gets the 30-second pause.
+ * refresh that failed, so a Control Point outage still gets the 30-second pause.
  */
 type Link = { token: string; account: ControlPointAccount; workspaceId: number | null; linkedAt: string; workspaces?: ControlPointWorkspace[]; workspacesAt?: number; refreshTriedAt?: number };
 export type SentRecord = { importId: number; workspaceId: number; sentAt: string; idempotencyKey: string; url: string };
@@ -270,10 +270,15 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);
     const link = await readLink(env, user.id);
     if (!link) return reply({ linked: false, available: true });
-    const force = url.searchParams.get('refresh') === '1' && Date.now() - lastRefresh(link) >= refreshGapMs;
-    let fresh = await refreshedLink(env, adapter, user.id, link, force);
-    // A failed forced refresh still starts the pause, so retries do not keep calling a struggling Control Point.
-    if (force && fresh.stale) fresh = { ...fresh, link: await updateLink(env, user.id, link.token, current => ({ ...current, refreshTriedAt: Date.now() })) };
+    // Within 30 seconds of the last call to Control Point, answered or not, nothing asks it again, whether "Check
+    // again" forced the refresh or the cached list expired; the cached list is served, marked stale when expired.
+    if (Date.now() - lastRefresh(link) < refreshGapMs) {
+      const cached = !!link.workspaces && !!link.workspacesAt && Date.now() - link.workspacesAt < workspacesFreshMs;
+      return reply(linkView(link, !cached));
+    }
+    let fresh = await refreshedLink(env, adapter, user.id, link, url.searchParams.get('refresh') === '1');
+    // A failed refresh still starts the pause, so repeated reads do not keep calling a struggling Control Point.
+    if (fresh.stale) fresh = { ...fresh, link: await updateLink(env, user.id, link.token, current => ({ ...current, refreshTriedAt: Date.now() })) };
     return fresh.link ? reply(linkView(fresh.link, fresh.stale)) : reply({ linked: false, available: true, ...(fresh.revoked ? { revoked: true } : {}) });
   }
   if (url.pathname === '/api/control-point/workspace' && request.method === 'POST') {
