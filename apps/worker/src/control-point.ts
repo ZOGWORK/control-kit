@@ -16,6 +16,8 @@ export const sendLimitBytes = 12 * 1024 * 1024;
 /** How much of a send's body is read before streaming the rest: the payload's key and assembly ids are at its start. */
 const prefixBytes = 64 * 1024;
 const workspacesFreshMs = 10 * 60_000;
+/** "Check again" (`?refresh=1`) asks Control Point at most this often per person; sooner, the cached list is served. */
+const refreshGapMs = 30_000;
 const defaultOrigin = 'https://tryctrlpoint.org';
 const stateCookie: SignedCookie = { name: 'controlkit_cp', path: '/control-point', label: 'control-kit control-point-state v1:' };
 const linkKey = (userId: string) => `cp-link:${userId}`;
@@ -121,26 +123,52 @@ async function readLink(env: ControlPointEnv, userId: string) {
   try { return await unseal<Link>(env, raw); } catch { return null; }
 }
 const saveLink = async (env: ControlPointEnv, userId: string, link: Link) => env.APP_STATE.put(linkKey(userId), await seal(env, link));
+/**
+ * Applies a change worked out from a link read before a slow Control Point call to the link as it is now, and only
+ * while it is still the same grant: an unlink or a relink made meanwhile wins, and the newest workspace choice is
+ * kept. Returns the link as stored afterwards (null when there is none). KV cannot compare-and-swap, so this narrows
+ * the race to one read and one write rather than closing it.
+ */
+async function updateLink(env: ControlPointEnv, userId: string, token: string, change: (current: Link) => Link) {
+  const current = await readLink(env, userId);
+  if (!current || current.token !== token) return current;
+  const next = change(current);
+  await saveLink(env, userId, next);
+  return next;
+}
+/** Ends the link after Control Point refused `token`, unless a newer grant has replaced it meanwhile. */
+async function forgetLink(env: ControlPointEnv, userId: string, token: string) {
+  const current = await readLink(env, userId);
+  if (current && current.token !== token) return current;
+  if (current) await env.APP_STATE.delete(linkKey(userId));
+  return null;
+}
 const pick = ({ id, name, ftcNumber, accentColor, canEditCad }: ControlPointWorkspace) => ({ id, name, ftcNumber, accentColor, canEditCad });
 function linkView(link: Link, stale = false) {
   const workspaces = link.workspaces ?? [];
   const workspace = workspaces.find(item => item.id === link.workspaceId);
-  return { linked: true, available: true, account: link.account, workspace: workspace ? pick(workspace) : null, workspaces, linkedAt: link.linkedAt, ...(stale ? { stale: true } : {}) };
+  // When "Check again" may next ask Control Point for a fresh list.
+  const refreshAfter = new Date((link.workspacesAt ?? 0) + refreshGapMs).toISOString();
+  return { linked: true, available: true, account: link.account, workspace: workspace ? pick(workspace) : null, workspaces, linkedAt: link.linkedAt, refreshAfter, ...(stale ? { stale: true } : {}) };
 }
 /**
  * Refreshes the cached workspace list when it is older than ten minutes (or always, with `force`). A revoked token
- * ends the link (null). Any other failure keeps the cached list and reports it as stale.
+ * ends the link (null, `revoked`). Any other failure keeps the cached list and reports it as stale. The new list is
+ * applied to the link as it is when Control Point answers, so a workspace picked meanwhile is kept and a newer link
+ * or an unlink is never undone.
  */
-async function refreshedLink(env: ControlPointEnv, adapter: ControlPointAdapter, userId: string, link: Link, force = false): Promise<{ link: Link | null; stale: boolean }> {
+async function refreshedLink(env: ControlPointEnv, adapter: ControlPointAdapter, userId: string, link: Link, force = false): Promise<{ link: Link | null; stale: boolean; revoked?: boolean }> {
   if (!force && link.workspaces && link.workspacesAt && Date.now() - link.workspacesAt < workspacesFreshMs) return { link, stale: false };
   try {
     const fresh = await adapter.workspaces(link.token);
-    const next: Link = { ...link, account: fresh.account, workspaces: fresh.workspaces, workspacesAt: Date.now(),
-      workspaceId: fresh.workspaces.some(item => item.id === link.workspaceId) ? link.workspaceId : null };
-    await saveLink(env, userId, next);
+    const next = await updateLink(env, userId, link.token, current => ({ ...current, account: fresh.account, workspaces: fresh.workspaces, workspacesAt: Date.now(),
+      workspaceId: fresh.workspaces.some(item => item.id === current.workspaceId) ? current.workspaceId : null }));
     return { link: next, stale: false };
   } catch (error) {
-    if (error instanceof ControlPointError && error.status === 401) { await env.APP_STATE.delete(linkKey(userId)); return { link: null, stale: false }; }
+    if (error instanceof ControlPointError && error.status === 401) {
+      const current = await forgetLink(env, userId, link.token);
+      return current ? { link: current, stale: false } : { link: null, stale: false, revoked: true };
+    }
     return { link, stale: true };
   }
 }
@@ -237,8 +265,9 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);
     const link = await readLink(env, user.id);
     if (!link) return reply({ linked: false, available: true });
-    const fresh = await refreshedLink(env, adapter, user.id, link);
-    return fresh.link ? reply(linkView(fresh.link, fresh.stale)) : reply({ linked: false, available: true, revoked: true });
+    const force = url.searchParams.get('refresh') === '1' && Date.now() - (link.workspacesAt ?? 0) >= refreshGapMs;
+    const fresh = await refreshedLink(env, adapter, user.id, link, force);
+    return fresh.link ? reply(linkView(fresh.link, fresh.stale)) : reply({ linked: false, available: true, ...(fresh.revoked ? { revoked: true } : {}) });
   }
   if (url.pathname === '/api/control-point/workspace' && request.method === 'POST') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
@@ -251,13 +280,15 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     if (!link) return failure(409, 'not_linked', 'Link Control Point first.', { linked: false });
     // A workspace missing from the cached list may be new: read the list once more before refusing.
     const fresh = await refreshedLink(env, adapter, user.id, link, !link.workspaces?.some(item => item.id === workspaceId));
-    if (!fresh.link) return revoked();
+    if (!fresh.link) return fresh.revoked ? revoked() : failure(409, 'not_linked', 'Link Control Point first.', { linked: false });
+    // Linked again meanwhile, perhaps as another account: its workspaces were never checked, so nothing is chosen.
+    if (fresh.link.token !== link.token) return reply(linkView(fresh.link));
     const workspace = fresh.link.workspaces?.find(item => item.id === workspaceId);
     if (!workspace && fresh.stale) return failure(502, 'unavailable', 'Control Point did not answer. Try again.');
     if (!workspace) return failure(409, 'not_member', 'This workspace is not one of your Control Point workspaces.');
     if (!workspace.canEditCad) return failure(403, 'no_cad_edit', 'Your role in this workspace cannot edit CAD parts. Ask a workspace admin, or pick another workspace.');
-    const chosen: Link = { ...fresh.link, workspaceId };
-    await saveLink(env, user.id, chosen);
+    const chosen = await updateLink(env, user.id, link.token, current => ({ ...current, workspaceId }));
+    if (!chosen) return failure(409, 'not_linked', 'Link Control Point first.', { linked: false });
     return reply(linkView(chosen, fresh.stale));
   }
   if (url.pathname === '/api/control-point/send' && request.method === 'POST') {
@@ -266,6 +297,10 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);
     const scanId = url.searchParams.get('scanId');
     if (!scanId || !/^[a-f0-9-]{36}$/.test(scanId)) return failure(400, 'bad_request', 'Invalid scan.');
+    // The workspace the Send button named: a bundle never goes anywhere else.
+    const named = url.searchParams.get('workspaceId');
+    const workspaceId = named && /^[1-9]\d{0,15}$/.test(named) ? Number(named) : null;
+    if (workspaceId === null || !Number.isSafeInteger(workspaceId)) return failure(400, 'bad_request', 'Name the workspace to send to.');
     const declared = request.headers.get('content-length');
     const length = declared && /^\d{1,9}$/.test(declared) ? Number(declared) : null;
     if (length === null) return failure(411, 'length_required', 'Control Kit could not size this bundle. Try again.');
@@ -278,6 +313,7 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     const link = await readLink(env, user.id);
     if (!link) return failure(409, 'not_linked', 'Link Control Point first.', { linked: false });
     if (link.workspaceId === null) return failure(409, 'no_workspace', 'Pick a Control Point workspace first.');
+    if (link.workspaceId !== workspaceId) return failure(409, 'workspace_changed', 'The workspace changed while sending. Check where it goes and send again.');
     const body = await splitBody(request.body, length);
     if (body.oversized) return failure(400, 'bad_payload', 'The bundle is longer than its declared size.');
     if (!body.idempotencyKey) return failure(400, 'bad_payload', 'Build the Control Point bundle from this scan.');
@@ -286,7 +322,8 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     try { result = await adapter.sendBom(link.token, link.workspaceId, body.stream, length); }
     catch (error) {
       if (!(error instanceof ControlPointError)) return sendRefusal(new ControlPointError(503, 'unavailable'));
-      if (error.status === 401) { await env.APP_STATE.delete(linkKey(user.id)); return revoked(); }
+      // Only this grant was refused: a link made while the bundle was sending stays.
+      if (error.status === 401) { await forgetLink(env, user.id, link.token); return revoked(); }
       return sendRefusal(error);
     }
     const record: SentRecord = { importId: result.importId, workspaceId: link.workspaceId, sentAt: result.sentAt, idempotencyKey: body.idempotencyKey, url: result.url };

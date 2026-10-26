@@ -3,7 +3,7 @@ import worker, { type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
 import { createMockControlPoint } from './mock-control-point';
 import { HttpControlPointAdapter } from './control-point';
-import { seal } from './secrets';
+import { seal, unseal } from './secrets';
 import { buildControlPointPayload, type ScanResult } from '@control-kit/shared';
 
 class MemoryKv implements Kv {
@@ -38,8 +38,27 @@ async function link(cookie: string) {
   const consent = await cp.handle(new Request(start.headers.get('location')!));
   return call(new URL(consent.headers.get('location')!).pathname + new URL(consent.headers.get('location')!).search, { cookie: `${cookie}; ${cookieOf(start, 'controlkit_cp')}` });
 }
-const send = (cookie: string, scanId: string, body: string, length = new TextEncoder().encode(body).byteLength) =>
-  call(`/api/control-point/send?scanId=${scanId}`, { cookie, method: 'POST', body, headers: { 'content-type': 'application/json', 'content-length': String(length) } });
+const send = (cookie: string, scanId: string, body: string, length = new TextEncoder().encode(body).byteLength, workspaceId: number | null = 12) =>
+  call(`/api/control-point/send?scanId=${scanId}${workspaceId === null ? '' : `&workspaceId=${workspaceId}`}`, { cookie, method: 'POST', body, headers: { 'content-type': 'application/json', 'content-length': String(length) } });
+/** Holds the first Control Point call whose path matches until `release`, so a test can act while it is in flight. */
+function holdOnce(pattern: RegExp) {
+  let release!: () => void;
+  let reached!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const arrived = new Promise<void>(resolve => { reached = resolve; });
+  let held = false;
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (!request.url.startsWith(cpOrigin)) return onshape.handle(request);
+    if (!held && pattern.test(new URL(request.url).pathname)) { held = true; reached(); await gate; }
+    return cp.handle(request);
+  });
+  return { arrived, release };
+}
+const storedLink = async () => {
+  const raw = env.APP_STATE.values.get('cp-link:mock-user');
+  return raw ? unseal<{ token: string; workspaceId: number | null }>(env, raw) : null;
+};
 const post = (cookie: string, path: string, body: unknown) => call(path, { cookie, method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
 
 beforeEach(() => {
@@ -77,7 +96,7 @@ describe('Control Point linking', () => {
     const stored = env.APP_STATE.values.get('cp-link:mock-user')!;
     expect(stored).not.toContain('ckp_');
     const view = await (await call('/api/control-point/link', { cookie })).json();
-    expect(view).toEqual({ linked: true, available: true, account: { email: 'student@example.org', name: 'Sam' }, workspace: null, linkedAt: expect.any(String), workspaces: [
+    expect(view).toEqual({ linked: true, available: true, account: { email: 'student@example.org', name: 'Sam' }, workspace: null, linkedAt: expect.any(String), refreshAfter: expect.any(String), workspaces: [
       { id: 12, name: 'HORS', ftcNumber: '6980', accentColor: '#2f6bff', canEditCad: true, cadUrl: `${cpOrigin}/cad-parts` },
       { id: 13, name: 'Scrimmage', ftcNumber: null, accentColor: null, canEditCad: false, cadUrl: `${cpOrigin}/cad-parts` },
     ] });
@@ -108,6 +127,26 @@ describe('Control Point linking', () => {
     expect(await cancelled.text()).toContain('"reason":"cancelled"');
     expect(env.APP_STATE.values.has('cp-link:mock-user')).toBe(false);
   });
+  it('checks Control Point again on request, at most every 30 seconds', async () => {
+    const cookie = await session();
+    await link(cookie);
+    const first = await (await call('/api/control-point/link', { cookie })).json() as { refreshAfter: string };
+    const joined = { id: 15, name: 'New team', ftcNumber: null, accentColor: null, canEditCad: true, cadUrl: `${cpOrigin}/cad-parts` };
+    cp.setWorkspaces([joined]);
+    // Within 30 seconds of the last read, "Check again" serves the cached list and says when it may ask again.
+    const early = await (await call('/api/control-point/link?refresh=1', { cookie })).json() as { workspaces: Array<{ id: number }>; refreshAfter: string };
+    expect(early.workspaces.map(item => item.id)).toEqual([12, 13]);
+    expect(early.refreshAfter).toBe(first.refreshAfter);
+    expect(Date.parse(early.refreshAfter)).toBeGreaterThan(Date.now());
+    vi.useFakeTimers({ now: Date.parse(early.refreshAfter) + 1, toFake: ['Date'] });
+    try {
+      // Without refresh=1 the ten-minute cache still holds.
+      expect((await (await call('/api/control-point/link', { cookie })).json() as { workspaces: Array<{ id: number }> }).workspaces.map(item => item.id)).toEqual([12, 13]);
+      const late = await (await call('/api/control-point/link?refresh=1', { cookie })).json() as { workspaces: Array<{ id: number }>; refreshAfter: string };
+      expect(late.workspaces).toEqual([joined]);
+      expect(Date.parse(late.refreshAfter)).toBe(Date.now() + 30_000);
+    } finally { vi.useRealTimers(); }
+  });
   it('picks only a listed workspace that can edit CAD', async () => {
     const cookie = await session();
     await link(cookie);
@@ -134,6 +173,33 @@ describe('Control Point linking', () => {
     env.APP_STATE.values.set('cp-link:mock-user', sealed);
     const body = JSON.stringify(await buildControlPointPayload(result, { workspaceId: 12 }));
     expect((await send(cookie, result.scanId!, body)).status).toBe(409);
+  });
+  it('keeps a workspace picked or a link made while an older refresh was waiting on Control Point', async () => {
+    const cookie = await session();
+    await link(cookie);
+    vi.useFakeTimers({ now: Date.now() + 11 * 60_000, toFake: ['Date'] });
+    try {
+      // A slow refresh started before the workspace was picked must not put back the old choice.
+      let held = holdOnce(/\/workspaces$/);
+      const slow = call('/api/control-point/link', { cookie });
+      await held.arrived;
+      expect(await (await post(cookie, '/api/control-point/workspace', { workspaceId: 12 })).json()).toMatchObject({ workspace: { id: 12 } });
+      held.release();
+      expect(await (await slow).json()).toMatchObject({ linked: true, workspace: { id: 12 } });
+      expect((await storedLink())?.workspaceId).toBe(12);
+      // Linking again (which revokes the old token) while a refresh with the old token waits: its late 401 leaves the new link.
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      const before = (await storedLink())!.token;
+      held = holdOnce(/\/workspaces$/);
+      const late = call('/api/control-point/link', { cookie });
+      await held.arrived;
+      await link(cookie);
+      const after = (await storedLink())!.token;
+      expect(after).not.toBe(before);
+      held.release();
+      expect(await (await late).json()).toMatchObject({ linked: true, workspace: null });
+      expect((await storedLink())?.token).toBe(after);
+    } finally { vi.useRealTimers(); }
   });
   it('unlinks on request, revoking at Control Point, and keeps sent records', async () => {
     const cookie = await session();
@@ -192,6 +258,15 @@ describe('sending a BOM to Control Point', () => {
     expect(await (await send(cookie, result.scanId!, other)).json()).toMatchObject({ code: 'scan_mismatch' });
     expect(cp.received).toHaveLength(0);
   });
+  it('sends only to the workspace the button named', async () => {
+    const { cookie, result } = await ready();
+    const body = JSON.stringify(await buildControlPointPayload(result, { workspaceId: 12 }));
+    expect(await (await send(cookie, result.scanId!, body, undefined, null)).json()).toMatchObject({ code: 'bad_request' });
+    const changed = await send(cookie, result.scanId!, body, undefined, 13);
+    expect(changed.status).toBe(409);
+    expect(await changed.json()).toMatchObject({ code: 'workspace_changed', error: expect.stringContaining('workspace changed') });
+    expect(cp.received).toHaveLength(0);
+  });
   it('passes on a workspace the account is no longer in, and a missing workspace choice', async () => {
     const { cookie, result } = await ready();
     const body = JSON.stringify(await buildControlPointPayload(result, { workspaceId: 12 }));
@@ -202,6 +277,21 @@ describe('sending a BOM to Control Point', () => {
     const fresh = await session();
     await link(fresh);
     expect(await (await send(fresh, result.scanId!, body)).json()).toMatchObject({ code: 'no_workspace' });
+  });
+  it('keeps a link made while a send with the replaced token was in flight', async () => {
+    const { cookie, result } = await ready();
+    const body = JSON.stringify(await buildControlPointPayload(result, { workspaceId: 12 }));
+    const before = (await storedLink())!.token;
+    const held = holdOnce(/\/bom$/);
+    const sending = send(cookie, result.scanId!, body);
+    await held.arrived;
+    await link(cookie);
+    held.release();
+    expect(await (await sending).json()).toMatchObject({ code: 'revoked' });
+    const now = await storedLink();
+    expect(now?.token).toBeTruthy();
+    expect(now?.token).not.toBe(before);
+    expect(await (await call('/api/control-point/link', { cookie })).json()).toMatchObject({ linked: true });
   });
   it('talks to Control Point with bounded calls the adapter checks', async () => {
     const adapter = new HttpControlPointAdapter(cpOrigin, 'wrong-secret');

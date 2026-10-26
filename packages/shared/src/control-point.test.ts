@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateAssembly, recalculatePurchasing, type VendorRecord } from './index';
-import { buildControlPointPayload, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter } from './control-point';
+import { buildControlPointPayload, controlPointIdempotencyKey, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter } from './control-point';
 
 describe('Control Point payload and adapter', () => {
   it('round-trips a payload through the in-memory adapter with a stable key per workspace', async () => {
@@ -43,6 +43,43 @@ describe('Control Point payload and adapter', () => {
     const [before, after] = await Promise.all([buildControlPointPayload(result, { workspaceId: 12 }), buildControlPointPayload(edited, { workspaceId: 12 })]);
     expect(before.cadParts[0].extra.identity).toBe('doc:parts:JHD:size=M4');
     expect(after.cadParts[0].extra.identity).toBe(before.cadParts[0].extra.identity);
+  });
+  it('makes a send with the STEP zip attached a new import, whatever the file names or workbook bytes', async () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'a', name: 'Bracket', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JHD' },
+    ] } }, { documentId: 'doc', elementId: 'assembly', workspaceOrVersion: 'w', workspaceOrVersionId: 'work' }, 'Robot');
+    const xlsx = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const workbook = (day: string, byte: number) => ({ name: `Robot BOM ${day}.xlsx`, mediaType: xlsx, bytes: new Uint8Array([byte]) });
+    const zip = { name: 'Robot STEP.zip', mediaType: 'application/zip', bytes: new Uint8Array([9]) };
+    const withoutStep = await buildControlPointPayload(result, { workspaceId: 12, files: [workbook('2026-10-26', 1)] });
+    const rebuilt = await buildControlPointPayload(result, { workspaceId: 12, files: [workbook('2026-10-27', 2)] });
+    const withStep = await buildControlPointPayload(result, { workspaceId: 12, files: [zip, workbook('2026-10-26', 1)] });
+    expect(rebuilt.idempotencyKey).toBe(withoutStep.idempotencyKey);
+    expect(withStep.idempotencyKey).not.toBe(withoutStep.idempotencyKey);
+    // The browser can learn the key without building files; order does not matter.
+    expect(await controlPointIdempotencyKey(result, { workspaceId: 12, inlineMediaTypes: [xlsx] })).toBe(withoutStep.idempotencyKey);
+    expect(await controlPointIdempotencyKey(result, { workspaceId: 12, inlineMediaTypes: [xlsx, 'application/zip'] })).toBe(withStep.idempotencyKey);
+    expect(await controlPointIdempotencyKey(result, { workspaceId: 12, inlineMediaTypes: [] })).toBe((await buildControlPointPayload(result, { workspaceId: 12 })).idempotencyKey);
+    // A file sent only as a reference is not inline, so it does not change the key.
+    const big = { name: 'Robot STEP.zip', mediaType: 'application/zip', bytes: new Uint8Array(INLINE_FILE_LIMIT_BYTES + 1) };
+    expect((await buildControlPointPayload(result, { workspaceId: 12, files: [workbook('2026-10-26', 1), big] })).idempotencyKey).toBe(withoutStep.idempotencyKey);
+  });
+  it('sends one CAD part per identity when a scan holds one part at two source revisions', async () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'a', name: 'Bracket', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JHD' },
+      { id: 'b', name: 'Bracket', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JHD' },
+      { id: 'c', name: 'Plate', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JKD' },
+    ] } }, { documentId: 'doc', elementId: 'assembly', workspaceOrVersion: 'w', workspaceOrVersionId: 'work' }, 'Robot');
+    const bracket = result.lines.find(line => line.partId === 'JHD')!;
+    // The same part linked at an older version as well: a separate line with its own source revision and key.
+    result.lines.push({ ...bracket, qty: 3, sourceType: 'v', sourceId: 'old-version', bomLineKey: `${bracket.bomLineKey}:v:old-version` });
+    const payload = await buildControlPointPayload(result, { workspaceId: 12 });
+    expect(payload.lines).toHaveLength(3);
+    expect(payload.cadParts.map(part => [part.extra.identity, part.quantity])).toEqual([['doc:parts:JHD:', 5], ['doc:parts:JKD:', 1]]);
+    const merged = payload.cadParts[0];
+    expect(new Set(payload.cadParts.map(part => part.extra.identity)).size).toBe(payload.cadParts.length);
+    expect([merged.extra, ...merged.extra.sameIdentity].map(line => [line.key, line.qty]).sort()).toEqual([[bracket.bomLineKey, 2], [`${bracket.bomLineKey}:v:old-version`, 3]].sort());
+    expect(payload.cadParts[1].extra.sameIdentity).toEqual([]);
   });
   it('keeps CAD units separate from pack charges in the proposed payload', async () => {
     const instances = Array.from({ length: 12 }, (_, index) => ({ id: `${index}`, name: `M3 Screw <${index + 1}>`, type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'screw' }));
@@ -119,7 +156,10 @@ describe('Control Point attach bundle', () => {
     expect(bundle.files[1]).toMatchObject({ delivery: 'reference', sizeBytes: INLINE_FILE_LIMIT_BYTES + 1 });
     expect(bundle.files[1].sha256).toMatch(/^[0-9a-f]{64}$/);
     const without = await buildControlPointPayload(scan(), { workspaceId: 12, context, filesNotIncluded: [{ name: 'Robot STEP.zip', reason: 'No STEP export has run for this scan.' }] });
-    expect(without.idempotencyKey).toBe(bundle.idempotencyKey);
+    // Inline files count by media type only: the workbook alone keys like this bundle (its zip went by reference), whatever its bytes.
+    expect(without.idempotencyKey).not.toBe(bundle.idempotencyKey);
+    const rebuilt = await buildControlPointPayload(scan(), { workspaceId: 12, context, files: [{ name: 'Robot BOM 2.xlsx', mediaType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes: new Uint8Array([4]) }] });
+    expect(rebuilt.idempotencyKey).toBe(bundle.idempotencyKey);
     expect(without.filesNotIncluded.map(item => item.name)).toEqual(['Robot STEP.zip', 'BOM workbook (.xlsx)']);
     expect((await buildControlPointPayload(scan(), { workspaceId: 12 })).filesNotIncluded).toHaveLength(2);
     expect(bundle.filesNotIncluded).toEqual([]);

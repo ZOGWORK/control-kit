@@ -30,6 +30,8 @@ export type ControlPointLine = {
   order: { qty: number; lines: number } | null; orderedWith: string | null; partNumber: string | null; configuration: string | null;
   documentId: string; elementId: string; partId: string | null; partStudioUrl: string; usedIn: string[]; suppressed: boolean; metadataIssue: string | null;
 };
+/** A CAD part's full Control Kit line, plus the other lines of the same part (other source revisions) folded into it. */
+export type ControlPointCadExtra = ControlPointLine & { sameIdentity: ControlPointLine[] };
 export type ControlPointFile = { name: string; mediaType: string; sizeBytes: number; sha256: string } & (
   | { delivery: 'inline'; contentBase64: string }
   | { delivery: 'reference'; reason: string });
@@ -47,8 +49,12 @@ export type ControlPointBomPayload = {
   missingMetadataLines: ControlPointLine[];
   suppressedCount: number;
   totals: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number };
-  /** One Control Point CAD part per active line, in the same order, with the full Control Kit line under `extra`. */
-  cadParts: Array<ControlPointCadPart & { extra: ControlPointLine }>;
+  /**
+   * One Control Point CAD part per part identity, in line order. Control Point keys its rows by `extra.identity`, so
+   * lines of one part at two source revisions become one CAD part: quantity and priced totals add up, `extra` is the
+   * first line, and `extra.sameIdentity` holds every other line of that part in full.
+   */
+  cadParts: Array<ControlPointCadPart & { extra: ControlPointCadExtra }>;
   controlPointCadUrl: string;
   files: ControlPointFile[];
   /** Files the bundle should hold but does not, with why (a STEP zip before any STEP export ran). Never silently absent. */
@@ -115,14 +121,27 @@ function sectionOf(line: BomLine): ControlPointCadPart['section'] {
 }
 const sourceOf = (line: BomLine): ControlPointCadPart['source'] =>
   line.disposition === 'print' ? 'printed' : line.vendor?.vendorId === 'gobilda' && ['buy', 'hardware'].includes(line.disposition) ? 'gobilda' : ['buy', 'hardware'].includes(line.disposition) ? 'purchased' : 'other';
-function cadPart(line: BomLine, extra: ControlPointLine): ControlPointCadPart & { extra: ControlPointLine } {
+function cadPart(group: Array<{ line: BomLine; extra: ControlPointLine }>): ControlPointCadPart & { extra: ControlPointCadExtra } {
+  const [{ line, extra }] = group;
+  const quantity = group.reduce((total, item) => total + item.line.qty, 0);
+  const totals = group.map(item => item.extra.lineTotalUsd).filter((value): value is number => value !== null);
   const notes = [
     extra.sku ? `${extra.vendor} ${extra.sku}` : null, extra.vendorUrl, extra.packsToOrder !== null ? `${extra.packsToOrder} pack${extra.packsToOrder === 1 ? '' : 's'} of ${extra.unitsPerPack}` : null,
     extra.orderedWith ? 'ordered with another line of the same SKU' : null, `Control Kit: ${extra.disposition}, match ${extra.matchStatus}`, extra.partStudioUrl,
   ].filter(Boolean).join(' · ');
   // unit_cost is what one CAD unit costs only when packs are known; a pack price is never passed off as a unit price.
-  const unit = extra.lineTotalUsd !== null && extra.qty > 0 ? Math.round(extra.lineTotalUsd / extra.qty * 10000) / 10000 : 0;
-  return { name: line.name, section: sectionOf(line), quantity: line.qty, source: sourceOf(line), unit_cost: unit, status: 'to_order', notes, extra };
+  const unit = totals.length && quantity > 0 ? Math.round(totals.reduce((total, value) => total + value, 0) / quantity * 10000) / 10000 : 0;
+  return { name: line.name, section: sectionOf(line), quantity, source: sourceOf(line), unit_cost: unit, status: 'to_order', notes,
+    extra: { ...extra, sameIdentity: group.slice(1).map(item => item.extra) } };
+}
+/** Active lines grouped by part identity, groups and their lines in line-key order. */
+function byIdentity(lines: BomLine[], extras: ControlPointLine[]) {
+  const groups = new Map<string, Array<{ line: BomLine; extra: ControlPointLine }>>();
+  lines.forEach((line, index) => {
+    const extra = extras[index];
+    groups.set(extra.identity, [...groups.get(extra.identity) ?? [], { line, extra }]);
+  });
+  return [...groups.values()];
 }
 
 /** The workbook and the STEP zip are always expected: one the caller did not supply or explain is listed as missing. */
@@ -140,16 +159,32 @@ async function file(name: string, mediaType: string, bytes: Uint8Array): Promise
     : { ...base, delivery: 'reference', reason: `Larger than ${INLINE_FILE_LIMIT_BYTES / 1024 / 1024} MB, so it is uploaded separately once the file-upload contract is confirmed.` };
 }
 
+/** A scan's three line lists as the bundle carries them, sorted by line key. */
+const bundleLines = (result: ScanResult) => ({ lines: result.lines.map(toLine).sort(byKey), suppressedLines: result.suppressed.map(toLine).sort(byKey), missingMetadataLines: result.missingMetadata.map(toLine).sort(byKey) });
+async function idempotencyKeyOf(result: ScanResult, listed: ReturnType<typeof bundleLines>, workspaceId: number | null, inlineMediaTypes: string[]) {
+  const suppressedCount = result.suppressed.reduce((total, line) => total + line.qty, 0);
+  const totals = { uniqueLines: result.stats.uniqueLines, totalInstances: result.stats.totalInstances, totalCostUsd: result.stats.totalCostUsd, outOfStockLines: result.stats.outOfStockLines };
+  const revision = result.diagnostics?.revision ?? null;
+  const contentHash = await sha256(JSON.stringify({ name: result.assemblyName, suppressedCount, totals, ...listed,
+    revisions: result.lines.map(line => [line.bomLineKey, line.sourceType, line.sourceId]).sort(([a], [b]) => String(a).localeCompare(String(b))) }));
+  const files = [...inlineMediaTypes].sort().join(',');
+  return sha256(`${workspaceId ?? ''}:${result.documentId}:${result.elementId}:${revision ? `${revision.type}/${revision.id}` : ''}:${contentHash}:${files}`);
+}
 /**
  * Stable for identical BOM data across rescans: the key is the Control Point workspace, document, element, revision,
- * and a hash of the scan's content (lines, suppressed and missing-metadata lines, totals), so one scan sent to two
- * workspaces is two imports. Timestamps, scan ids, and file bytes are left out. `workspaceId` is null only for a
- * preview that is never sent.
+ * a hash of the scan's content (lines, suppressed and missing-metadata lines, totals), and the media types of the
+ * files sent inline. So one scan sent to two workspaces is two imports, and sending it again with the STEP zip
+ * attached is a new import rather than a duplicate that drops the zip. Timestamps, scan ids, file names (they carry a
+ * date), and file bytes (the workbook's change on every build) are left out. `workspaceId` is null only for a preview
+ * that is never sent. The browser can call this to learn the key a send would carry without building any file.
  */
+export function controlPointIdempotencyKey(result: ScanResult, options: { workspaceId: number | null; inlineMediaTypes: string[] }): Promise<string> {
+  return idempotencyKeyOf(result, bundleLines(result), options.workspaceId, options.inlineMediaTypes);
+}
+/** The bundle for one scan; its `idempotencyKey` is `controlPointIdempotencyKey` over the files it ends up inlining. */
 export async function buildControlPointPayload(result: ScanResult, options: { workspaceId: number | null; context?: AssemblyContext; files?: Array<{ name: string; mediaType: string; bytes: Uint8Array }>; filesNotIncluded?: Array<{ name: string; reason: string }> }): Promise<ControlPointBomPayload> {
-  const lines = result.lines.map(toLine).sort(byKey);
-  const suppressedLines = result.suppressed.map(toLine).sort(byKey);
-  const missingMetadataLines = result.missingMetadata.map(toLine).sort(byKey);
+  const listed = bundleLines(result);
+  const { lines, suppressedLines, missingMetadataLines } = listed;
   const documentUrl = `https://cad.onshape.com/documents/${encodeURIComponent(result.documentId)}`;
   // A workspace or version link opens from outside Onshape; a microversion link does not, so it falls back to the document.
   const context = options.context;
@@ -158,17 +193,16 @@ export async function buildControlPointPayload(result: ScanResult, options: { wo
   const suppressedCount = result.suppressed.reduce((total, line) => total + line.qty, 0);
   const totals = { uniqueLines: result.stats.uniqueLines, totalInstances: result.stats.totalInstances, totalCostUsd: result.stats.totalCostUsd, outOfStockLines: result.stats.outOfStockLines };
   const revision = result.diagnostics?.revision ?? null;
-  const contentHash = await sha256(JSON.stringify({ name: assembly.name, suppressedCount, totals, lines, suppressedLines, missingMetadataLines,
-    revisions: result.lines.map(line => [line.bomLineKey, line.sourceType, line.sourceId]).sort(([a], [b]) => String(a).localeCompare(String(b))) }));
-  const idempotencyKey = await sha256(`${options.workspaceId ?? ''}:${result.documentId}:${result.elementId}:${revision ? `${revision.type}/${revision.id}` : ''}:${contentHash}`);
+  const files = await Promise.all((options.files ?? []).map(item => file(item.name, item.mediaType, item.bytes)));
+  const idempotencyKey = await idempotencyKeyOf(result, listed, options.workspaceId, files.filter(item => item.delivery === 'inline').map(item => item.mediaType));
   const sorted = [...result.lines].sort((a, b) => a.bomLineKey.localeCompare(b.bomLineKey));
   return {
     idempotencyKey, source: 'control-kit', bundleVersion: 2, assembly, revision, generatedAt: result.scannedAt,
     vendorDataUpdatedAt: result.vendorDataUpdatedAt, staleVendorData: result.stats.staleVendorData,
     lines, suppressedLines, missingMetadataLines, suppressedCount, totals,
-    cadParts: sorted.map((line, index) => cadPart(line, lines[index])),
+    cadParts: byIdentity(sorted, lines).map(cadPart),
     controlPointCadUrl: CONTROL_POINT_CAD_URL,
-    files: await Promise.all((options.files ?? []).map(item => file(item.name, item.mediaType, item.bytes))),
+    files,
     filesNotIncluded: expectedFiles(options.files ?? [], options.filesNotIncluded ?? []),
   };
 }
