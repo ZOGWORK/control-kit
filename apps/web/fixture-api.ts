@@ -38,9 +38,9 @@ export function fixtureApi(fixturePath?: string): Plugin {
         if (url.pathname === '/api/scan') {
           response.setHeader('content-type', 'application/x-ndjson');
           // The same steps and counts the Worker sends, so the progress screen can be seen here.
-          const parts = result.lines.length, counts = { parts, subassemblies: 4 };
+          const parts = result.lines.length, counts = { subassemblies: 4 };
           for (const [stage, step, current, extra] of [['Checking assembly revision…', 'revision', 0, {}], ['Reading assembly…', 'assembly', 1, {}], ["Reading Onshape's bill of materials…", 'bom', 2, counts],
-            ['Reading saved choices…', 'choices', 3, { ...counts, bomRows: parts, cached: false, lines: parts }]] as const) {
+            ['Reading saved choices…', 'choices', 3, { ...counts, bomRows: parts, cached: false, parts: result.stats.totalInstances, lines: parts }]] as const) {
             response.write(`${JSON.stringify({ type: 'progress', stage, step, current, total: 3, instances: 0, counts: extra })}\n`);
             await new Promise(resolve => setTimeout(resolve, Number(process.env.CK_FIXTURE_DELAY ?? 250)));
           }

@@ -65,6 +65,7 @@ const number = (value: number) => value.toLocaleString();
 /** What each step has read so far, from the counts the Worker and the matcher report. */
 function stepDetail(step: ScanStep, counts: ScanCounts): string | null {
   if (step === 'assembly' && counts.parts !== undefined) return `${number(counts.parts)} parts in ${number(counts.subassemblies ?? 0)} subassemblies`;
+  if (step === 'assembly' && counts.subassemblies !== undefined) return `${number(counts.subassemblies)} subassemblies`;
   if (step === 'bom' && counts.bomRows !== undefined) return counts.cached ? `${number(counts.bomRows)} rows, from the saved copy of this revision` : `${number(counts.bomRows)} rows`;
   if (step === 'choices' && counts.lines !== undefined) return `${number(counts.lines)} unique parts`;
   if (step === 'catalogs' && counts.catalogs !== undefined) return `${counts.catalogs} of ${counts.catalogsTotal} catalogs, ${number(counts.products ?? 0)} products`;
