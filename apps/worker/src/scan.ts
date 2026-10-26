@@ -56,16 +56,16 @@ const accessMessage = (status: number) => status === 402 ? "This Onshape account
 class ScanStop extends Error {}
 
 /**
+ * Subassemblies in an assembly definition, for the scan's progress display. Parts are counted only once the walk has
+ * placed them: a definition lists each subassembly once and includes the insides of vendor kits.
+ */
+const definitionCounts = (definition: AssemblyDefinition) => ({ subassemblies: definition.subAssemblies?.length ?? 0 });
+
+/**
  * Scans an assembly in at most three Onshape requests: the workspace's current microversion, then the assembly
  * definition and the flattened BOM at that immutable revision. A rescan of an unchanged revision reads both from
  * the per-user source cache, so it costs only the microversion request (none for a version).
  */
-/** Parts and subassemblies in an assembly definition, for the scan's progress display. */
-function definitionCounts(definition: AssemblyDefinition) {
-  const instances = [...(definition.rootAssembly?.instances ?? []), ...(definition.subAssemblies ?? []).flatMap(sub => sub.instances ?? [])];
-  return { parts: instances.filter(instance => (instance.type ?? '').toLowerCase() !== 'assembly').length, subassemblies: definition.subAssemblies?.length ?? 0 };
-}
-
 export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 336, settings: UserSettings = { teamNumber: null }, getOverride: (line: BomLine, signal?: AbortSignal) => Promise<ClassificationOverride | null> = async () => null, onResult?: (result: ScanResult) => Promise<void>,
   requests?: { summary(): OnshapeRequestSummary; finish(): Promise<unknown> }, sourceCache?: SourceCache): Response {
   const encoder = new TextEncoder();
@@ -145,7 +145,7 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         for (const line of all) line.missingMetadataReason = line.metadataIssue ? metadataIssueText[line.metadataIssue.code] : null;
         result.missingMetadata = all.filter(line => line.metadataIssue);
         const count = result.stats.totalInstances;
-        emit({ type: 'progress', stage: 'Reading saved choices…', step: 'choices', current: 3, total: 3, instances: count, counts: { lines: result.lines.length } });
+        emit({ type: 'progress', stage: 'Reading saved choices…', step: 'choices', current: 3, total: 3, instances: count, counts: { parts: result.stats.totalInstances, lines: result.lines.length } });
         // Vendor matching runs in the browser (`matchCatalog`): against every catalog it costs far more CPU than a Worker
         // request may use. The scan supplies what the browser needs: catalog health and the person's saved match decisions.
         try { result.catalogHealth = await catalogHealth(catalog, staleHours, request.signal); }
