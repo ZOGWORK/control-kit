@@ -37,13 +37,17 @@ export async function signedCookie(env: KeyEnv, cookie: SignedCookie, data: unkn
 export const clearCookie = (cookie: SignedCookie) => `${cookie.name}=; HttpOnly; Secure; SameSite=None; Path=${cookie.path}; Max-Age=0`;
 /** The cookie's data when its signature is valid and it has not expired, otherwise null. */
 export async function readSignedCookie<T>(request: Request, env: KeyEnv, cookie: SignedCookie): Promise<T | null> {
+  return (await readSignedEnvelope<T>(request, env, cookie))?.data ?? null;
+}
+/** The whole signed body (`exp`, `data`, and any field an older format kept beside them) while valid, otherwise null. */
+export async function readSignedEnvelope<T>(request: Request, env: KeyEnv, cookie: SignedCookie): Promise<({ exp: number; data: T } & Record<string, unknown>) | null> {
   const value = request.headers.get('cookie')?.match(new RegExp(`(?:^|;\\s*)${cookie.name}=([^;]+)`))?.[1];
   const [payload, signature] = value?.split('.') ?? [];
   if (!payload || !signature) return null;
   try {
     const body = fromB64url(payload);
     if (!await crypto.subtle.verify('HMAC', await hmacKey(env, cookie.label), fromB64url(signature), body)) return null;
-    const parsed = JSON.parse(decode.decode(body)) as { exp: number; data: T };
-    return parsed.exp > Date.now() ? parsed.data : null;
+    const parsed = JSON.parse(decode.decode(body)) as { exp: number; data: T } & Record<string, unknown>;
+    return parsed.exp > Date.now() ? parsed : null;
   } catch { return null; }
 }

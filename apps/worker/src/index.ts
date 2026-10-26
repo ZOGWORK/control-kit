@@ -8,7 +8,7 @@ export { AiAllowance } from './ai-allowance';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 import { assemblyPreview, assemblyPreviewCacheKey, linePreview, previewCacheKey, PreviewUnavailableError } from './preview';
-import { clearCookie, readSignedCookie, seal, signedCookie, unseal, type SignedCookie } from './secrets';
+import { clearCookie, readSignedEnvelope, seal, signedCookie, unseal, type SignedCookie } from './secrets';
 import { controlPointRoute, type ControlPointEnv } from './control-point';
 
 export interface Env extends ControlPointEnv { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string;
@@ -70,8 +70,10 @@ async function save(env: Env, id: string, data: Session) { data.savedAt = Date.n
  */
 const stateCookie: SignedCookie = { name: 'controlkit_oauth', path: '/oauth', label: 'control-kit oauth-state v1:' };
 async function readStateCookie(request: Request, env: Env, state: string): Promise<OAuthState | null> {
-  const data = await readSignedCookie<OAuthState & { state: string }>(request, env, stateCookie);
-  return data?.state === state ? data : null;
+  const envelope = await readSignedEnvelope<OAuthState & { state?: string }>(request, env, stateCookie);
+  // Cookies signed before the move to secrets.ts kept `state` beside `data`; they stay valid for their ten minutes.
+  const signed = envelope?.data.state ?? (typeof envelope?.state === 'string' ? envelope.state : null);
+  return envelope && signed === state ? envelope.data : null;
 }
 function authParams(env: Env, grant: Record<string, string>) { return new URLSearchParams({ client_id: env.ONSHAPE_OAUTH_CLIENT_ID.trim(), client_secret: env.ONSHAPE_OAUTH_CLIENT_SECRET.trim(), ...grant }); }
 async function exchange(env: Env, grant: Record<string, string>): Promise<Tokens> {

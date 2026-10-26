@@ -71,6 +71,9 @@ describe('Control Kit view model', () => {
     const withVendor = (stock: 'in' | 'out') => ({ ...revisions, lines: revisions.lines.map((line, index) => ({ ...line, vendor: { ...vendor('2802-0004-0010', 10, 8.99), stock }, lineTotalUsd: index ? null : 8.99, orderedWith: index ? line.bomLineKey : null })) });
     expect(scanChanges(revisions, withVendor('in')).newlyPriced).toBe(1);
     expect(scanChanges(withVendor('in'), withVendor('out')).stock).toBe(1);
+    // A purchased subassembly renamed in Onshape is the same product.
+    const kit = { ...single, lines: [{ ...single.lines[0], partId: null, purchasedAssembly: { parts: 6, reason: 'its name has a vendor part number' } }] };
+    expect(hasChanges(scanChanges(kit, { ...kit, lines: [{ ...kit.lines[0], name: 'Renamed motor' }] }))).toBe(false);
     expect(findParts(after, 'mount').map(line => line.name)).toEqual(['Sensor mount']);
   });
   it('takes a workspace colour as the brand accent only when it reads on graphite and under button text', () => {

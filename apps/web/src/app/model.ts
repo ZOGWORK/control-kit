@@ -180,7 +180,10 @@ export function composition(summary: Summary): Share[] {
  * the line key, whose revision changes on every edit.
  */
 export type ScanChanges = { added: BomLine[]; removed: BomLine[]; quantity: number; decided: number; retyped: number; newlyPriced: number; stock: number; subtotalDelta: number | null };
-const partOf = (line: BomLine) => `${line.documentId}:${line.elementId}:${line.partId ?? line.name}:${line.configuration ?? ''}`;
+// A product listed as one unit (a purchased subassembly) has no part id; its document, element, and configuration
+// already name it, so a rename in Onshape is not a removed part and an added one. Only a line with nothing else to go
+// on (an unresolved instance) falls back to its name.
+const partOf = (line: BomLine) => `${line.documentId}:${line.elementId}:${line.partId ?? (line.purchasedAssembly ? '(assembly)' : line.name)}:${line.configuration ?? ''}`;
 /** A part as a whole: an assembly can hold one part at several revisions, each its own line, so they are added up. */
 type Part = { line: BomLine; qty: number; dispositions: string; priced: boolean; stock: string };
 function parts(result: ScanResult) {
