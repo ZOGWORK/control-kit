@@ -1,5 +1,6 @@
 import { Boxes, FileSearch, ShoppingCart, Wrench } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { Policy, PolicyLinks, policyPages, type PolicyPage } from './Policies';
 
 /**
  * The page for someone who opens control-kit.pages.dev outside Onshape: what Control Kit does, shown with real
@@ -8,7 +9,6 @@ import type { ReactNode } from 'react';
 const appStoreUrl = 'https://cad.onshape.com/appstore';
 // Set to true once Onshape publishes the listing; until then the page says the listing is pending.
 const listed = false;
-const supportUrl = 'https://github.com/ZOGWORK/control-kit/issues';
 
 const features: Array<{ icon: ReactNode; title: string; text: string; image: string; alt: string }> = [
   { icon: <Boxes aria-hidden />, title: 'Every part, sorted', image: 'overview', alt: 'Overview of a scanned FTC robot: 119 parts, 61 to buy, 55 to make, none waiting for review, $1768.05 priced so far',
@@ -22,6 +22,8 @@ const features: Array<{ icon: ReactNode; title: string; text: string; image: str
 ];
 
 export function Landing() {
+  const page = location.pathname.replace(/^\/+|\/+$/g, '') as PolicyPage;
+  if (policyPages.includes(page)) return <Policy page={page} />;
   return <main className="landing">
     <header className="landing-hero">
       <div className="brand"><img className="brand-mark" src="/control-kit-logo.png" alt="" /><span>Control Kit</span></div>
@@ -62,6 +64,7 @@ export function Landing() {
         <li>Vendor prices come from the vendors' public catalogs. Totals are list prices before shipping, tax, or team discounts.</li>
         <li>If AI review is turned on and you ask for it, the names, descriptions, and candidate products of the undecided parts are sent to Google Gemini, or to Anthropic if Gemini is unavailable. Nothing is sent unless you click it.</li>
       </ul>
+      <p className="muted small">The full details are on the <a className="link" href="/privacy">privacy page</a>.</p>
     </section>
 
     <section className="landing-section">
@@ -69,9 +72,9 @@ export function Landing() {
       <ul className="landing-list">
         <li>On free Onshape plans, a document may need to be public before apps can read it.</li>
         <li>Onshape's sign-in needs third-party cookies allowed for the panel to stay connected.</li>
-        <li>Questions or a part sorted wrong? <a className="link" href={supportUrl} target="_blank" rel="noopener noreferrer">Open an issue on GitHub</a>.</li>
+        <li>Questions or a part sorted wrong? See <a className="link" href="/support">Support</a>.</li>
       </ul>
     </section>
-    <footer className="landing-footer muted small">Control Kit is an independent app for Onshape. Onshape is a trademark of PTC Inc.; goBILDA, REV, ServoCity, AndyMark, and Pitsco are trademarks of their owners.</footer>
+    <footer className="landing-footer muted small"><PolicyLinks /><span>Control Kit is an independent app for Onshape. Onshape is a trademark of PTC Inc.; goBILDA, REV, ServoCity, AndyMark, and Pitsco are trademarks of their owners.</span></footer>
   </main>;
 }

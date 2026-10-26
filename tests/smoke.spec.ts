@@ -202,6 +202,18 @@ test('reopening the panel shows the last scan, and Not needed dismisses a part',
   await expect(page.locator('.row.focused')).toHaveCount(1);
 });
 
+test('privacy, terms, and support pages open from the site footer', async ({ page }) => {
+  await page.route('**/api/session', route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ connected: false }) }));
+  await page.goto('/');
+  for (const [link, heading] of [['Privacy', 'Privacy'], ['Terms of use', 'Terms of use'], ['Support', 'Support']]) {
+    await page.locator('.landing-footer').getByRole('link', { name: link }).click();
+    await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible();
+  }
+  await expect(page.getByRole('link', { name: 'Open an issue on GitHub' })).toHaveAttribute('href', 'https://github.com/ZOGWORK/control-kit/issues');
+  await page.goto('/privacy/');
+  await expect(page.getByRole('heading', { name: 'What it keeps, and for how long' })).toBeVisible();
+});
+
 test('the narrow Onshape panel has no sideways scroll and keeps every section reachable', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 720 });
   await connected(page);
