@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { aiCandidateRecord, applyAiReview, applyClassificationChoice, applyMatchDecision, buildAiReviewRequest, classificationIdentity, classifyScan, decisionRecord, matchCatalog, type AiProvider, type AiReviewItem, type BomLine, type ClassificationOverride, type ExportPart, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
+import { aiCandidateRecord, applyAiReview, applyClassificationChoice, applyMatchDecision, buildAiReviewRequest, classificationIdentity, classifyScan, decisionRecord, matchCatalog, type AiProvider, type AiReviewItem, type BomLine, type ClassificationOverride, type ExportPart, type MatchProgress, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
 /** Spreadsheet and ZIP builders load on first download, keeping them out of the initial bundle. */
 const exporters = () => import('@control-kit/excel');
 
 export type Session = { connected: boolean; setupPending?: boolean; user?: { id: string; name: string } };
-export type ScanProgress = { stage: string; current: number; total: number; instances: number; retry?: string };
+/** The scan's stages, in order; the progress screen shows each with its counts. */
+export type ScanStep = 'revision' | 'assembly' | 'bom' | 'choices' | 'catalogs' | 'matching';
+export type ScanCounts = { parts?: number; subassemblies?: number; bomRows?: number; cached?: boolean; lines?: number; catalogs?: number; catalogsTotal?: number; products?: number; matched?: number };
+export type ScanProgress = { stage: string; current: number; total: number; instances: number; retry?: string; step?: ScanStep; counts?: ScanCounts };
 export type ExportState = { running: boolean; ready: number; failed: number; total: number; failures: { name: string; reason: string; url: string }[]; zipMade: boolean | null };
 type ScanEvent =
-  | { type: 'progress'; stage: string; current: number; total: number; instances: number }
+  | { type: 'progress'; stage: string; step?: ScanStep; current: number; total: number; instances: number; counts?: ScanCounts }
   | { type: 'rate-limit'; retryInMs: number }
   | { type: 'result'; result: ScanResult }
   | { type: 'session-expired' }
@@ -190,15 +193,18 @@ export function useControlKit(context: URLSearchParams) {
           if (!line) continue;
           let event: ScanEvent;
           try { event = JSON.parse(line) as ScanEvent; } catch { throw new Error('The scan sent a reply Control Kit could not read. Try again.'); }
-          if (event.type === 'progress') setProgress({ ...event });
+          if (event.type === 'progress') setProgress(previous => ({ ...event, counts: { ...previous?.counts, ...event.counts } }));
           if (event.type === 'rate-limit') setProgress(previous => previous && { ...previous, retry: `Onshape is rate-limiting; retrying in ${Math.ceil(event.retryInMs / 1000)}s` });
           // A result that arrives after sign-out or a newer scan is dropped.
           if (event.type === 'result') finished = true;
           if (event.type === 'result' && generation === scanGeneration.current) {
             let scanned = event.result;
             if (scanned.vendorMatching === 'pending') {
-              setProgress(previous => previous && { ...previous, stage: 'Matching vendor catalogs…' });
-              scanned = await matchInBrowser(scanned, controller.signal);
+              setProgress(previous => previous && { ...previous, stage: 'Reading vendor catalogs…', step: 'catalogs' });
+              scanned = await matchInBrowser(scanned, controller.signal, progress => setProgress(previous => previous && {
+                ...previous, stage: progress.catalogs < progress.catalogsTotal ? 'Reading vendor catalogs…' : 'Matching parts to vendor products…',
+                step: progress.catalogs < progress.catalogsTotal ? 'catalogs' : 'matching', counts: { ...previous.counts, ...progress },
+              }));
             }
             if (generation === scanGeneration.current) setResult(scanned);
           }
@@ -219,7 +225,7 @@ export function useControlKit(context: URLSearchParams) {
    * the Worker used to. Catalog data comes from `/api/catalog/raw`; generation keys are cached by the browser. If the
    * catalogs cannot be read, the scan is still shown, unmatched, with the catalog warning.
    */
-  async function matchInBrowser(scanned: ScanResult, signal: AbortSignal): Promise<ScanResult> {
+  async function matchInBrowser(scanned: ScanResult, signal: AbortSignal, onProgress?: (progress: MatchProgress) => void): Promise<ScanResult> {
     const reader = { get: async (key: string) => {
       const response = await api(`/api/catalog/raw?key=${encodeURIComponent(key)}`, { signal });
       if (response.status === 404) return null;
@@ -230,7 +236,7 @@ export function useControlKit(context: URLSearchParams) {
     // Matching works on a copy, so a read that fails partway never shows a half-matched result.
     const copy = structuredClone(scanned);
     try {
-      await matchCatalog(copy, reader, async key => decisions.get(key) ?? null, signal);
+      await matchCatalog(copy, reader, async key => decisions.get(key) ?? null, signal, undefined, onProgress);
       copy.vendorMatching = 'done';
       return classifyScan(copy, settings, overridesOf(copy));
     } catch (cause) {

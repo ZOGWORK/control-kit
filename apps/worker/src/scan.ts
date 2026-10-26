@@ -3,7 +3,7 @@ import { catalogHealth } from './catalog';
 import type { Kv } from './index';
 
 export type ScanEvent =
-  | { type: 'progress'; stage: string; current: number; total: number; instances: number }
+  | { type: 'progress'; stage: string; current: number; total: number; instances: number; step?: 'revision' | 'assembly' | 'bom' | 'choices'; counts?: { parts?: number; subassemblies?: number; bomRows?: number; cached?: boolean; lines?: number } }
   | { type: 'rate-limit'; retryInMs: number }
   | { type: 'result'; result: ScanResult }
   | { type: 'session-expired' }
@@ -60,6 +60,12 @@ class ScanStop extends Error {}
  * definition and the flattened BOM at that immutable revision. A rescan of an unchanged revision reads both from
  * the per-user source cache, so it costs only the microversion request (none for a version).
  */
+/** Parts and subassemblies in an assembly definition, for the scan's progress display. */
+function definitionCounts(definition: AssemblyDefinition) {
+  const instances = [...(definition.rootAssembly?.instances ?? []), ...(definition.subAssemblies ?? []).flatMap(sub => sub.instances ?? [])];
+  return { parts: instances.filter(instance => (instance.type ?? '').toLowerCase() !== 'assembly').length, subassemblies: definition.subAssemblies?.length ?? 0 };
+}
+
 export function scanAssembly(request: Request, context: AssemblyContext, version: string, fetchOnshape: FetchOnshape, catalog: Kv, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null>, staleHours = 336, settings: UserSettings = { teamNumber: null }, getOverride: (line: BomLine, signal?: AbortSignal) => Promise<ClassificationOverride | null> = async () => null, onResult?: (result: ScanResult) => Promise<void>,
   requests?: { summary(): OnshapeRequestSummary; finish(): Promise<unknown> }, sourceCache?: SourceCache): Response {
   const encoder = new TextEncoder();
@@ -84,7 +90,7 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         return await response.json() as T;
       };
       try {
-        emit({ type: 'progress', stage: 'Checking assembly revision…', current: 0, total: 3, instances: 0 });
+        emit({ type: 'progress', stage: 'Checking assembly revision…', step: 'revision', current: 0, total: 3, instances: 0 });
         let revision: Revision;
         if (context.workspaceOrVersion === 'w') {
           const { microversion } = await required<{ microversion?: string }>(microversionPath(context, version));
@@ -99,9 +105,9 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
           catch { source = null; /* A failed or malformed cache read costs one fresh read, not the scan. */ }
         }
         if (!source) {
-          emit({ type: 'progress', stage: 'Reading assembly…', current: 1, total: 3, instances: 0 });
+          emit({ type: 'progress', stage: 'Reading assembly…', step: 'assembly', current: 1, total: 3, instances: 0 });
           const definition = await required<AssemblyDefinition>(assemblyPath(context, revision, version));
-          emit({ type: 'progress', stage: "Reading Onshape's bill of materials…", current: 2, total: 3, instances: 0 });
+          emit({ type: 'progress', stage: "Reading Onshape's bill of materials…", step: 'bom', current: 2, total: 3, instances: 0, counts: definitionCounts(definition) });
           // The definition alone is a usable inventory, so an ordinary BOM failure degrades the scan instead of ending it.
           // Session expiry, cancellation, and an exhausted allowance still stop it: retrying cannot help with those.
           let bom: BillOfMaterials | null = null;
@@ -122,6 +128,8 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
           }
         }
         const { definition, bom } = source;
+        emit({ type: 'progress', stage: cache === 'hit' ? 'Read from the saved copy of this revision' : "Read Onshape's bill of materials", step: 'bom', current: 2, total: 3, instances: 0,
+          counts: { ...definitionCounts(definition), bomRows: bom?.rows?.length ?? 0, cached: cache === 'hit' } });
         if (!definition.rootAssembly || !Array.isArray(definition.rootAssembly.instances)) { emit({ type: 'error', message: 'Onshape returned an incomplete assembly. Try again.' }); return; }
         const name = bom?.bomSource?.element?.name ?? definition.rootAssembly.name ?? 'Assembly';
         const result = aggregateAssembly(definition, context, name);
@@ -137,7 +145,7 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         for (const line of all) line.missingMetadataReason = line.metadataIssue ? metadataIssueText[line.metadataIssue.code] : null;
         result.missingMetadata = all.filter(line => line.metadataIssue);
         const count = result.stats.totalInstances;
-        emit({ type: 'progress', stage: 'Reading saved choices…', current: 3, total: 3, instances: count });
+        emit({ type: 'progress', stage: 'Reading saved choices…', step: 'choices', current: 3, total: 3, instances: count, counts: { lines: result.lines.length } });
         // Vendor matching runs in the browser (`matchCatalog`): against every catalog it costs far more CPU than a Worker
         // request may use. The scan supplies what the browser needs: catalog health and the person's saved match decisions.
         try { result.catalogHealth = await catalogHealth(catalog, staleHours, request.signal); }

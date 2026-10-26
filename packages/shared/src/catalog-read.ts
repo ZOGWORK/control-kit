@@ -118,9 +118,17 @@ function nameCandidates(index: VendorIndex, name: string, limit = 12): number[] 
  * the result. `result.catalogHealth` should already be set; it decides whether matched data counts as stale. Runs in
  * the Worker or in the browser: `reader.get` returns the raw catalog value for a key, from KV or over HTTP.
  */
-export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null> = async () => null, signal?: AbortSignal, staleHours = 336) {
+/** What the matcher has done so far, for a progress display: catalogs read and their products, parts matched. */
+export type MatchProgress = { catalogs: number; catalogsTotal: number; products: number; matched: number; lines: number };
+export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDecision: (key: string, signal?: AbortSignal) => Promise<MatchDecision | null> = async () => null, signal?: AbortSignal, staleHours = 336, onProgress?: (progress: MatchProgress) => void) {
+  const progress: MatchProgress = { catalogs: 0, catalogsTotal: vendors.length, products: 0, matched: 0, lines: result.lines.length };
+  const report = () => onProgress?.({ ...progress });
+  report();
   const cache = new Map<string, Promise<string | null>>();
-  const catalogs = (await Promise.all(vendors.map(vendor => vendorIndex(kv, vendor, cache, signal)))).filter((value): value is VendorIndex => Boolean(value));
+  const catalogs = (await Promise.all(vendors.map(vendor => vendorIndex(kv, vendor, cache, signal).then(index => {
+    progress.catalogs++; progress.products += index?.entries.length ?? 0; report();
+    return index;
+  })))).filter((value): value is VendorIndex => Boolean(value));
   const batches = new Map<string, Promise<Map<string, VendorRecord>>>();
   const batch = (index: VendorIndex, number: number) => {
     const key = batchKey(index.vendor, index.gen, number);
@@ -239,7 +247,7 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
     // Only licensed images ever reach a line: a library's own image first, then one from an official vendor feed.
     line.thumbnail = mapping?.image ?? line.vendor?.image ?? null;
   });
-  await Promise.all(jobs);
+  await Promise.all(jobs.map(job => job.then(() => { progress.matched++; report(); })));
   // Price and stock are as of each matched record's fetch, so the oldest one dates the whole result.
   const fetched = result.lines.map(line => line.vendor?.updatedAt).filter((value): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value)));
   result.vendorDataUpdatedAt = fetched.length ? [...fetched].sort()[0] : null;

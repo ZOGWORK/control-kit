@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Boxes, LayoutDashboard, ListChecks, LogOut, RefreshCw, Settings, ShoppingCart, Wrench } from 'lucide-react';
+import { Boxes, Check, LayoutDashboard, ListChecks, LogOut, RefreshCw, Settings, ShoppingCart, Wrench } from 'lucide-react';
 import { Alert } from '../components/arc/alert/alert';
 import { Button } from './bits';
 import { Progress } from '../components/arc/progress/progress';
-import { contextKeys, useControlKit, type ControlKit } from './useControlKit';
+import { contextKeys, useControlKit, type ControlKit, type ScanCounts, type ScanStep } from './useControlKit';
 import { ago, summarize, type View } from './model';
 import { Overview } from './Overview';
 import { Review } from './Review';
@@ -57,11 +57,43 @@ function FirstScan({ kit }: { kit: ControlKit }) {
   </section></main>;
 }
 
+const scanSteps: Array<{ step: ScanStep; label: string }> = [
+  { step: 'revision', label: 'Assembly revision' }, { step: 'assembly', label: 'Assembly' }, { step: 'bom', label: "Onshape's bill of materials" },
+  { step: 'choices', label: "Your team's saved choices" }, { step: 'catalogs', label: 'Vendor catalogs' }, { step: 'matching', label: 'Matching parts to products' },
+];
+const number = (value: number) => value.toLocaleString();
+/** What each step has read so far, from the counts the Worker and the matcher report. */
+function stepDetail(step: ScanStep, counts: ScanCounts): string | null {
+  if (step === 'assembly' && counts.parts !== undefined) return `${number(counts.parts)} parts in ${number(counts.subassemblies ?? 0)} subassemblies`;
+  if (step === 'bom' && counts.bomRows !== undefined) return counts.cached ? `${number(counts.bomRows)} rows, from the saved copy of this revision` : `${number(counts.bomRows)} rows`;
+  if (step === 'choices' && counts.lines !== undefined) return `${number(counts.lines)} unique parts`;
+  if (step === 'catalogs' && counts.catalogs !== undefined) return `${counts.catalogs} of ${counts.catalogsTotal} catalogs, ${number(counts.products ?? 0)} products`;
+  if (step === 'matching' && counts.matched !== undefined) return `${number(counts.matched)} of ${number(counts.lines ?? 0)} parts`;
+  return null;
+}
+
+/** Every stage of a scan with what it has read: done in green, the current one in volt, the rest waiting. */
 function ScanProgress({ kit }: { kit: ControlKit }) {
   const progress = kit.progress!;
-  return <div className="stack" aria-live="polite">
-    <div className="section-head"><h2>{progress.stage}</h2><Button variant="ghost" size="sm" onClick={kit.cancelScan}>Cancel</Button></div>
-    <Progress value={progress.current} max={Math.max(progress.total, 1)} label="Scan progress" />
+  const counts = progress.counts ?? {};
+  const active = Math.max(0, scanSteps.findIndex(item => item.step === (progress.step ?? 'revision')));
+  // The matching step fills as parts are matched; the earlier steps count whole.
+  const within = progress.step === 'matching' && counts.lines ? (counts.matched ?? 0) / counts.lines : progress.step === 'catalogs' && counts.catalogsTotal ? (counts.catalogs ?? 0) / counts.catalogsTotal : 0;
+  const percent = Math.round(((active + within) / scanSteps.length) * 100);
+  return <div className="stack scan-progress" aria-live="polite">
+    <div className="section-head"><div><h2>{progress.stage}</h2><p className="muted small num">{percent}% done</p></div><Button variant="ghost" size="sm" onClick={kit.cancelScan}>Cancel</Button></div>
+    <Progress value={percent} max={100} label="Scan progress" />
+    <ol className="scan-steps">
+      {scanSteps.map((item, index) => {
+        const state = index < active ? 'done' : index === active ? 'active' : 'waiting';
+        const detail = stepDetail(item.step, counts);
+        return <li key={item.step} className={`scan-step ${state}`}>
+          <span className="scan-step-icon" aria-hidden>{state === 'done' ? <Check size={12} strokeWidth={3} /> : null}</span>
+          <span className="scan-step-label">{item.label}<span className="sr-only">{state === 'done' ? ', done' : state === 'active' ? ', in progress' : ', waiting'}</span></span>
+          {detail && <span className="scan-step-detail num">{detail}</span>}
+        </li>;
+      })}
+    </ol>
     {progress.retry && <p className="muted small">{progress.retry}</p>}
   </div>;
 }
