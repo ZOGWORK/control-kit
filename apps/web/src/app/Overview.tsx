@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowRight, Check, ChevronDown, FileSpreadsheet, History, ListChecks, PackageX, Search, Store, Tag, Wrench } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, ChevronDown, ExternalLink, FileSpreadsheet, History, Send, ListChecks, PackageX, Search, Store, Tag, Wrench } from 'lucide-react';
 import { metadataIssueText, type BomLine } from '@control-kit/shared';
 import { Alert } from '../components/arc/alert/alert';
 import { Button, DispositionChip } from './bits';
 import type { ControlKit } from './useControlKit';
+import type { ControlPoint } from './useControlPoint';
+import { ControlPointCard } from './ControlPoint';
 import { ago, buyList, catalogsComplete, catalogState, catalogStateText, composition, findParts, hasChanges, money, percent, primaryAction, readiness, scanChanges, staleCatalogs, topCosts, unmatchedParts, vendorLabel,
   type PrimaryAction, type Readiness, type Summary, type View } from './model';
 
@@ -16,7 +18,7 @@ const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month
 /** A problem still standing between this scan and a complete order and build list. */
 type Move = { key: string; icon: ReactNode; tone: 'attention' | 'blocked'; title: string; detail: string; action?: ReactNode; lines?: BomLine[] };
 
-export function Overview({ kit, summary, go, open, now }: { kit: ControlKit; summary: Summary; go: (view: View) => void; open: (key: string) => void; now: number | null }) {
+export function Overview({ kit, cp, summary, go, open, now }: { kit: ControlKit; cp: ControlPoint; summary: Summary; go: (view: View) => void; open: (key: string) => void; now: number | null }) {
   const result = kit.result!;
   const ready = readiness(result, summary);
   const primary = primaryAction(summary, ready);
@@ -55,7 +57,7 @@ export function Overview({ kit, summary, go, open, now }: { kit: ControlKit; sum
     <FindPart kit={kit} open={open} />
     <StatusCard result={result} summary={summary} ready={ready} />
     {kit.previous && <Changes kit={kit} />}
-    <PrimaryBar kit={kit} primary={primary} summary={summary} go={go} />
+    <PrimaryBar kit={kit} cp={cp} primary={primary} summary={summary} go={go} />
     {stale.length > 0 && <div className="stale-note"><Alert tone="warning" title="Some vendor prices may be out of date">
       {stale.map(vendor => `${vendorLabel[vendor.vendorId]} (${catalogStateText(vendor).toLowerCase()})`).join(', ')}. Prices are as of {result.vendorDataUpdatedAt ? day(result.vendorDataUpdatedAt) : 'an earlier date'}; check prices and stock on the vendor's site before ordering.
     </Alert></div>}
@@ -64,6 +66,7 @@ export function Overview({ kit, summary, go, open, now }: { kit: ControlKit; sum
       <MoneyCard kit={kit} summary={summary} ready={ready} go={go} />
       <BuyByVendor kit={kit} go={go} />
       {summary.make.total > 0 && <MakeByMethod summary={summary} go={go} />}
+      <ControlPointCard kit={kit} cp={cp} now={now} />
       <Downloads kit={kit} summary={summary} go={go} />
       {health && <CatalogStrip kit={kit} now={now} />}
     </div>
@@ -135,13 +138,28 @@ function Meter({ tone, label, ready, total, detail }: { tone: 'buy' | 'make'; la
   </div>;
 }
 
-/** The single primary action, sticky at the bottom of the Onshape panel so it stays in reach while scrolling. */
-function PrimaryBar({ kit, primary, summary, go }: { kit: ControlKit; primary: PrimaryAction; summary: Summary; go: (view: View) => void }) {
+/**
+ * The single primary action, sticky at the bottom of the Onshape panel so it stays in reach while scrolling. Once the
+ * order and build list are complete and a Control Point workspace is chosen, sending there becomes the action; after
+ * this scan is sent, viewing it there is.
+ */
+function PrimaryBar({ kit, cp, primary, summary, go }: { kit: ControlKit; cp: ControlPoint; primary: PrimaryAction; summary: Summary; go: (view: View) => void }) {
+  const result = kit.result!;
+  const workspace = primary.kind === 'build-pack' && cp.workspace?.canEditCad ? cp.workspace : null;
+  const sentNow = workspace && cp.sent && cp.sent.workspaceId === workspace.id && Date.parse(cp.sent.sentAt) >= Date.parse(result.scannedAt) ? cp.sent : null;
+  const buildPack = () => { void kit.downloadExcel(); if (summary.make.total) { go('make'); void kit.downloadStep(); } };
+  if (sentNow) return <div className="primary-bar">
+    <a className="primary-link" href={sentNow.url} target="_blank" rel="noopener noreferrer">View in {workspace!.name} <ExternalLink aria-hidden size={15} /></a>
+    <Button variant="secondary" onClick={buildPack}>Download build pack</Button>
+  </div>;
+  if (workspace) return <div className="primary-bar">
+    <Button loading={cp.busy === 'send'} onClick={() => void cp.send()}><Send aria-hidden size={16} />Send full BOM to {workspace.name}</Button>
+    <Button variant="secondary" onClick={buildPack}><FileSpreadsheet aria-hidden size={15} />Build pack</Button>
+  </div>;
   const run = () => {
     if (primary.kind === 'review') return go('review');
     if (primary.kind !== 'build-pack') return go('buy');
-    void kit.downloadExcel();
-    if (summary.make.total) { go('make'); void kit.downloadStep(); }
+    buildPack();
   };
   const hint = primary.kind === 'build-pack'
     ? summary.make.total ? 'Excel BOM plus STEP files for every part to make.' : 'Excel BOM with live purchasing totals.'

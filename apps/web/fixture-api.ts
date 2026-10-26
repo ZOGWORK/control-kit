@@ -29,12 +29,22 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
     return classifyScan(result, { teamNumber: null }, {});
   };
   let settings = { teamNumber: null as string | null };
+  // Control Point link stand-in (docs/control-point-link.md §3). `CK_CONTROL_POINT` starts it as off, unlinked
+  // (default), linked, or none (linked with no workspace); "Link Control Point" here links at once with two workspaces.
+  const workspaces = [
+    { id: 12, name: 'HORS', ftcNumber: '6980', accentColor: process.env.CK_CP_ACCENT ?? '#2f6bff', canEditCad: true, cadUrl: 'https://tryctrlpoint.org/cad-parts' },
+    { id: 31, name: 'Robotics Club', ftcNumber: null, accentColor: null, canEditCad: false, cadUrl: 'https://tryctrlpoint.org/cad-parts' },
+  ];
+  const cpMode = process.env.CK_CONTROL_POINT ?? 'unlinked';
+  let cpLinked = cpMode === 'linked' || cpMode === 'none';
+  let cpWorkspace: number | null = cpMode === 'linked' ? 12 : null;
+  let cpSent: Record<string, unknown> | null = null;
   return {
     name: 'control-kit-fixture-api',
     configureServer(server) {
       server.middlewares.use(async (request, response, next) => {
         const url = new URL(request.url ?? '/', 'http://localhost');
-        if (!url.pathname.startsWith('/api/')) return next();
+        if (!url.pathname.startsWith('/api/') && url.pathname !== '/control-point/start') return next();
         const json = (value: unknown, status = 200) => { response.statusCode = status; response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(value)); };
         const body = async () => { let text = ''; for await (const chunk of request) text += chunk; return text ? JSON.parse(text) as Record<string, unknown> : {}; };
         const result = { ...load(), scanId: '00000000-0000-4000-8000-0000000000aa', scannedAt: new Date().toISOString() };
@@ -55,6 +65,22 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
           response.setHeader('content-type', 'image/png');
           return response.end(readFileSync(file));
         }
+        if (url.pathname === '/api/control-point/link') {
+          if (cpMode === 'off') return json({ linked: false, available: false });
+          if (!cpLinked) return json({ linked: false, available: true });
+          const list = cpMode === 'none' ? [] : workspaces;
+          return json({ linked: true, account: { email: 'builder@example.org', name: 'Fixture user' }, workspace: list.find(item => item.id === cpWorkspace) ?? null, workspaces: list, linkedAt: new Date().toISOString() });
+        }
+        if (url.pathname === '/api/control-point/workspace') { cpWorkspace = Number((await body()).workspaceId); return json({ saved: true }); }
+        if (url.pathname === '/api/control-point/unlink') { cpLinked = false; cpWorkspace = null; return json({ unlinked: true }); }
+        if (url.pathname === '/api/control-point/sent') return json(cpSent);
+        if (url.pathname === '/api/control-point/send') {
+          const payload = await body() as { idempotencyKey: string; cadParts: unknown[] };
+          const duplicate = cpSent?.idempotencyKey === payload.idempotencyKey;
+          cpSent = { importId: 41, workspaceId: cpWorkspace, sentAt: new Date().toISOString(), idempotencyKey: payload.idempotencyKey, url: 'https://tryctrlpoint.org/cad-parts?import=41' };
+          return json({ importId: 41, duplicate, workspace: workspaces.find(item => item.id === cpWorkspace), created: duplicate ? 0 : payload.cadParts.length, updated: 0, markedRemoved: 0, filesStored: 1, url: cpSent.url, sentAt: cpSent.sentAt });
+        }
+        if (url.pathname === '/control-point/start') { cpLinked = true; response.setHeader('content-type', 'text/html'); return response.end('<script>opener && opener.postMessage({ type: "control-point-linked" }, location.origin); close();</script>Linked.'); }
         if (url.pathname === '/api/scan') {
           response.setHeader('content-type', 'application/x-ndjson');
           // The same steps and counts the Worker sends, so the progress screen can be seen here.
