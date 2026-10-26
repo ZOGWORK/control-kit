@@ -3,7 +3,7 @@ import worker, { type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
 import { createMockControlPoint } from './mock-control-point';
 import { HttpControlPointAdapter } from './control-point';
-import { seal } from './secrets';
+import { seal, unseal } from './secrets';
 import { buildControlPointPayload, type ScanResult } from '@control-kit/shared';
 
 class MemoryKv implements Kv {
@@ -40,6 +40,25 @@ async function link(cookie: string) {
 }
 const send = (cookie: string, scanId: string, body: string, length = new TextEncoder().encode(body).byteLength) =>
   call(`/api/control-point/send?scanId=${scanId}`, { cookie, method: 'POST', body, headers: { 'content-type': 'application/json', 'content-length': String(length) } });
+/** Holds the first Control Point call whose path matches until `release`, so a test can act while it is in flight. */
+function holdOnce(pattern: RegExp) {
+  let release!: () => void;
+  let reached!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const arrived = new Promise<void>(resolve => { reached = resolve; });
+  let held = false;
+  vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (!request.url.startsWith(cpOrigin)) return onshape.handle(request);
+    if (!held && pattern.test(new URL(request.url).pathname)) { held = true; reached(); await gate; }
+    return cp.handle(request);
+  });
+  return { arrived, release };
+}
+const storedLink = async () => {
+  const raw = env.APP_STATE.values.get('cp-link:mock-user');
+  return raw ? unseal<{ token: string; workspaceId: number | null }>(env, raw) : null;
+};
 const post = (cookie: string, path: string, body: unknown) => call(path, { cookie, method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
 
 beforeEach(() => {
@@ -135,6 +154,33 @@ describe('Control Point linking', () => {
     const body = JSON.stringify(await buildControlPointPayload(result, { workspaceId: 12 }));
     expect((await send(cookie, result.scanId!, body)).status).toBe(409);
   });
+  it('keeps a workspace picked or a link made while an older refresh was waiting on Control Point', async () => {
+    const cookie = await session();
+    await link(cookie);
+    vi.useFakeTimers({ now: Date.now() + 11 * 60_000, toFake: ['Date'] });
+    try {
+      // A slow refresh started before the workspace was picked must not put back the old choice.
+      let held = holdOnce(/\/workspaces$/);
+      const slow = call('/api/control-point/link', { cookie });
+      await held.arrived;
+      expect(await (await post(cookie, '/api/control-point/workspace', { workspaceId: 12 })).json()).toMatchObject({ workspace: { id: 12 } });
+      held.release();
+      expect(await (await slow).json()).toMatchObject({ linked: true, workspace: { id: 12 } });
+      expect((await storedLink())?.workspaceId).toBe(12);
+      // Linking again (which revokes the old token) while a refresh with the old token waits: its late 401 leaves the new link.
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      const before = (await storedLink())!.token;
+      held = holdOnce(/\/workspaces$/);
+      const late = call('/api/control-point/link', { cookie });
+      await held.arrived;
+      await link(cookie);
+      const after = (await storedLink())!.token;
+      expect(after).not.toBe(before);
+      held.release();
+      expect(await (await late).json()).toMatchObject({ linked: true, workspace: null });
+      expect((await storedLink())?.token).toBe(after);
+    } finally { vi.useRealTimers(); }
+  });
   it('unlinks on request, revoking at Control Point, and keeps sent records', async () => {
     const cookie = await session();
     await link(cookie);
@@ -202,6 +248,21 @@ describe('sending a BOM to Control Point', () => {
     const fresh = await session();
     await link(fresh);
     expect(await (await send(fresh, result.scanId!, body)).json()).toMatchObject({ code: 'no_workspace' });
+  });
+  it('keeps a link made while a send with the replaced token was in flight', async () => {
+    const { cookie, result } = await ready();
+    const body = JSON.stringify(await buildControlPointPayload(result, { workspaceId: 12 }));
+    const before = (await storedLink())!.token;
+    const held = holdOnce(/\/bom$/);
+    const sending = send(cookie, result.scanId!, body);
+    await held.arrived;
+    await link(cookie);
+    held.release();
+    expect(await (await sending).json()).toMatchObject({ code: 'revoked' });
+    const now = await storedLink();
+    expect(now?.token).toBeTruthy();
+    expect(now?.token).not.toBe(before);
+    expect(await (await call('/api/control-point/link', { cookie })).json()).toMatchObject({ linked: true });
   });
   it('talks to Control Point with bounded calls the adapter checks', async () => {
     const adapter = new HttpControlPointAdapter(cpOrigin, 'wrong-secret');

@@ -30,6 +30,8 @@ export type ControlPointLine = {
   order: { qty: number; lines: number } | null; orderedWith: string | null; partNumber: string | null; configuration: string | null;
   documentId: string; elementId: string; partId: string | null; partStudioUrl: string; usedIn: string[]; suppressed: boolean; metadataIssue: string | null;
 };
+/** A CAD part's full Control Kit line, plus the other lines of the same part (other source revisions) folded into it. */
+export type ControlPointCadExtra = ControlPointLine & { sameIdentity: ControlPointLine[] };
 export type ControlPointFile = { name: string; mediaType: string; sizeBytes: number; sha256: string } & (
   | { delivery: 'inline'; contentBase64: string }
   | { delivery: 'reference'; reason: string });
@@ -47,8 +49,12 @@ export type ControlPointBomPayload = {
   missingMetadataLines: ControlPointLine[];
   suppressedCount: number;
   totals: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number };
-  /** One Control Point CAD part per active line, in the same order, with the full Control Kit line under `extra`. */
-  cadParts: Array<ControlPointCadPart & { extra: ControlPointLine }>;
+  /**
+   * One Control Point CAD part per part identity, in line order. Control Point keys its rows by `extra.identity`, so
+   * lines of one part at two source revisions become one CAD part: quantity and priced totals add up, `extra` is the
+   * first line, and `extra.sameIdentity` holds every other line of that part in full.
+   */
+  cadParts: Array<ControlPointCadPart & { extra: ControlPointCadExtra }>;
   controlPointCadUrl: string;
   files: ControlPointFile[];
   /** Files the bundle should hold but does not, with why (a STEP zip before any STEP export ran). Never silently absent. */
@@ -115,14 +121,27 @@ function sectionOf(line: BomLine): ControlPointCadPart['section'] {
 }
 const sourceOf = (line: BomLine): ControlPointCadPart['source'] =>
   line.disposition === 'print' ? 'printed' : line.vendor?.vendorId === 'gobilda' && ['buy', 'hardware'].includes(line.disposition) ? 'gobilda' : ['buy', 'hardware'].includes(line.disposition) ? 'purchased' : 'other';
-function cadPart(line: BomLine, extra: ControlPointLine): ControlPointCadPart & { extra: ControlPointLine } {
+function cadPart(group: Array<{ line: BomLine; extra: ControlPointLine }>): ControlPointCadPart & { extra: ControlPointCadExtra } {
+  const [{ line, extra }] = group;
+  const quantity = group.reduce((total, item) => total + item.line.qty, 0);
+  const totals = group.map(item => item.extra.lineTotalUsd).filter((value): value is number => value !== null);
   const notes = [
     extra.sku ? `${extra.vendor} ${extra.sku}` : null, extra.vendorUrl, extra.packsToOrder !== null ? `${extra.packsToOrder} pack${extra.packsToOrder === 1 ? '' : 's'} of ${extra.unitsPerPack}` : null,
     extra.orderedWith ? 'ordered with another line of the same SKU' : null, `Control Kit: ${extra.disposition}, match ${extra.matchStatus}`, extra.partStudioUrl,
   ].filter(Boolean).join(' · ');
   // unit_cost is what one CAD unit costs only when packs are known; a pack price is never passed off as a unit price.
-  const unit = extra.lineTotalUsd !== null && extra.qty > 0 ? Math.round(extra.lineTotalUsd / extra.qty * 10000) / 10000 : 0;
-  return { name: line.name, section: sectionOf(line), quantity: line.qty, source: sourceOf(line), unit_cost: unit, status: 'to_order', notes, extra };
+  const unit = totals.length && quantity > 0 ? Math.round(totals.reduce((total, value) => total + value, 0) / quantity * 10000) / 10000 : 0;
+  return { name: line.name, section: sectionOf(line), quantity, source: sourceOf(line), unit_cost: unit, status: 'to_order', notes,
+    extra: { ...extra, sameIdentity: group.slice(1).map(item => item.extra) } };
+}
+/** Active lines grouped by part identity, groups and their lines in line-key order. */
+function byIdentity(lines: BomLine[], extras: ControlPointLine[]) {
+  const groups = new Map<string, Array<{ line: BomLine; extra: ControlPointLine }>>();
+  lines.forEach((line, index) => {
+    const extra = extras[index];
+    groups.set(extra.identity, [...groups.get(extra.identity) ?? [], { line, extra }]);
+  });
+  return [...groups.values()];
 }
 
 /** The workbook and the STEP zip are always expected: one the caller did not supply or explain is listed as missing. */
@@ -166,7 +185,7 @@ export async function buildControlPointPayload(result: ScanResult, options: { wo
     idempotencyKey, source: 'control-kit', bundleVersion: 2, assembly, revision, generatedAt: result.scannedAt,
     vendorDataUpdatedAt: result.vendorDataUpdatedAt, staleVendorData: result.stats.staleVendorData,
     lines, suppressedLines, missingMetadataLines, suppressedCount, totals,
-    cadParts: sorted.map((line, index) => cadPart(line, lines[index])),
+    cadParts: byIdentity(sorted, lines).map(cadPart),
     controlPointCadUrl: CONTROL_POINT_CAD_URL,
     files: await Promise.all((options.files ?? []).map(item => file(item.name, item.mediaType, item.bytes))),
     filesNotIncluded: expectedFiles(options.files ?? [], options.filesNotIncluded ?? []),

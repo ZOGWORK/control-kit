@@ -44,6 +44,23 @@ describe('Control Point payload and adapter', () => {
     expect(before.cadParts[0].extra.identity).toBe('doc:parts:JHD:size=M4');
     expect(after.cadParts[0].extra.identity).toBe(before.cadParts[0].extra.identity);
   });
+  it('sends one CAD part per identity when a scan holds one part at two source revisions', async () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'a', name: 'Bracket', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JHD' },
+      { id: 'b', name: 'Bracket', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JHD' },
+      { id: 'c', name: 'Plate', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JKD' },
+    ] } }, { documentId: 'doc', elementId: 'assembly', workspaceOrVersion: 'w', workspaceOrVersionId: 'work' }, 'Robot');
+    const bracket = result.lines.find(line => line.partId === 'JHD')!;
+    // The same part linked at an older version as well: a separate line with its own source revision and key.
+    result.lines.push({ ...bracket, qty: 3, sourceType: 'v', sourceId: 'old-version', bomLineKey: `${bracket.bomLineKey}:v:old-version` });
+    const payload = await buildControlPointPayload(result, { workspaceId: 12 });
+    expect(payload.lines).toHaveLength(3);
+    expect(payload.cadParts.map(part => [part.extra.identity, part.quantity])).toEqual([['doc:parts:JHD:', 5], ['doc:parts:JKD:', 1]]);
+    const merged = payload.cadParts[0];
+    expect(new Set(payload.cadParts.map(part => part.extra.identity)).size).toBe(payload.cadParts.length);
+    expect([merged.extra, ...merged.extra.sameIdentity].map(line => [line.key, line.qty]).sort()).toEqual([[bracket.bomLineKey, 2], [`${bracket.bomLineKey}:v:old-version`, 3]].sort());
+    expect(payload.cadParts[1].extra.sameIdentity).toEqual([]);
+  });
   it('keeps CAD units separate from pack charges in the proposed payload', async () => {
     const instances = Array.from({ length: 12 }, (_, index) => ({ id: `${index}`, name: `M3 Screw <${index + 1}>`, type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'screw' }));
     const result = aggregateAssembly({ rootAssembly: { instances } }, { documentId: 'doc', elementId: 'assembly', workspaceOrVersion: 'w', workspaceOrVersionId: 'work' }, 'Robot');
