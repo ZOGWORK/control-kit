@@ -31,6 +31,23 @@ const call = async (path: string, cookie?: string) => {
 beforeEach(() => vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => mock.handle(new Request(input, init))));
 afterAll(() => vi.unstubAllGlobals());
 
+describe('unresolved instances in the browser matcher', () => {
+  it('match the rest of the scan through /api/catalog/raw, as the browser does (which fails on any non-404 read)', async () => {
+    const result = aggregateAssembly({ rootAssembly: { instances: [{ id: 'h', name: 'Control Hub (REV) <1>' } as never, { id: 'p', name: 'Plate', type: 'Part', documentId: 'doc1', elementId: 'e1', partId: 'p' }] } },
+      { documentId: 'doc1', workspaceOrVersion: 'w', workspaceOrVersionId: 'w1', elementId: 'asm' }, 'Robot');
+    const keys: string[] = [];
+    const reader = { get: async (key: string) => {
+      keys.push(key);
+      const response = await call(`/api/catalog/raw?key=${encodeURIComponent(key)}`);
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error(`Catalog read failed (${response.status})`);
+      return response.text();
+    } };
+    await expect(matchCatalog(result, reader)).resolves.toBeDefined();
+    expect(keys.some(key => key.startsWith('library-map:'))).toBe(false);
+  });
+});
+
 describe('match decisions', () => {
   it('are keyed by the part, so a decision survives an edit that changes the workspace microversion', () => {
     const before = 'doc1:elem1:JHD:size=M4:m:64c9f1b7aa';

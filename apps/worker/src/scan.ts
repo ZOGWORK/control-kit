@@ -156,7 +156,8 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
           if (error instanceof SessionExpiredError) emit({ type: 'session-expired' });
           else {
             // The stack's first frames are code locations only (no part data), so a failure can be traced from the log.
-            console.error('Scan failed', error instanceof Error ? `${error.name}: ${error.message}\n${error.stack?.split('\n').slice(1, 4).join('\n') ?? ''}` : 'unknown');
+            // The message is left out: a fetch error's message can carry a URL with document ids.
+            console.error('Scan failed', error instanceof Error ? `${error.name}\n${error.stack?.split('\n').slice(1, 4).join('\n') ?? ''}` : 'unknown');
             // Only a request to Onshape that failed is "could not reach Onshape"; anything else is Control Kit's own error.
             const unreachable = error instanceof TypeError && Object.keys(requests?.summary().errors ?? {}).length > 0;
             emit({ type: 'error', message: unreachable

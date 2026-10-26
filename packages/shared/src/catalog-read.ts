@@ -154,7 +154,8 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
   const jobs = result.lines.map(async line => {
     if (signal?.aborted) throw signal.reason;
     const wanted: Array<[VendorIndex, number]> = [];
-    const mapping = line.documentId !== result.documentId ? findLibraryMapping(await mappingsFor(line.documentId), line) : null;
+    // An unresolved instance has no document, so there is no library to ask (and `library-map:` alone is not a key).
+    const mapping = line.documentId && line.documentId !== result.documentId ? findLibraryMapping(await mappingsFor(line.documentId), line) : null;
     const skus = skuCandidates(line.name, line.partNumber);
     for (const index of catalogs) {
       for (const sku of skus) { const position = index.bySku.get(normalizeSku(sku, index.vendor)); if (position !== undefined) wanted.push([index, position]); }
