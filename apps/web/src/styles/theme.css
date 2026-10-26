@@ -26,6 +26,14 @@
   --ck-success: #34d399;
   --ck-warning: #fb923c;
   --ck-danger: #f43f5e;
+  /* Colour jobs. Each colour means one thing everywhere: sky buy, gold make, orange needs a decision, green done,
+     red blocked. --ck-volt is the brand accent (buttons, the current tab, selection) and may later follow a linked
+     Control Point workspace; --ck-make never does, so a status colour never changes with branding. */
+  --ck-buy: var(--ck-info);
+  --ck-make: #ffc700;
+  --ck-attention: var(--ck-warning);
+  --ck-done: var(--ck-success);
+  --ck-blocked: var(--ck-danger);
   --ck-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --ck-display: "Space Grotesk", "Inter", sans-serif;
   --ck-mono: "JetBrains Mono", ui-monospace, monospace;
@@ -82,7 +90,7 @@ a { color: inherit; }
 .shell { min-height: 100%; display: grid; grid-template-columns: 1fr; }
 .sidebar { display: none; }
 .main { min-width: 0; display: flex; flex-direction: column; }
-.content { width: 100%; max-width: 1080px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; align-content: start; }
+.content { width: 100%; max-width: 1240px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; align-content: start; }
 
 /* Top bar: assembly identity and the scan action; sits above the content on every width. */
 .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 10px 16px;
@@ -102,6 +110,8 @@ a { color: inherit; }
 .tab:hover { color: var(--ck-text); background: var(--ck-muted); }
 .tab[aria-current="page"] { color: var(--ck-volt-ink); background: var(--ck-volt); }
 .count { font: 12px var(--ck-mono); color: inherit; opacity: 0.8; }
+.tab .dot { width: 7px; height: 7px; }
+.tab[aria-current="page"] .dot { box-shadow: 0 0 0 1.5px var(--ck-volt-ink); }
 
 /* Desktop: Control Scout's sidebar. */
 @media (min-width: 900px) {
@@ -116,7 +126,8 @@ a { color: inherit; }
   .nav-item:hover { color: var(--ck-text); background: var(--ck-muted); }
   .nav-item[aria-current="page"] { color: var(--ck-text); background: var(--ck-muted); box-shadow: inset 2px 0 0 var(--ck-volt); }
   .nav-item .count { margin-left: auto; }
-  .nav-item .count.attention { color: var(--ck-volt); opacity: 1; }
+  .nav-item .count.attention { color: var(--ck-attention); opacity: 1; }
+  .nav-item .count { display: inline-flex; align-items: center; gap: 6px; }
   .sidebar-foot { margin-top: auto; display: grid; gap: 4px; padding-top: 10px; border-top: 1px solid var(--ck-line); }
   .tabs { display: none; }
   .topbar .brand-mark { display: none; }
@@ -140,8 +151,8 @@ button.tile:hover { border-color: var(--ck-line-strong); background: var(--ck-ra
 .tile-label { font-size: 12.5px; color: var(--ck-text-muted); }
 .tile-value { font: 600 1.75rem/1.15 var(--ck-display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .tile-context { font-size: 12px; color: var(--ck-text-muted); }
-.tile.attention .tile-value { color: var(--ck-volt); }
-.tile.incomplete .tile-value { color: var(--ck-text-muted); }
+.tile.attention .tile-value { color: var(--ck-attention); }
+.tile.incomplete .tile-value { color: var(--ck-done); }
 
 /* Rows: one list primitive for the queue, parts, buy list, and make list. */
 .rows { display: grid; container-type: inline-size; }
@@ -171,7 +182,7 @@ button.row:hover { background: var(--ck-raised); }
   background: var(--ck-muted); color: var(--ck-text); border: 1px solid var(--ck-line); }
 .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ck-text-muted); }
 .chip.buy::before { background: var(--ck-info); }
-.chip.make::before { background: var(--ck-volt); }
+.chip.make::before { background: var(--ck-make); }
 .chip.review { color: var(--ck-warning); border-color: color-mix(in srgb, var(--ck-warning) 35%, transparent); background: color-mix(in srgb, var(--ck-warning) 10%, transparent); }
 .chip.review::before { background: var(--ck-warning); }
 .chip.suppressed::before { background: transparent; border: 1px solid var(--ck-text-muted); }
@@ -213,6 +224,119 @@ button.row:hover { background: var(--ck-raised); }
 .vendor.published .dot { background: var(--ck-success); }
 .vendor.partial .dot, .vendor.stale .dot { background: var(--ck-volt); }
 .vendor.failing .dot { background: var(--ck-danger); }
+
+/* Status dots, shared by tabs, the sidebar, vendor rows, and the catalog strip. */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ck-text-muted); }
+.dot.buy { background: var(--ck-buy); }
+.dot.make { background: var(--ck-make); }
+.dot.attention { background: var(--ck-attention); }
+.dot.done { background: var(--ck-done); }
+.dot.blocked { background: var(--ck-blocked); }
+.blocked-text { color: var(--ck-blocked); }
+
+/* Overview status card: one bar of every unique part by how it is handled, then the two readiness meters. */
+.status { padding: 16px; display: grid; gap: 12px; }
+.status-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.status-head h2 { font-size: 1.25rem; }
+.share-bar { display: flex; gap: 2px; height: 10px; border-radius: 999px; overflow: hidden; background: var(--ck-muted); }
+.share { min-width: 4px; }
+.share.buy, .share-legend .buy .dot { background: var(--ck-buy); }
+.share.make, .share-legend .make .dot { background: var(--ck-make); }
+.share.hardware, .share-legend .hardware .dot { background: color-mix(in srgb, var(--ck-buy) 45%, var(--ck-muted)); }
+.share.review, .share-legend .review .dot { background: var(--ck-attention); }
+.share.ignored, .share-legend .ignored .dot { background: var(--ck-line-strong); }
+.share-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--text-secondary); }
+.share-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.share-legend .num { color: var(--ck-text); }
+.meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 20px; padding-top: 4px; border-top: 1px solid var(--ck-line); }
+.meter { display: grid; gap: 6px; padding-top: 10px; }
+.meter-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.meter-label { font-weight: 500; }
+.meter-figure { font-size: 1.125rem; font-weight: 600; }
+.meter.buy .meter-figure { color: var(--ck-buy); }
+.meter.make .meter-figure { color: var(--ck-make); }
+.meter.complete .meter-figure { color: var(--ck-done); }
+.meter-track { height: 8px; border-radius: 999px; background: var(--ck-muted); overflow: hidden; }
+.meter-fill { display: block; height: 100%; border-radius: inherit; transition: width 0.3s ease; }
+.meter.buy .meter-fill { background: var(--ck-buy); }
+.meter.make .meter-fill { background: var(--ck-make); }
+.meter.complete .meter-fill { background: var(--ck-done); }
+.meter-detail { display: inline-flex; align-items: center; gap: 5px; color: var(--ck-text-muted); }
+.meter.complete .meter-detail { color: var(--ck-done); }
+@media (prefers-reduced-motion: reduce) { .meter-fill { transition: none; } }
+
+/* Overview layout: one column in the Onshape panel; on wide screens the money and lists move to a right column. */
+.overview, .overview-side { display: grid; gap: 16px; align-content: start; min-width: 0; }
+@media (max-width: 520px) { .overview, .overview-side { gap: 12px; } }
+@media (min-width: 1180px) {
+  .overview { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); align-items: start; }
+  .overview > :not(.overview-side) { grid-column: 1; }
+  .overview-side { grid-column: 2; grid-row: 1 / span 20; }
+}
+
+/* The one primary action. In the narrow panel it sticks to the bottom of the screen. */
+.primary-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.primary-bar > button { min-height: 44px; padding-inline: 18px; font-weight: 600; }
+@media (max-width: 899px) {
+  .primary-bar { position: sticky; bottom: 0; z-index: 3; margin: 0 -12px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--ck-bg) 92%, transparent); backdrop-filter: blur(8px); border-top: 1px solid var(--ck-line); order: 99; }
+  .primary-bar > button { flex: 1 1 100%; }
+  .primary-hint { display: none; }
+}
+.btn-attention { --foreground: var(--ck-attention); --background: #2a1203; }
+
+/* Next moves: numbered, the first one opened up with pictures of the parts it is about. */
+.moves { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--ck-line); }
+.move { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 16px; border-bottom: 1px solid var(--ck-line); }
+.move:last-child { border-bottom: 0; }
+.move-index { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 999px; font-size: 12px; font-weight: 600;
+  color: var(--ck-attention); background: color-mix(in srgb, var(--ck-attention) 14%, transparent); }
+.move.blocked .move-index { color: var(--ck-blocked); background: color-mix(in srgb, var(--ck-blocked) 14%, transparent); }
+.move.lead { background: color-mix(in srgb, var(--ck-attention) 5%, transparent); box-shadow: inset 3px 0 0 var(--ck-attention); }
+.move.lead.blocked { background: color-mix(in srgb, var(--ck-blocked) 5%, transparent); box-shadow: inset 3px 0 0 var(--ck-blocked); }
+.move-title { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.move-icon { display: inline-flex; color: var(--ck-attention); }
+.move.blocked .move-icon { color: var(--ck-blocked); }
+.move-icon svg { width: 15px; height: 15px; }
+.move:not(.lead) .muted.small { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.move-parts { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.move-parts li { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 13px; }
+.move-part-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-thumb { width: 36px; height: 36px; border-radius: 8px; background: var(--ck-muted); overflow: hidden; display: grid; place-items: center; }
+.mini-thumb:has(img) { background: #f4f4f5; }
+.mini-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.done-strip { list-style: none; margin: 0; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 6px 16px; border-top: 1px solid var(--ck-line); font-size: 12.5px; color: var(--ck-done); }
+.done-strip li { display: inline-flex; align-items: center; gap: 6px; }
+.flip { transform: rotate(180deg); }
+@media (max-width: 520px) { .move { grid-template-columns: auto minmax(0, 1fr); padding: 10px 12px; } .move > :last-child { grid-column: 2; justify-self: start; } }
+
+/* Money: the known figure in green, a priced/unpriced bar, and the biggest lines. */
+.money { display: grid; gap: 10px; }
+.money-figure { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.money-value { font: 600 2rem/1.1 var(--ck-display); letter-spacing: -0.02em; color: var(--ck-done); }
+.money-value.none { color: var(--ck-text-muted); font-size: 1.375rem; }
+.money-missing { color: var(--ck-attention); }
+.split-bar { display: flex; gap: 2px; height: 8px; border-radius: 999px; overflow: hidden; background: var(--ck-muted); }
+.split.priced { background: var(--ck-done); }
+.split.unpriced { background: repeating-linear-gradient(135deg, var(--ck-line-strong) 0 4px, transparent 4px 8px); }
+.top-costs { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--ck-line); }
+.top-costs h3 { font-family: var(--ck-sans); font-weight: 500; }
+.top-costs ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.top-costs li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: baseline; font-size: 13px; }
+.top-cost-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Make by method. */
+.methods { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.method { display: grid; gap: 2px; padding: 10px 12px; text-align: left; border-radius: 10px; border: 1px solid var(--ck-line); background: var(--ck-raised); color: inherit; font: inherit; cursor: pointer; box-shadow: inset 0 2px 0 var(--ck-make); }
+.method:hover { border-color: var(--ck-line-strong); }
+.method-count { font: 600 1.25rem/1.2 var(--ck-display); color: var(--ck-make); }
+.method-label { font-size: 12.5px; color: var(--ck-text-muted); }
+
+/* Catalog health in one line, opening to every vendor. */
+.catalog-strip summary { display: flex; align-items: center; gap: 8px; padding: 12px 16px; cursor: pointer; list-style: none; font-size: 13px; }
+.catalog-strip summary::-webkit-details-marker { display: none; }
+.catalog-strip .chevron { margin-left: auto; color: var(--ck-text-muted); transition: transform 0.15s; }
+.catalog-strip[open] .chevron { transform: rotate(180deg); }
 
 /* Toolbar above lists. */
 .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }

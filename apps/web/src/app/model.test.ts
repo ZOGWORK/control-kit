@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateAssembly, classifyScan, recalculatePurchasing, type AssemblyInstance, type BomLine, type ScanResult, type VendorRecord } from '@control-kit/shared';
-import { buyList, catalogState, catalogStateText, catalogsComplete, filterParts, reviewQueue, staleCatalogs, summarize } from './model';
+import { buyList, catalogState, catalogStateText, catalogsComplete, composition, filterParts, money, primaryAction, readiness, reviewQueue, staleCatalogs, summarize, topCosts } from './model';
 
 const vendor = (sku: string, packSize: number | null, priceUsd: number | null): VendorRecord => ({ vendorId: 'gobilda', sku, normalizedSku: sku.replace(/\D/g, ''), name: 'Screw', normalizedName: 'screw', url: 'https://www.gobilda.com/x/',
   priceUsd, packSize, packSizeVerified: packSize !== null, stock: 'in', stockQty: null, category: 'hardware', updatedAt: '2026-10-24T00:00:00Z', source: 'sitemap' });
@@ -27,6 +27,25 @@ describe('Control Kit view model', () => {
     expect(vendors).toHaveLength(1);
     expect(vendors[0]).toMatchObject({ label: 'goBILDA', subtotal: 17.98, unpriced: 1 });
     expect(needsSku).toEqual([]);
+  });
+  it('accounts for every unique part and picks one primary action in working order', () => {
+    const result = scan([...parts('M4 screw', 12, 'screw'), ...parts('Bearing', 2, 'bearing'), ...parts('Mystery part', 1, 'mystery'), ...parts('M3 socket head screw', 4, 'hw')], lines => {
+      const screw = lines.find(line => line.partId === 'screw')!;
+      screw.vendor = vendor('2802-0004-0010', 10, 8.99); screw.matchStatus = 'exact';
+      const bearing = lines.find(line => line.partId === 'bearing')!;
+      bearing.vendor = { ...vendor('1611-0019-0006', 1, 2.5), stock: 'out' }; bearing.matchStatus = 'exact';
+    });
+    const summary = summarize(result);
+    // Buy, make, fasteners, review, and set-aside parts add up to the unique count, so the screen never leaves a gap.
+    expect(composition(summary).reduce((sum, share) => sum + share.count, 0)).toBe(summary.uniqueLines);
+    const ready = readiness(result, summary);
+    expect(ready.order).toMatchObject({ ready: 2, total: 2, unmatched: 0, unpriced: 0, outOfStock: 1 });
+    expect(primaryAction(summary, ready)).toMatchObject({ kind: 'review', label: 'Review 1 part' });
+    expect(primaryAction({ ...summary, review: 0 }, ready)).toMatchObject({ kind: 'stock', label: 'Replace 1 out-of-stock part' });
+    expect(primaryAction({ ...summary, review: 0 }, { ...ready, order: { ...ready.order, unmatched: 3 } }).label).toBe('Fix 3 unmatched parts');
+    expect(primaryAction({ ...summary, review: 0 }, { ...ready, order: { ...ready.order, outOfStock: 0 } }).kind).toBe('build-pack');
+    expect(topCosts(result).map(line => line.partId)).toEqual(['screw', 'bearing']);
+    expect(money(1768.05)).toBe('$1,768.05');
   });
   it('never puts a possible match under a vendor or into a total', () => {
     const result = scan(parts('Wheel', 4, 'wheel'), lines => { lines[0].vendor = vendor('3606-0014-0096', 1, 12); lines[0].matchStatus = 'possible'; });

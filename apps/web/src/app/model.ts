@@ -9,7 +9,8 @@ export const chipClass = (line: BomLine) => line.suppressed || line.disposition 
 export const chipLabel = (line: BomLine) => line.suppressed ? 'Suppressed' : dispositionLabel[line.disposition];
 /** Short label for narrow chips: "2D cut" instead of the full "2D cut (laser/waterjet/router)". */
 export const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', hardware: 'Fastener', ignore: 'Not needed', review: 'Needs review' };
-export const money = (value: number) => `$${value.toFixed(2)}`;
+const dollars = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+export const money = (value: number) => dollars.format(value);
 
 /** A line can be paid for only with a confirmed or exact match, a verified pack size, and a price. */
 export const priced = (line: BomLine) => line.lineTotalUsd !== null;
@@ -19,6 +20,8 @@ export const covered = (line: BomLine) => priced(line) || Boolean(line.orderedWi
 export type Summary = {
   uniqueLines: number; instances: number; suppressedInstances: number;
   buy: number; make: Record<'print' | 'cnc' | 'cut-2d' | 'fabricate', number> & { total: number }; review: number;
+  /** Stock fasteners and parts a person set aside; with buy, make, and review they add up to `uniqueLines`. */
+  hardware: number; ignored: number;
   /** Known subtotal over priced Buy lines only; `pricedLines` of `buyLines` carry a price. */
   subtotal: number | null; pricedLines: number; buyLines: number;
   dataIssues: number; possibleMatches: number;
@@ -33,7 +36,7 @@ export function summarize(result: ScanResult): Summary {
   make.total = make.print + make.cnc + make['cut-2d'] + make.fabricate;
   return {
     uniqueLines: lines.length, instances: result.stats.totalInstances, suppressedInstances: result.suppressed.reduce((sum, line) => sum + line.qty, 0),
-    buy: buy.length, make, review: count('review'),
+    buy: buy.length, make, review: count('review'), hardware: count('hardware'), ignored: count('ignore'),
     subtotal: pricedBuy.length ? Math.round(pricedBuy.reduce((sum, line) => sum + line.lineTotalUsd!, 0) * 100) / 100 : null,
     pricedLines: coveredBuy.length, buyLines: buy.length,
     dataIssues: result.missingMetadata.filter(line => !line.suppressed).length,
@@ -121,6 +124,55 @@ export function vendorLookup(line: BomLine): { sku: string; vendor: string; url:
     if (sku) return { sku, vendor, url: url(sku) };
   }
   return null;
+}
+
+/**
+ * Where an assembly stands, for the Overview. Order readiness counts Buy lines that carry a price (or ride on another
+ * line's order); build readiness counts Make lines against the parts still waiting for a decision, any of which may
+ * turn out to be made. Every figure keeps its denominator so the screen never leaves a subtraction to the reader.
+ */
+export type Readiness = {
+  order: { ready: number; total: number; unmatched: number; unpriced: number; outOfStock: number; lowStock: number };
+  build: { decided: number; total: number };
+};
+export function readiness(result: ScanResult, summary: Summary = summarize(result)): Readiness {
+  const { vendors, needsSku } = buyList(result);
+  const matched = vendors.flatMap(group => group.lines);
+  return {
+    order: { ready: summary.pricedLines, total: summary.buyLines, unmatched: needsSku.length, unpriced: matched.filter(line => !covered(line)).length,
+      outOfStock: matched.filter(line => line.vendor!.stock === 'out').length, lowStock: matched.filter(line => line.vendor!.stock === 'low').length },
+    build: { decided: summary.make.total, total: summary.make.total + summary.review },
+  };
+}
+export const percent = (part: number, whole: number) => whole ? Math.round((part / whole) * 100) : 0;
+
+/** The one thing to do next. Only one action is ever primary; it follows the first open problem in the order a team works. */
+export type PrimaryAction = { kind: 'review' | 'unmatched' | 'unpriced' | 'stock' | 'build-pack'; label: string; count: number };
+export function primaryAction(summary: Summary, ready: Readiness): PrimaryAction {
+  const n = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  if (summary.review) return { kind: 'review', label: `Review ${n(summary.review, 'part', 'parts')}`, count: summary.review };
+  if (ready.order.unmatched) return { kind: 'unmatched', label: `Fix ${n(ready.order.unmatched, 'unmatched part', 'unmatched parts')}`, count: ready.order.unmatched };
+  if (ready.order.unpriced) return { kind: 'unpriced', label: `Check ${n(ready.order.unpriced, 'unpriced part', 'unpriced parts')}`, count: ready.order.unpriced };
+  if (ready.order.outOfStock) return { kind: 'stock', label: `Replace ${n(ready.order.outOfStock, 'out-of-stock part', 'out-of-stock parts')}`, count: ready.order.outOfStock };
+  return { kind: 'build-pack', label: 'Download build pack', count: 0 };
+}
+
+/** The priced lines that make up most of the subtotal, so a wrong price shows at a glance. */
+export const topCosts = (result: ScanResult, count = 5) => result.lines.filter(line => line.disposition === 'buy' && priced(line))
+  .sort((a, b) => b.lineTotalUsd! - a.lineTotalUsd! || a.name.localeCompare(b.name)).slice(0, count);
+
+/** The parts holding up the order: Buy lines with no vendor product, most-used first. */
+export const unmatchedParts = (result: ScanResult, count = 3) => [...buyList(result).needsSku].sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name)).slice(0, count);
+
+/** How every unique part is sorted, in the order the colour bar draws them. Empty groups are left out. */
+export type Share = { key: 'buy' | 'make' | 'hardware' | 'review' | 'ignored'; label: string; count: number };
+export function composition(summary: Summary): Share[] {
+  const shares: Share[] = [
+    { key: 'buy', label: 'Buy', count: summary.buy }, { key: 'make', label: 'Make', count: summary.make.total },
+    { key: 'hardware', label: 'Fasteners', count: summary.hardware }, { key: 'review', label: 'Needs review', count: summary.review },
+    { key: 'ignored', label: 'Not needed', count: summary.ignored },
+  ];
+  return shares.filter(share => share.count);
 }
 
 /** "4 minutes ago", for scan and catalog times. Never used in the first render, which has no clock yet. */
