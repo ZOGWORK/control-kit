@@ -118,6 +118,9 @@ function Workspace({ kit }: { kit: ControlKit }) {
   }, [view]);
   const summary = summarize(result);
   const counts: Record<View, number | null> = { overview: null, review: summary.review, parts: summary.uniqueLines, buy: summary.buy, make: summary.make.total };
+  // Each section's colour job: review is orange while parts wait and green once none do; buy is sky; make is gold.
+  const tone: Record<View, string | null> = { overview: null, review: summary.review ? 'attention' : 'done', parts: null, buy: 'buy', make: 'make' };
+  const dot = (item: View) => tone[item] && <span className={`dot ${tone[item]}`} aria-hidden />;
   const line = selected ? result.lines.find(item => item.bomLineKey === selected) ?? result.suppressed.find(item => item.bomLineKey === selected) ?? null : null;
   const open = (key: string) => setSelected(key);
   const subtitle = [result.documentName, now ? `scanned ${ago(result.scannedAt, now)}` : null].filter(Boolean).join(' · ');
@@ -127,7 +130,7 @@ function Workspace({ kit }: { kit: ControlKit }) {
       <div className="sidebar-brand"><Logo /><span>Control Kit</span></div>
       <nav aria-label="Sections">
         {views.map(item => <button key={item} type="button" className="nav-item" aria-current={view === item ? 'page' : undefined} onClick={() => setView(item)}>
-          {viewIcon[item]}<span>{viewLabel[item]}</span>{counts[item] !== null && <span className={`count ${item === 'review' && counts[item]! > 0 ? 'attention' : ''}`}>{counts[item]}</span>}
+          {viewIcon[item]}<span>{viewLabel[item]}</span>{counts[item] !== null && <span className={`count ${item === 'review' && counts[item]! > 0 ? 'attention' : ''}`}>{dot(item)}{counts[item]}</span>}
         </button>)}
       </nav>
       <div className="sidebar-foot">
@@ -146,7 +149,7 @@ function Workspace({ kit }: { kit: ControlKit }) {
       </header>
       <nav className="tabs" aria-label="Sections">
         {views.map(item => <button key={item} type="button" className="tab" aria-current={view === item ? 'page' : undefined} onClick={() => setView(item)}>
-          {viewLabel[item]}{counts[item] !== null && <span className="count">{counts[item]}</span>}
+          {dot(item)}{viewLabel[item]}{counts[item] !== null && <span className="count">{counts[item]}</span>}
         </button>)}
       </nav>
       <main className="content">
