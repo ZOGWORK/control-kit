@@ -22,6 +22,7 @@ export function createMockControlPoint(options: { origin?: string; secret?: stri
   const received: Array<{ workspaceId: number; payload: ControlPointBomPayload }> = [];
   const requests: string[] = [];
   let deny = false;
+  let failure: number | null = null;
   let issued = 0;
   const json = (status: number, value: unknown) => Response.json(value, { status });
   const bearer = (request: Request) => {
@@ -56,6 +57,7 @@ export function createMockControlPoint(options: { origin?: string; secret?: stri
       return json(200, { access_token: token, token_type: 'Bearer', account });
     }
     if (!url.pathname.startsWith(base)) return json(404, { error: 'not_found' });
+    if (failure) return json(failure, { error: 'unavailable' });
     const token = bearer(request);
     if (!token) return json(401, { error: 'revoked' });
     if (url.pathname === `${base}/workspaces` && request.method === 'GET') return json(200, { account, workspaces });
@@ -101,6 +103,8 @@ export function createMockControlPoint(options: { origin?: string; secret?: stri
     revokeAll() { tokens.clear(); },
     setWorkspaces(list: ControlPointWorkspace[]) { workspaces = list; },
     setDeny(value: boolean) { deny = value; },
+    /** Every bearer call answers this status (an outage) until set back to null. */
+    setFailure(status: number | null) { failure = status; },
   };
 }
 

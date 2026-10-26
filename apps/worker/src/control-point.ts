@@ -8,8 +8,11 @@ import { clearCookie, readSignedCookie, seal, signedCookie, unseal, type SignedC
  */
 export type ControlPointEnv = { APP_STATE: Kv; WEB_ORIGIN: string; SESSION_ENCRYPTION_KEY: string; CONTROL_POINT_ORIGIN?: string; CONTROL_KIT_CLIENT_SECRET?: string };
 type User = { id: string; name: string };
-/** `workspaces` and `workspacesAt` (ms) cache Control Point's list for ten minutes. */
-type Link = { token: string; account: ControlPointAccount; workspaceId: number | null; linkedAt: string; workspaces?: ControlPointWorkspace[]; workspacesAt?: number };
+/**
+ * `workspaces` and `workspacesAt` (ms) cache Control Point's list for ten minutes. `refreshTriedAt` (ms) is the last
+ * "Check again" that failed, so a Control Point outage still gets the 30-second pause.
+ */
+type Link = { token: string; account: ControlPointAccount; workspaceId: number | null; linkedAt: string; workspaces?: ControlPointWorkspace[]; workspacesAt?: number; refreshTriedAt?: number };
 export type SentRecord = { importId: number; workspaceId: number; sentAt: string; idempotencyKey: string; url: string };
 
 export const sendLimitBytes = 12 * 1024 * 1024;
@@ -144,11 +147,13 @@ async function forgetLink(env: ControlPointEnv, userId: string, token: string) {
   return null;
 }
 const pick = ({ id, name, ftcNumber, accentColor, canEditCad }: ControlPointWorkspace) => ({ id, name, ftcNumber, accentColor, canEditCad });
+/** The last time Control Point was asked for the list, whether or not it answered. */
+const lastRefresh = (link: Link) => Math.max(link.workspacesAt ?? 0, link.refreshTriedAt ?? 0);
 function linkView(link: Link, stale = false) {
   const workspaces = link.workspaces ?? [];
   const workspace = workspaces.find(item => item.id === link.workspaceId);
   // When "Check again" may next ask Control Point for a fresh list.
-  const refreshAfter = new Date((link.workspacesAt ?? 0) + refreshGapMs).toISOString();
+  const refreshAfter = new Date(lastRefresh(link) + refreshGapMs).toISOString();
   return { linked: true, available: true, account: link.account, workspace: workspace ? pick(workspace) : null, workspaces, linkedAt: link.linkedAt, refreshAfter, ...(stale ? { stale: true } : {}) };
 }
 /**
@@ -265,8 +270,10 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);
     const link = await readLink(env, user.id);
     if (!link) return reply({ linked: false, available: true });
-    const force = url.searchParams.get('refresh') === '1' && Date.now() - (link.workspacesAt ?? 0) >= refreshGapMs;
-    const fresh = await refreshedLink(env, adapter, user.id, link, force);
+    const force = url.searchParams.get('refresh') === '1' && Date.now() - lastRefresh(link) >= refreshGapMs;
+    let fresh = await refreshedLink(env, adapter, user.id, link, force);
+    // A failed forced refresh still starts the pause, so retries do not keep calling a struggling Control Point.
+    if (force && fresh.stale) fresh = { ...fresh, link: await updateLink(env, user.id, link.token, current => ({ ...current, refreshTriedAt: Date.now() })) };
     return fresh.link ? reply(linkView(fresh.link, fresh.stale)) : reply({ linked: false, available: true, ...(fresh.revoked ? { revoked: true } : {}) });
   }
   if (url.pathname === '/api/control-point/workspace' && request.method === 'POST') {

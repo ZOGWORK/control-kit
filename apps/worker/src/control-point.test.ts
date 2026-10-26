@@ -145,6 +145,15 @@ describe('Control Point linking', () => {
       const late = await (await call('/api/control-point/link?refresh=1', { cookie })).json() as { workspaces: Array<{ id: number }>; refreshAfter: string };
       expect(late.workspaces).toEqual([joined]);
       expect(Date.parse(late.refreshAfter)).toBe(Date.now() + 30_000);
+      // A refresh Control Point fails also starts the pause: the next "Check again" within 30 seconds asks nothing.
+      vi.setSystemTime(Date.now() + 31_000);
+      cp.setFailure(503);
+      const asked = cp.requests.length;
+      const failed = await (await call('/api/control-point/link?refresh=1', { cookie })).json() as { stale?: boolean; refreshAfter: string };
+      expect(failed).toMatchObject({ stale: true, refreshAfter: new Date(Date.now() + 30_000).toISOString() });
+      expect(cp.requests.length).toBe(asked + 1);
+      await call('/api/control-point/link?refresh=1', { cookie });
+      expect(cp.requests.length).toBe(asked + 1);
     } finally { vi.useRealTimers(); }
   });
   it('picks only a listed workspace that can edit CAD', async () => {
