@@ -214,7 +214,11 @@ test('the site explains and installs Control Kit outside Onshape, while a framed
   await expect(page.getByRole('heading', { level: 1, name: /bill of materials, straight from Onshape/ })).toBeVisible();
   await page.getByRole('link', { name: 'How to install' }).click();
   await expect(page.getByRole('heading', { name: 'Install' })).toBeInViewport();
-  for (const image of await page.locator('img.landing-shot').all()) await expect(image).toHaveJSProperty('complete', true);
+  // Screenshots load lazily; each must load for real (a failed image is also "complete", but has no width).
+  for (const image of await page.locator('img.landing-shot').all()) {
+    await image.scrollIntoViewIfNeeded();
+    await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
+  }
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
   await page.route('**/host', route => route.fulfill({ contentType: 'text/html', body: '<iframe title="Onshape right panel" src="/"></iframe>' }));
   await page.goto('/host');
