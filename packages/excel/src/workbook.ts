@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from 'fflate';
-import { metadataIssueText, stepFileName, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorRecord } from '../../shared/src/index';
+import { isBundle, metadataIssueText, stepFileName, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorRecord } from '../../shared/src/index';
 
 type Cell = { col: number; type: 's' | 'n' | 'f'; value: string | number; style: number; cached?: number };
 type Sheet = { name: string; rows: Map<number, Cell[]>; widths: number[]; fixed: Record<number, number>; merges: string[]; links: { cell: string; url: string }[]; filter?: string; frozen?: number; landscape?: boolean; drawing?: boolean; tall?: number[] };
@@ -59,7 +59,7 @@ const order: Disposition[] = ['buy', 'hardware', 'print', 'cnc', 'cut-2d', 'fabr
 const date = (iso: string | null | undefined) => iso && Number.isFinite(Date.parse(iso)) ? iso.slice(0, 10) : 'unknown';
 /** Only an exact or confirmed match identifies the product a team orders; anything else is a candidate. */
 const ordered = (line: BomLine) => Boolean(line.vendor && (line.matchStatus === 'exact' || line.matchStatus === 'confirmed'));
-const verifiedPack = (line: BomLine) => ordered(line) && line.vendor!.packSizeVerified && line.vendor!.packSize ? line.vendor!.packSize : null;
+const verifiedPack = (line: BomLine) => ordered(line) && line.vendor!.packSizeVerified && line.vendor!.packSize && !isBundle(line.vendor!.name) ? line.vendor!.packSize : null;
 const priced = (line: BomLine) => ordered(line) && line.lineTotalUsd !== null && line.packsToOrder !== null && line.vendor!.priceUsd !== null;
 /** Ordered under another row for the same SKU, which carries the packs and total. */
 const covered = (line: BomLine) => priced(line) || Boolean(line.orderedWith);
@@ -77,7 +77,9 @@ function purchaseNotes(line: BomLine, result: ScanResult) {
   const values: string[] = [];
   if (line.vendor && line.matchStatus === 'possible') values.push(`Possible match ${product(line.vendor)}: confirm it in Control Kit before ordering`);
   if (!line.vendor) values.push('No vendor product matched: add the vendor SKU to the part number in Onshape and rescan');
-  if (ordered(line) && !verifiedPack(line)) values.push('Pack size not verified, so no total');
+  if (ordered(line) && isBundle(line.vendor!.name)) values.push('A bundle of different pieces, so it is not priced per part');
+  else if (ordered(line) && !verifiedPack(line)) values.push('Pack size not verified, so no total');
+  if (line.priceCheck) values.push(`${line.priceCheck}; not priced`);
   if (ordered(line) && line.vendor!.priceUsd === null) values.push('No price, so no total');
   if (result.stats.staleVendorData && ordered(line)) values.push('Vendor data may be out of date');
   if (line.disposition === 'hardware') values.push('Fastener from stock: CAD count can be low if Replicate or patterns placed some');

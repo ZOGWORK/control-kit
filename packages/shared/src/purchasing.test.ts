@@ -33,6 +33,17 @@ describe('owner reports, 2026-10-26', () => {
     const bodies = [...placed('REV-31-1153', 1, 'robot', 'hubstudio', 'a'), ...placed('REV-31-1153', 1, 'robot', 'hubstudio', 'b'), ...placed('REV-31-1153', 2, 'robot', 'hubstudio', 'c')];
     expect(scan(bodies, () => hub).lines.find(line => line.order)?.order).toEqual({ qty: 2, lines: 3 });
   });
+  it('still adds two team bodies that happen to share a plain name', () => {
+    const screw = record('gobilda', '2800-0004-0012', 25, 3.59);
+    const bodies = [...placed('Screw', 1, 'robot', 'hardware', 'a'), ...placed('Screw', 1, 'robot', 'hardware', 'b')];
+    expect(scan(bodies, () => screw).lines.find(line => line.order)?.order).toEqual({ qty: 2, lines: 2 });
+  });
+  it('never prices a bundle, even from a scan saved before the bundle rule', () => {
+    const bundle = { ...record('rev', 'REV-45-1896', 1, 229.5), name: 'C Channel Bundle' };
+    const result = scan(placed('C Channel 408mm', 2, 'robot', 'channels'), () => bundle);
+    expect(result.lines[0].lineTotalUsd).toBeNull();
+    expect(result.stats.totalCostUsd).toBeNull();
+  });
   it('never prices three or more of a $150+ product, and says why', () => {
     const hub = record('rev', 'REV-31-1153', 1, 275);
     const result = scan(['a', 'b', 'c'].flatMap(element => placed('Expansion Hub', 1, 'robot', element)), () => hub);

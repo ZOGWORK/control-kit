@@ -1,8 +1,12 @@
 import type { BomLine, ScanResult } from './index';
+import { isBundle } from './known-products';
+import { purchasedAssemblyReason } from './classifier';
 
 const priceable = (line: BomLine) => {
   const record = line.vendor;
-  return Boolean(record && ['exact', 'confirmed'].includes(line.matchStatus) && record.packSizeVerified && Number.isInteger(record.packSize) && record.packSize! >= 1 && record.priceUsd !== null);
+  // A bundle is checked here too, not only when catalogs are read: a scan saved before the bundle rule still carries the
+  // old record with a verified pack of one.
+  return Boolean(record && ['exact', 'confirmed'].includes(line.matchStatus) && record.packSizeVerified && Number.isInteger(record.packSize) && record.packSize! >= 1 && record.priceUsd !== null && !isBundle(record.name));
 };
 
 /**
@@ -41,9 +45,10 @@ const baseName = (name: string) => name.toLowerCase().trim().replace(/\s*(?:\(\d
 function studioQuantity(bodies: BomLine[], assemblyDocumentId: string) {
   const sum = () => bodies.reduce((total, body) => total + body.qty, 0);
   if (bodies.length === 1) return sum();
-  // Bodies that all have exactly the same name are one imported model in pieces (32 bodies named REV-31-1153 are one
-  // Expansion Hub), in the team's document or not; copies a person makes get numbered names ("Screw 2").
-  const sameName = bodies.every(body => body.name.trim().toLowerCase() === bodies[0].name.trim().toLowerCase());
+  // Bodies that all have exactly the same name, and that name carries a vendor number, are one imported model in pieces
+  // (32 bodies named REV-31-1153 are one Expansion Hub), in the team's document or not. Two bodies a team named
+  // "Screw" are still two screws.
+  const sameName = bodies.every(body => body.name.trim().toLowerCase() === bodies[0].name.trim().toLowerCase()) && Boolean(purchasedAssemblyReason(bodies[0].name, null, false));
   if (!sameName && bodies[0].documentId === assemblyDocumentId) return sum();
   if (!sameName && new Set(bodies.map(body => baseName(body.name))).size !== bodies.length) return sum();
   const perParent = new Map<string, number>();
