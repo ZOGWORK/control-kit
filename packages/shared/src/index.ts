@@ -11,6 +11,7 @@ export { AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, aiCandidateRecord, aiDispositio
 export type { AiCandidate, AiDisposition, AiProvider, AiReviewItem, AiReviewLine, AiReviewRequest, AiSuggestion } from './ai-review';
 import { recalculatePurchasing } from './purchasing';
 export { batchKey, catalogReadKey, catalogVendors, clearCatalogMemoryCache, indexKey, matchCatalog, pointerKey } from './catalog-read';
+export type { MatchProgress } from './catalog-read';
 export type { CatalogReader, IndexEntry } from './catalog-read';
 export type { ControlPointAdapter, ControlPointBomPayload, ControlPointCadPart, ControlPointFile, ControlPointLine } from './control-point';
 export { checkStep, exportManifest, stepDispositions, stepFileName, wantsStep } from './step';

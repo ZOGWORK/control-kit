@@ -185,6 +185,23 @@ button.row:hover { background: var(--ck-raised); }
 .step-icon.warning { color: var(--ck-warning); background: color-mix(in srgb, var(--ck-warning) 14%, transparent); }
 /* A count the app will not price (more of an expensive product than an FTC robot uses). */
 .warn { color: var(--ck-warning); }
+/* Text for screen readers only. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+/* Scan progress: each stage in order, done in green, the current one in volt with a pulse (still under reduced motion). */
+.scan-steps { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 10px; }
+.scan-step { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 13.5px; color: var(--ck-text-muted); }
+.scan-step-icon { width: 18px; height: 18px; border-radius: 999px; display: grid; place-items: center; border: 1.5px solid var(--ck-line-strong); }
+.scan-step.done { color: var(--ck-text); }
+.scan-step.done .scan-step-icon { background: var(--ck-success); border-color: var(--ck-success); color: #052e1c; }
+.scan-step.active { color: var(--ck-text); font-weight: 500; }
+.scan-step.active .scan-step-icon { border-color: var(--ck-volt); background: var(--ck-volt-soft); box-shadow: 0 0 0 3px var(--ck-volt-soft); animation: scan-pulse 1.2s ease-in-out infinite; }
+.scan-step-detail { color: var(--ck-text-muted); font-size: 12.5px; text-align: right; }
+.scan-step.done .scan-step-detail { color: var(--ck-success); }
+.scan-step.active .scan-step-detail { color: var(--ck-volt); }
+.scan-progress [role="progressbar"] > *, .scan-progress progress { accent-color: var(--ck-volt); }
+@keyframes scan-pulse { 50% { box-shadow: 0 0 0 6px transparent; } }
+@media (prefers-reduced-motion: reduce) { .scan-step.active .scan-step-icon { animation: none; } }
+@media (max-width: 420px) { .scan-step { grid-template-columns: 18px minmax(0, 1fr); } .scan-step-detail { grid-column: 2; text-align: left; } }
 .step-icon.done { color: var(--ck-success); background: color-mix(in srgb, var(--ck-success) 14%, transparent); }
 @media (max-width: 520px) { .step { grid-template-columns: auto minmax(0, 1fr); } .step > :last-child { grid-column: 2; justify-self: start; } }
 
