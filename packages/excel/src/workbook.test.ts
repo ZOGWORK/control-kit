@@ -41,7 +41,8 @@ describe('Excel export', () => {
     expect(zip['xl/media/control-kit-logo.png']).toEqual(logo);
     expect(text(zip, 1)).toContain('<drawing r:id="rId');
     expect(strFromU8(zip['xl/styles.xml'])).toContain('FFFFC700');
-  });
+    // The first test also pays for building the workbook (about 4 s on a busy machine), past vitest's 5 s default.
+  }, 20_000);
 
   it('charges 12 screws in a verified 10-pack at $8.99 as 2 packs with a live $17.98 formula', () => {
     const buy = text(zip, 2);

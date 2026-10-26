@@ -12,6 +12,50 @@ function scan(instances: ReturnType<typeof placed>, match: (line: BomLine) => Ve
   return classifyScan(result, { teamNumber: null }, {});
 }
 
+describe('owner reports, 2026-10-26', () => {
+  const context = { documentId: 'robot', workspaceOrVersion: 'w' as const, workspaceOrVersionId: 'w1', elementId: 'asm' };
+  it('lists an Expansion Hub imported as 32 bodies named REV-31-1153 as one hub, not 32 ($8,800)', () => {
+    const hub = record('rev', 'REV-31-1153', 1, 275);
+    // From FTC 6980: a Part Studio "Expansion Hub" holding one Import feature with 32 parts, all named REV-31-1153,
+    // placed in a subassembly in the team's own document.
+    const bodies = Array.from({ length: 32 }, (_, n) => ({ id: `b${n}`, name: 'REV-31-1153', type: 'Part', documentId: 'robot', elementId: 'hubstudio', partId: `JH${n}` }));
+    const result = aggregateAssembly({ rootAssembly: { instances: [{ id: 'h', name: 'Expansion Hub', type: 'Assembly', documentId: 'robot', elementId: 'hubasm' }] },
+      subAssemblies: [{ documentId: 'robot', elementId: 'hubasm', instances: bodies }] }, context, 'Robot');
+    expect(result.lines).toHaveLength(1);
+    expect(result.lines[0]).toMatchObject({ name: 'REV-31-1153', qty: 1, purchasedAssembly: { parts: 32 } });
+    for (const line of result.lines) { line.vendor = hub; line.matchStatus = 'exact'; }
+    classifyScan(result, { teamNumber: null }, {});
+    expect(result.lines[0]).toMatchObject({ packsToOrder: 1, lineTotalUsd: 275 });
+    expect(result.stats.totalCostUsd).toBe(275);
+  });
+  it('counts same-name bodies placed unevenly as one product per place, in the team document too', () => {
+    const hub = record('rev', 'REV-31-1153', 1, 275);
+    const bodies = [...placed('REV-31-1153', 1, 'robot', 'hubstudio', 'a'), ...placed('REV-31-1153', 1, 'robot', 'hubstudio', 'b'), ...placed('REV-31-1153', 2, 'robot', 'hubstudio', 'c')];
+    expect(scan(bodies, () => hub).lines.find(line => line.order)?.order).toEqual({ qty: 2, lines: 3 });
+  });
+  it('still adds two team bodies that happen to share a plain name', () => {
+    const screw = record('gobilda', '2800-0004-0012', 25, 3.59);
+    const bodies = [...placed('Screw', 1, 'robot', 'hardware', 'a'), ...placed('Screw', 1, 'robot', 'hardware', 'b')];
+    expect(scan(bodies, () => screw).lines.find(line => line.order)?.order).toEqual({ qty: 2, lines: 2 });
+  });
+  it('never prices a bundle, even from a scan saved before the bundle rule', () => {
+    const bundle = { ...record('rev', 'REV-45-1896', 1, 229.5), name: 'C Channel Bundle' };
+    const result = scan(placed('C Channel 408mm', 2, 'robot', 'channels'), () => bundle);
+    expect(result.lines[0].lineTotalUsd).toBeNull();
+    expect(result.stats.totalCostUsd).toBeNull();
+  });
+  it('never prices three or more of a $150+ product, and says why', () => {
+    const hub = record('rev', 'REV-31-1153', 1, 275);
+    const result = scan(['a', 'b', 'c'].flatMap(element => placed('Expansion Hub', 1, 'robot', element)), () => hub);
+    const lead = result.lines.find(line => line.order)!;
+    expect(lead.lineTotalUsd).toBeNull();
+    expect(lead.priceCheck).toContain('more than an FTC robot uses');
+    expect(result.stats.totalCostUsd).toBeNull();
+    // Two hubs are normal and priced.
+    expect(scan(['a', 'b'].flatMap(element => placed('Expansion Hub', 1, 'robot', element)), () => hub).stats.totalCostUsd).toBe(550);
+  });
+});
+
 describe('purchase orders', () => {
   it('orders one SKU used on several CAD lines once: 5 + 13 + 25 screws are 2 packs of 25, not 3', () => {
     const screw = record('gobilda', '2802-0004-0012', 25, 3.59);

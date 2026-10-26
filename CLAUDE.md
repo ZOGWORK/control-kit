@@ -221,6 +221,11 @@ Audit 4 (owner request, 2026-10-25: "little to no human review needed to scan an
 - Prices are unchanged: an automatic Buy is never priced; a total still needs an exact or confirmed match with a verified pack.
 - On the saved HORS scan, Review went from 149 parts to 34, all "Team-designed part: choose how it is made".
 
+Fix (2026-10-26, owner reports from FTC 6980: an Expansion Hub priced at $8,800 and two C-channels at $918):
+- **Imported vendor models.** A Part Studio whose bodies all have exactly the same name carrying a vendor number, all placed in the same places, is one product (`aggregateAssembly`; FTC 6980's "Expansion Hub" Part Studio is one Import feature with 32 bodies named REV-31-1153). It becomes one line with `purchasedAssembly` and a `partId`, which `previewPath` draws as the whole Part Studio (`partstudios/.../shadedviews`). In `studioQuantity`, same-name bodies count once per place in any document; Audit 2 had made bodies in the team's own document add up, which turned this hub into 32.
+- **Bundles.** `isBundle` (bundle, assortment) gives a record no pack size (`withKnownPack`, `applyPackEvidence`): REV's C Channel Bundle and goBILDA's "Bundle (17 Pcs)" hold different pieces, so neither "sold individually" nor a piece count is the pack of one CAD part. Such lines stay unpriced.
+- **Sanity check.** An order of 3 or more packs of a $150+ product gets `BomLine.priceCheck` and no total; no FTC robot uses that many hubs, cameras, or controllers. It is shown on the Buy list and in the drawer.
+
 ## Tuning, tests, and release
 
 Match normalization, thresholds, and alternative ranking are in `packages/shared/src/matching.ts`; an exact SKU still forces Buy absent a manual override. Disposition rules (`decideDisposition`), word lists, and print folders are in `packages/shared/src/classifier.ts`; order quantities are in `packages/shared/src/purchasing.ts`. Vendor stale hours and cron schedule are in `wrangler.toml`; catalog crawl batch limits are in `apps/worker/src/vendor-ingest.ts`. Scan request flow, source cache, and backoff are in `apps/worker/src/scan.ts`; BOM column mapping is in `packages/shared/src/bom.ts`; STEP export job bounds (per-call request budget, 5-minute translation timeout, 20 MB file cap) are in `apps/worker/src/step-export.ts`. Change these with fixture tests and record any changed data shape here.

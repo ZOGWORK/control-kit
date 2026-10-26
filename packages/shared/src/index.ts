@@ -6,7 +6,7 @@ export type { ClassificationOverride, ClassificationOverrides, Confidence, Dispo
 export type { Attribution, LibraryMapping, LicensedImage, VendorId, VendorRecord, MatchResult } from './matching';
 export { buildControlPointPayload, CONTROL_POINT_CAD_URL, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter } from './control-point';
 export { recalculatePurchasing, updatePurchasing } from './purchasing';
-export { knownProduct, withKnownPack } from './known-products';
+export { isBundle, knownProduct, withKnownPack } from './known-products';
 export { AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, aiCandidateRecord, aiDispositions, aiReviewHash, aiReviewInstructions, aiReviewSchema, applyAiReview, buildAiReviewRequest, lineCandidates, needsAiReview, parseAiReview } from './ai-review';
 export type { AiCandidate, AiDisposition, AiProvider, AiReviewItem, AiReviewLine, AiReviewRequest, AiSuggestion } from './ai-review';
 import { recalculatePurchasing } from './purchasing';
@@ -51,7 +51,9 @@ export type BomLine = { bomLineKey: string; name: string; description: string | 
   /** On the line that carries an order: the pieces it covers across every line ordering the same SKU, and how many lines. */
   order?: { qty: number; lines: number } | null;
   /** On a line whose SKU is ordered by another line: that line's key. It carries no packs or total of its own. */
-  orderedWith?: string | null };
+  orderedWith?: string | null;
+  /** Set when an order's quantity is more than an FTC robot uses of an expensive product; the order is then not priced. */
+  priceCheck?: string | null };
 /** Why a line lacks data. Codes are stable for UI, export, and diagnostics; the user-facing text lives in `metadataIssueText`. */
 export type MetadataIssueCode = 'unresolved-subassembly' | 'unresolved-reference' | 'source-revision-unavailable' | 'not-in-bom' | 'bom-unavailable';
 export type MetadataIssue = { code: MetadataIssueCode; httpStatus: number | null };
@@ -239,6 +241,26 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
       if (!includes.includes(line.name)) kit.purchasedAssembly = { ...kit.purchasedAssembly!, includes: [...includes, line.name] };
     }
     active.delete(key);
+  }
+  // An imported vendor model is often one Part Studio whose bodies all carry the product's number (an Expansion Hub
+  // imported as 32 bodies, every one named REV-31-1153). Those bodies are one product, listed once per placement and
+  // drawn as the whole Part Studio. They fold together only when every body has the same name, that name carries a
+  // vendor number, and every body is placed in the same places; anything else stays as separate lines.
+  const studioGroups = new Map<string, BomLine[]>();
+  for (const line of active.values()) {
+    if (line.purchasedAssembly || !line.partId) continue;
+    const studio = `${line.documentId}:${line.elementId}:${line.configuration ?? ''}:${line.sourceType ?? ''}:${line.sourceId ?? ''}`;
+    studioGroups.set(studio, [...(studioGroups.get(studio) ?? []), line]);
+  }
+  const placesOf = (line: BomLine) => line.instancePaths.map(path => path.split(' > ').slice(0, -1).join(' > ')).sort().join('\n');
+  for (const bodies of studioGroups.values()) {
+    if (bodies.length < 2) continue;
+    const name = bodies[0].name.trim().toLowerCase();
+    if (!bodies.every(body => body.name.trim().toLowerCase() === name) || !purchasedAssemblyReason(bodies[0].name, null, false)) continue;
+    if (!bodies.every(body => placesOf(body) === placesOf(bodies[0]))) continue;
+    const [product, ...rest] = bodies;
+    product.purchasedAssembly = { parts: bodies.length, reason: `its ${bodies.length} bodies in one Part Studio all carry ${bodies[0].name.trim()}` };
+    for (const body of rest) active.delete(body.bomLineKey);
   }
   const lines = [...active.values()];
   const suppressedLines = [...suppressed.values()];

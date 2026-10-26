@@ -1,8 +1,12 @@
 import type { BomLine, ScanResult } from './index';
+import { isBundle } from './known-products';
+import { purchasedAssemblyReason } from './classifier';
 
 const priceable = (line: BomLine) => {
   const record = line.vendor;
-  return Boolean(record && ['exact', 'confirmed'].includes(line.matchStatus) && record.packSizeVerified && Number.isInteger(record.packSize) && record.packSize! >= 1 && record.priceUsd !== null);
+  // A bundle is checked here too, not only when catalogs are read: a scan saved before the bundle rule still carries the
+  // old record with a verified pack of one.
+  return Boolean(record && ['exact', 'confirmed'].includes(line.matchStatus) && record.packSizeVerified && Number.isInteger(record.packSize) && record.packSize! >= 1 && record.priceUsd !== null && !isBundle(record.name));
 };
 
 /**
@@ -40,8 +44,13 @@ const baseName = (name: string) => name.toLowerCase().trim().replace(/\s*(?:\(\d
  */
 function studioQuantity(bodies: BomLine[], assemblyDocumentId: string) {
   const sum = () => bodies.reduce((total, body) => total + body.qty, 0);
-  if (bodies.length === 1 || bodies[0].documentId === assemblyDocumentId) return sum();
-  if (new Set(bodies.map(body => baseName(body.name))).size !== bodies.length) return sum();
+  if (bodies.length === 1) return sum();
+  // Bodies that all have exactly the same name, and that name carries a vendor number, are one imported model in pieces
+  // (32 bodies named REV-31-1153 are one Expansion Hub), in the team's document or not. Two bodies a team named
+  // "Screw" are still two screws.
+  const sameName = bodies.every(body => body.name.trim().toLowerCase() === bodies[0].name.trim().toLowerCase()) && Boolean(purchasedAssemblyReason(bodies[0].name, null, false));
+  if (!sameName && bodies[0].documentId === assemblyDocumentId) return sum();
+  if (!sameName && new Set(bodies.map(body => baseName(body.name))).size !== bodies.length) return sum();
   const perParent = new Map<string, number>();
   for (const body of bodies) {
     const here = new Map<string, number>();
@@ -51,8 +60,11 @@ function studioQuantity(bodies: BomLine[], assemblyDocumentId: string) {
   return [...perParent.values()].reduce((total, count) => total + count, 0);
 }
 
+const SANITY_PRICE_USD = 150;
+const SANITY_PACKS = 3;
+
 export function recalculatePurchasing(result: ScanResult): ScanResult {
-  for (const line of result.lines) { line.packsToOrder = null; line.lineTotalUsd = null; line.order = null; line.orderedWith = null; }
+  for (const line of result.lines) { line.packsToOrder = null; line.lineTotalUsd = null; line.order = null; line.orderedWith = null; line.priceCheck = null; }
   const groups = new Map<string, BomLine[]>();
   for (const line of result.lines) {
     if (line.disposition !== 'buy' || !priceable(line)) continue;
@@ -74,6 +86,12 @@ export function recalculatePurchasing(result: ScanResult): ScanResult {
     lead.packsToOrder = Math.ceil(qty / record.packSize!);
     lead.lineTotalUsd = Math.round(lead.packsToOrder * record.priceUsd! * 100) / 100;
     lead.order = { qty, lines: lines.length };
+    // No FTC robot uses three or more of a $150+ product (hubs, cameras, controllers): such a count comes from how the
+    // CAD was modelled, so the order is shown but not priced until a person checks it.
+    if (record.priceUsd! >= SANITY_PRICE_USD && lead.packsToOrder >= SANITY_PACKS) {
+      lead.priceCheck = `${lead.packsToOrder} × ${record.sku} at $${record.priceUsd!.toFixed(2)} is more than an FTC robot uses; check the count in the CAD`;
+      lead.lineTotalUsd = null;
+    }
     for (const line of lines) if (line !== lead) line.orderedWith = lead.bomLineKey;
   }
   const priced = result.lines.map(line => line.lineTotalUsd).filter((price): price is number => price !== null);
