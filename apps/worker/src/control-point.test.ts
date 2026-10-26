@@ -156,6 +156,31 @@ describe('Control Point linking', () => {
       expect(cp.requests.length).toBe(asked + 1);
     } finally { vi.useRealTimers(); }
   });
+  it('pauses 30 seconds after a failed refresh, with no cached list or an expired one', async () => {
+    const cookie = await session();
+    await link(cookie);
+    cp.setFailure(503);
+    // No cached list yet: the first read asks once, then neither a plain read nor "Check again" asks within 30 seconds.
+    let asked = cp.requests.length;
+    expect(await (await call('/api/control-point/link', { cookie })).json()).toMatchObject({ linked: true, workspaces: [], stale: true });
+    expect(cp.requests.length).toBe(asked + 1);
+    await call('/api/control-point/link?refresh=1', { cookie });
+    await call('/api/control-point/link', { cookie });
+    expect(cp.requests.length).toBe(asked + 1);
+    vi.useFakeTimers({ now: Date.now() + 31_000, toFake: ['Date'] });
+    try {
+      cp.setFailure(null);
+      expect((await (await call('/api/control-point/link', { cookie })).json() as { workspaces: unknown[] }).workspaces).toHaveLength(2);
+      // An expired list: one failed read, then the cached list (marked stale) with no call for 30 seconds.
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      cp.setFailure(503);
+      asked = cp.requests.length;
+      expect(await (await call('/api/control-point/link?refresh=1', { cookie })).json()).toMatchObject({ stale: true, workspaces: [{ id: 12 }, { id: 13 }] });
+      expect(await (await call('/api/control-point/link', { cookie })).json()).toMatchObject({ stale: true, workspaces: [{ id: 12 }, { id: 13 }] });
+      await call('/api/control-point/link?refresh=1', { cookie });
+      expect(cp.requests.length).toBe(asked + 1);
+    } finally { vi.useRealTimers(); }
+  });
   it('picks only a listed workspace that can edit CAD', async () => {
     const cookie = await session();
     await link(cookie);
