@@ -1,14 +1,21 @@
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import type { Plugin } from 'vite';
 import { aggregateAssembly, classifyScan, mergeBom, wantsStep, type AssemblyDefinition, type CatalogHealth, type ScanResult } from '../../packages/shared/src/index';
 import { mockBom, mockStep } from '../worker/src/mock-onshape';
 
+/** The team's choices a saved scan already carries, so serving it keeps them as the Worker would. */
+const savedChoices = (result: ScanResult) => Object.fromEntries(result.lines.flatMap(line => line.manualClassification ? [[line.bomLineKey, line.manualClassification]] : []));
+
 /**
  * `vite --mode fixture`: a local stand-in for the Worker API, so the UI can be run and reviewed with no Onshape
  * account, secrets, or network. It serves `CK_FIXTURE` (a saved ScanResult JSON, kept out of Git) or, by default,
- * the synthetic FTC robot fixture. Choices are accepted but not stored; STEP export returns mock files.
+ * the synthetic FTC robot fixture. Choices are accepted but not stored; STEP export returns mock files. With
+ * `CK_CATALOG` set to a Worker origin, a saved scan whose vendor matching is pending is matched against that Worker's
+ * public catalogs (library mappings need a session, so they read as absent). `CK_PREVIEWS` may name a folder of part
+ * pictures saved as `{sha256(bomLineKey)}.png`.
  */
-export function fixtureApi(fixturePath?: string): Plugin {
+export function fixtureApi(fixturePath?: string, catalogOrigin?: string, previewDir?: string): Plugin {
   const load = (): ScanResult => {
     if (fixturePath) return JSON.parse(readFileSync(fixturePath, 'utf8')) as ScanResult;
     const definition = JSON.parse(readFileSync(new URL('../../fixtures/assembly-ftc-robot.json', import.meta.url), 'utf8')) as AssemblyDefinition;
@@ -35,16 +42,31 @@ export function fixtureApi(fixturePath?: string): Plugin {
         if (url.pathname === '/api/settings') { if (request.method === 'POST') settings = await body() as typeof settings; return json(settings); }
         if (url.pathname === '/api/logout') { response.statusCode = 204; return response.end(); }
         if (url.pathname === '/api/classification/override' || url.pathname === '/api/matches/decision') { await body(); return json({ saved: true }); }
+        if (url.pathname === '/api/catalog/raw' && catalogOrigin) {
+          const key = url.searchParams.get('key') ?? '';
+          if (key.startsWith('library-map:')) { response.statusCode = 404; return response.end(); }
+          const upstream = await fetch(`${catalogOrigin}/api/catalog/raw?key=${encodeURIComponent(key)}`);
+          response.statusCode = upstream.status;
+          return response.end(await upstream.text());
+        }
+        if (url.pathname === '/api/preview') {
+          const file = previewDir && `${previewDir}/${createHash('sha256').update(url.searchParams.get('line') ?? '').digest('hex')}.png`;
+          if (!file || !existsSync(file)) return json({ error: 'No saved picture for this part.' }, 404);
+          response.setHeader('content-type', 'image/png');
+          return response.end(readFileSync(file));
+        }
         if (url.pathname === '/api/scan') {
           response.setHeader('content-type', 'application/x-ndjson');
           // The same steps and counts the Worker sends, so the progress screen can be seen here.
-          const parts = result.lines.length, counts = { subassemblies: 4 };
+          // A saved scan reports what it really read; its subassembly count is not kept, so it is left out.
+          const counts = fixturePath ? {} : { subassemblies: 4 };
+          const read = { ...counts, bomRows: result.diagnostics?.bom?.rows ?? result.lines.length, cached: result.diagnostics?.cache === 'hit' };
           for (const [stage, step, current, extra] of [['Checking assembly revision…', 'revision', 0, {}], ['Reading assembly…', 'assembly', 1, {}], ["Reading Onshape's bill of materials…", 'bom', 2, counts],
-            ['Reading saved choices…', 'choices', 3, { ...counts, bomRows: parts, cached: false, parts: result.stats.totalInstances, lines: parts }]] as const) {
+            ['Reading saved choices…', 'choices', 3, { ...read, parts: result.stats.totalInstances, lines: result.lines.length }]] as const) {
             response.write(`${JSON.stringify({ type: 'progress', stage, step, current, total: 3, instances: 0, counts: extra })}\n`);
             await new Promise(resolve => setTimeout(resolve, Number(process.env.CK_FIXTURE_DELAY ?? 250)));
           }
-          return response.end(`${JSON.stringify({ type: 'result', result: classifyScan(result, settings, {}) })}\n`);
+          return response.end(`${JSON.stringify({ type: 'result', result: classifyScan(result, settings, savedChoices(result)) })}\n`);
         }
         const job = () => ({ jobId: '00000000-0000-4000-8000-0000000000bb', done: true, assemblyName: result.assemblyName, documentName: result.documentName, revision: null, scannedAt: result.scannedAt,
           parts: result.lines.filter(wantsStep).map((line, index) => ({ lineKey: line.bomLineKey, name: line.name, qty: line.qty, disposition: line.disposition, partId: line.partId, configuration: line.configuration,

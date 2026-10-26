@@ -6,6 +6,11 @@ import { Button } from './bits';
 import type { ControlKit } from './useControlKit';
 import { ago, buyList, catalogsComplete, catalogState, catalogStateText, money, staleCatalogs, vendorLabel, type Summary, type View } from './model';
 
+/** "1 part", "3 parts". */
+const parts = (count: number) => `${count} ${count === 1 ? 'part' : 'parts'}`;
+/** Lowercases only the first letter, so names like Onshape and BOM keep their case mid-sentence. */
+const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
+
 type Step = { key: string; icon: ReactNode; tone: 'attention' | 'warning' | 'done' | ''; title: string; detail: string; action?: ReactNode };
 
 export function Overview({ kit, summary, go, now }: { kit: ControlKit; summary: Summary; go: (view: View) => void; now: number | null }) {
@@ -20,18 +25,18 @@ export function Overview({ kit, summary, go, now }: { kit: ControlKit; summary: 
   const makeParts = (['print', 'cnc', 'cut-2d', 'fabricate'] as const).filter(key => summary.make[key]).map(key => `${{ print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'fabricate' }[key]} ${summary.make[key]}`);
 
   const steps: Step[] = [];
-  if (summary.review) steps.push({ key: 'review', icon: <ListChecks aria-hidden />, tone: 'attention', title: `${summary.review} parts need a decision`,
+  if (summary.review) steps.push({ key: 'review', icon: <ListChecks aria-hidden />, tone: 'attention', title: `${parts(summary.review)} ${summary.review === 1 ? 'needs' : 'need'} a decision`,
     detail: summary.possibleMatches ? `${summary.possibleMatches} have a possible vendor match to confirm. The rest need you to choose how they're made.` : "Choose whether each part is bought, printed, or fabricated. Control Kit suggests one where it can.",
     action: <Button size="sm" onClick={() => go('review')}>Review parts</Button> });
   if (notReady.length) steps.push({ key: 'catalog', icon: <Store aria-hidden />, tone: 'warning', title: notReady.length === health!.vendors.length ? 'Vendor catalogs are still loading' : 'Some vendor catalogs are still loading',
     detail: `${notReady.map(vendor => `${vendorLabel[vendor.vendorId]} (${catalogStateText(vendor).toLowerCase()})`).join(', ')}. Parts from these vendors can't be matched or priced yet; rescan later to pick them up.` });
   if (stale.length || (!health && result.stats.staleVendorData)) steps.push({ key: 'stale', icon: <Store aria-hidden />, tone: 'warning', title: 'Some vendor prices may be out of date',
     detail: stale.length ? `${stale.map(vendor => `${vendorLabel[vendor.vendorId]} (${catalogStateText(vendor).toLowerCase()})`).join(', ')}. Check prices and stock on the vendor's site before ordering.` : "Check prices and stock on the vendor's site before ordering." });
-  if (needsSku) steps.push({ key: 'sku', icon: <Tag aria-hidden />, tone: 'warning', title: `${needsSku} parts to buy have no vendor match`,
-    detail: 'Add the vendor SKU to the part number in Onshape, or confirm a match once catalogs finish loading.', action: <Button variant="secondary" size="sm" onClick={() => go('buy')}>Open buy list</Button> });
-  if (summary.dataIssues && topIssue) steps.push({ key: 'issues', icon: <AlertTriangle aria-hidden />, tone: 'warning', title: `${summary.dataIssues} parts are missing data`,
-    detail: `Most often: ${metadataIssueText[topIssue[0] as keyof typeof metadataIssueText].toLowerCase()} (${topIssue[1]}).`, action: <Button variant="secondary" size="sm" onClick={() => go('parts')}>See parts</Button> });
-  if (summary.make.total) steps.push({ key: 'make', icon: <Wrench aria-hidden />, tone: '', title: `${summary.make.total} parts to make`,
+  if (needsSku) steps.push({ key: 'sku', icon: <Tag aria-hidden />, tone: 'warning', title: `${parts(needsSku)} to buy ${needsSku === 1 ? 'has' : 'have'} no vendor match`,
+    detail: notReady.length ? 'Add the vendor SKU to the part number in Onshape, or confirm a match once catalogs finish loading.' : 'Add the vendor SKU to the part number in Onshape, then rescan.', action: <Button variant="secondary" size="sm" onClick={() => go('buy')}>Open buy list</Button> });
+  if (summary.dataIssues && topIssue) steps.push({ key: 'issues', icon: <AlertTriangle aria-hidden />, tone: 'warning', title: `${parts(summary.dataIssues)} ${summary.dataIssues === 1 ? 'is' : 'are'} missing data`,
+    detail: `${summary.dataIssues === 1 ? 'Reason' : 'Most often'}: ${lowerFirst(metadataIssueText[topIssue[0] as keyof typeof metadataIssueText])}${summary.dataIssues === 1 ? '' : ` (${topIssue[1]})`}.`, action: <Button variant="secondary" size="sm" onClick={() => go('parts')}>See parts</Button> });
+  if (summary.make.total) steps.push({ key: 'make', icon: <Wrench aria-hidden />, tone: '', title: `${parts(summary.make.total)} to make`,
     detail: `${makeParts.join(', ')}. Download STEP files for printing and CAM.`, action: <Button variant="secondary" size="sm" onClick={() => go('make')}>Open make list</Button> });
   if (!steps.length) steps.push({ key: 'done', icon: <CheckCircle2 aria-hidden />, tone: 'done', title: 'Nothing needs attention', detail: 'Every part has a decision and every vendor catalog is ready and current.' });
 

@@ -207,3 +207,16 @@ test('the narrow Onshape panel has no sideways scroll and keeps every section re
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
 });
+
+test('the site explains and installs Control Kit outside Onshape, while a framed panel without context keeps its hint', async ({ page }) => {
+  await page.route('**/api/session', route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ connected: false }) }));
+  await page.goto('/');
+  await expect(page.getByRole('heading', { level: 1, name: /bill of materials, straight from Onshape/ })).toBeVisible();
+  await page.getByRole('link', { name: 'How to install' }).click();
+  await expect(page.getByRole('heading', { name: 'Install' })).toBeInViewport();
+  for (const image of await page.locator('img.landing-shot').all()) await expect(image).toHaveJSProperty('complete', true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+  await page.route('**/host', route => route.fulfill({ contentType: 'text/html', body: '<iframe title="Onshape right panel" src="/"></iframe>' }));
+  await page.goto('/host');
+  await expect(page.frameLocator('iframe[title="Onshape right panel"]').getByRole('heading', { level: 1, name: 'Open Control Kit from an assembly' })).toBeVisible();
+});

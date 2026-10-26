@@ -189,13 +189,14 @@ button.row:hover { background: var(--ck-raised); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 /* Scan progress: each stage in order, done in green, the current one in volt with a pulse (still under reduced motion). */
 .scan-steps { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 10px; }
-.scan-step { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 13.5px; color: var(--ck-text-muted); }
+/* The label keeps its width; a long detail wraps instead of squeezing it. */
+.scan-step { display: grid; grid-template-columns: 18px max-content minmax(0, 1fr); align-items: center; gap: 10px; font-size: 13.5px; color: var(--ck-text-muted); }
 .scan-step-icon { width: 18px; height: 18px; border-radius: 999px; display: grid; place-items: center; border: 1.5px solid var(--ck-line-strong); }
 .scan-step.done { color: var(--ck-text); }
 .scan-step.done .scan-step-icon { background: var(--ck-success); border-color: var(--ck-success); color: #052e1c; }
 .scan-step.active { color: var(--ck-text); font-weight: 500; }
 .scan-step.active .scan-step-icon { border-color: var(--ck-volt); background: var(--ck-volt-soft); box-shadow: 0 0 0 3px var(--ck-volt-soft); animation: scan-pulse 1.2s ease-in-out infinite; }
-.scan-step-detail { color: var(--ck-text-muted); font-size: 12.5px; text-align: right; }
+.scan-step-detail { color: var(--ck-text-muted); font-size: 12.5px; text-align: right; overflow-wrap: anywhere; }
 .scan-step.done .scan-step-detail { color: var(--ck-success); }
 .scan-step.active .scan-step-detail { color: var(--ck-volt); }
 .scan-progress [role="progressbar"] > *, .scan-progress progress { accent-color: var(--ck-volt); }
@@ -267,3 +268,35 @@ button.row:hover { background: var(--ck-raised); }
 .keys-hint { padding: 8px 16px 0; }
 .keys-hint kbd { font-family: var(--font-mono, monospace); font-size: 11px; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; margin: 0 2px; }
 @media (max-width: 520px) { .keys-hint { display: none; } }
+
+/* Landing page for visitors outside Onshape. */
+.landing { width: min(1120px, 100%); margin: 0 auto; padding: 48px 16px 32px; display: grid; gap: 72px; }
+.landing-hero { display: grid; gap: 18px; justify-items: start; }
+.landing .brand { display: flex; align-items: center; gap: 10px; font-family: var(--ck-display); font-weight: 600; font-size: 17px; }
+.landing h1 { font: 600 clamp(2rem, 5vw, 3.25rem)/1.08 var(--ck-display); letter-spacing: -0.03em; max-width: 18ch; }
+.landing h2 { font: 600 1.5rem/1.2 var(--ck-display); letter-spacing: -0.02em; }
+.landing-lead { font-size: 1.125rem; line-height: 1.55; color: var(--ck-text-muted); max-width: 56ch; }
+.landing-cta { display: inline-flex; align-items: center; height: 40px; padding: 0 18px; border-radius: 10px; background: var(--ck-volt); color: var(--ck-volt-ink); font-weight: 600; text-decoration: none; }
+.landing-cta:hover { background: var(--ck-volt-hover); }
+.landing-link { display: inline-flex; align-items: center; height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--ck-line-strong); color: var(--ck-text); text-decoration: none; }
+.landing-link:hover { background: var(--ck-muted); }
+.landing-shot { width: 100%; height: auto; border-radius: 14px; border: 1px solid var(--ck-line-strong); background: var(--ck-card); }
+.landing-shot.narrow { width: min(320px, 100%); justify-self: center; }
+.landing-features { display: grid; gap: 56px; }
+.landing-feature { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 32px; align-items: center; }
+.landing-feature:not(:has(img)) { grid-template-columns: minmax(0, 1fr); max-width: 64ch; }
+.landing-feature.flip { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+.landing-feature.flip .landing-copy { order: 2; }
+.landing-copy { display: grid; gap: 10px; align-content: start; }
+.landing-copy p, .landing-steps, .landing-list { color: var(--ck-text-muted); line-height: 1.6; }
+.landing-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; background: var(--ck-volt-soft); color: var(--ck-volt); }
+.landing-icon svg { width: 18px; height: 18px; }
+.landing-section { display: grid; gap: 18px; }
+.landing-steps, .landing-list { display: grid; gap: 12px; padding-left: 20px; max-width: 72ch; }
+.landing-steps strong { color: var(--ck-text); font-weight: 500; }
+.landing-footer { border-top: 1px solid var(--ck-line); padding-top: 20px; }
+@media (max-width: 760px) {
+  .landing { padding-top: 32px; gap: 48px; }
+  .landing-feature, .landing-feature.flip { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .landing-feature.flip .landing-copy { order: 0; }
+}
