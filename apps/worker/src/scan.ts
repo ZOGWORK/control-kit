@@ -155,10 +155,13 @@ export function scanAssembly(request: Request, context: AssemblyContext, version
         if (!request.signal.aborted && !(error instanceof ScanStop)) {
           if (error instanceof SessionExpiredError) emit({ type: 'session-expired' });
           else {
-            console.error('Scan failed', error instanceof Error ? error.name : 'unknown');
-            emit({ type: 'error', message: error instanceof TypeError
+            // The stack's first frames are code locations only (no part data), so a failure can be traced from the log.
+            console.error('Scan failed', error instanceof Error ? `${error.name}: ${error.message}\n${error.stack?.split('\n').slice(1, 4).join('\n') ?? ''}` : 'unknown');
+            // Only a request to Onshape that failed is "could not reach Onshape"; anything else is Control Kit's own error.
+            const unreachable = error instanceof TypeError && Object.keys(requests?.summary().errors ?? {}).length > 0;
+            emit({ type: 'error', message: unreachable
               ? 'Could not reach Onshape. Check your connection and retry.'
-              : 'The scan stopped unexpectedly. Try again.' });
+              : 'Control Kit hit an error reading this assembly. Try again; if it happens again, tell us which assembly.' });
           }
         }
       } finally {

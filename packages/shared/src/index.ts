@@ -23,7 +23,7 @@ import type { Confidence, Disposition, DispositionSource, Provenance } from './c
 import type { AiSuggestion } from './ai-review';
 
 export type AssemblyContext = { documentId: string; workspaceOrVersion: 'w' | 'v' | 'm'; workspaceOrVersionId: string; elementId: string };
-export type AssemblyInstance = { id: string; name: string; type: string; documentId: string; elementId: string; partId?: string; partNumber?: string; configuration?: string; fullConfiguration?: string; documentMicroversion?: string; documentVersion?: string; versionId?: string; workspaceId?: string; suppressed?: boolean; isSuppressed?: boolean; isStandardContent?: boolean;
+export type AssemblyInstance = { id: string; name: string; type?: string; documentId: string; elementId: string; partId?: string; partNumber?: string; configuration?: string; fullConfiguration?: string; documentMicroversion?: string; documentVersion?: string; versionId?: string; workspaceId?: string; suppressed?: boolean; isSuppressed?: boolean; isStandardContent?: boolean;
   /** Onshape marks instances whose linked source cannot be resolved with a non-OK `status` or an `errorStatus`. */
   status?: string; errorStatus?: string };
 export type AssemblyDefinition = { rootAssembly: { name?: string; documentMicroversion?: string; instances?: AssemblyInstance[] }; subAssemblies?: Array<{ documentId: string; elementId: string; configuration?: string; documentMicroversion?: string; instances?: AssemblyInstance[] }>; parts?: Array<{ documentId: string; elementId: string; partId: string; name?: string }> };
@@ -123,6 +123,9 @@ export function applyMatchDecision(result: ScanResult, key: string, decision: 'c
   return recalculatePurchasing(next);
 }
 
+/** Whether an instance is a subassembly. Onshape omits `type` for an instance it cannot resolve, which is then a part. */
+const isAssembly = (instance: Pick<AssemblyInstance, 'type'>) => (instance.type ?? '').toLowerCase() === 'assembly';
+
 /** An instance whose linked source Onshape cannot resolve: any `errorStatus`, or a `status` other than OK. */
 export const unresolvedReference = (instance: AssemblyInstance) => Boolean(instance.errorStatus) || (instance.status !== undefined && instance.status.toUpperCase() !== 'OK');
 
@@ -153,14 +156,14 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
     bucket.set(key, { bomLineKey: key, name, description: null, documentId: instance.documentId, elementId: instance.elementId, partId, partNumber: instance.partNumber ?? null, configuration, sourceType, sourceId, qty: 1, packsToOrder: null, lineTotalUsd: null, suppressed: isSuppressed,
       instancePaths: [path.join(' > ')], massKg: null, material: null, missingMetadataReason: null, vendor: null, alternatives: [], matchConfidence: 0, matchStatus: 'unmatched', matchReasons: [], classification: 'unknown', classificationScore: 0,
       classificationReasons: [], manualClassification: null, disposition: 'review', dispositionSource: 'none', dispositionConfidence: 'low', dispositionEvidence: [], reviewReason: null, suggestedDisposition: null, provenance: 'unknown', unresolvedSubassembly, purchasedAssembly, isStandardContent: instance.isStandardContent ?? false, exportSource,
-      metadataIssue: unresolvedSubassembly ? { code: 'unresolved-subassembly', httpStatus: null } : unresolvedReference(instance) ? { code: 'unresolved-reference', httpStatus: null } : null, partStudioUrl: source ? `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}/${source}/e/${encodeURIComponent(instance.elementId)}` : `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}` });
+      metadataIssue: unresolvedSubassembly ? { code: 'unresolved-subassembly', httpStatus: null } : unresolvedReference(instance) ? { code: 'unresolved-reference', httpStatus: null } : null, partStudioUrl: !instance.documentId ? '' : source ? `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}/${source}/e/${encodeURIComponent(instance.elementId)}` : `https://cad.onshape.com/documents/${encodeURIComponent(instance.documentId)}` });
     return bucket.get(key)!;
   }
   /** Part Studios (document:element) whose parts make up a subassembly, nested ones included. */
   function studiosInside(instances: AssemblyInstance[], ancestry: Set<string>, into = new Set<string>()): Set<string> {
     for (const instance of instances) {
       // Configured Part Studios build different products per configuration, so the configuration is part of the source.
-      if (instance.type.toLowerCase() !== 'assembly') { into.add(`${instance.documentId}:${instance.elementId}:${instance.fullConfiguration ?? instance.configuration ?? ''}`); continue; }
+      if (!isAssembly(instance)) { into.add(`${instance.documentId}:${instance.elementId}:${instance.fullConfiguration ?? instance.configuration ?? ''}`); continue; }
       const key = subassemblyKey(instance);
       const child = definitions.get(key);
       if (child?.instances && !ancestry.has(key)) studiosInside(child.instances, new Set([...ancestry, key]), into);
@@ -172,7 +175,7 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
   /** Parts inside a subassembly, counting nested subassemblies' parts. */
   function countParts(instances: AssemblyInstance[], ancestry: Set<string>): number {
     return instances.reduce((total, instance) => {
-      if (instance.type.toLowerCase() !== 'assembly') return total + 1;
+      if (!isAssembly(instance)) return total + 1;
       const key = subassemblyKey(instance);
       const child = definitions.get(key);
       return total + (child?.instances && !ancestry.has(key) ? countParts(child.instances, new Set([...ancestry, key])) : 0);
@@ -185,7 +188,7 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
       // Suppressed bodies are not part of the product as placed.
       if (instance.suppressed || instance.isSuppressed) continue;
       into.add(partNames.get(`${instance.documentId}:${instance.elementId}:${instance.partId}`) ?? instance.name.replace(/\s*<\d+>$/, ''));
-      if (instance.type.toLowerCase() !== 'assembly') continue;
+      if (!isAssembly(instance)) continue;
       const key = subassemblyKey(instance);
       const child = definitions.get(key);
       if (child?.instances && !ancestry.has(key)) namesInside(child.instances, new Set([...ancestry, key]), into);
@@ -195,7 +198,7 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
   /** True when a subassembly somewhere inside carries a vendor part number in its own name. */
   function containsVendorProduct(instances: AssemblyInstance[], ancestry: Set<string>): boolean {
     return instances.some(instance => {
-      if (instance.type.toLowerCase() !== 'assembly') return false;
+      if (!isAssembly(instance)) return false;
       if (purchasedAssemblyReason(instance.name.replace(/\s*<\d+>$/, ''), instance.partNumber, false)) return true;
       const key = subassemblyKey(instance);
       const child = definitions.get(key);
@@ -206,7 +209,14 @@ export function aggregateAssembly(definition: AssemblyDefinition, context: Assem
     for (const instance of instances) {
       const childPath = [...path, instance.name];
       const isSuppressed = inheritedSuppression || Boolean(instance.suppressed || instance.isSuppressed);
-      if (instance.type.toLowerCase() !== 'assembly') { add(instance, childPath, isSuppressed); continue; }
+      // Onshape sends only an id and a name for an instance whose source it cannot resolve (a linked document that was
+      // deleted or is not shared with this person). It is still part of the robot, so it is listed by name, flagged as
+      // unresolved; its name can still match a product ("Control Hub (REV)").
+      if (!instance.documentId || !instance.elementId) {
+        add({ ...instance, type: 'Part', documentId: '', elementId: '', partId: `unresolved:${(instance.name ?? '').replace(/\s*<\d+>$/, '')}`, status: 'UNRESOLVED' }, childPath, isSuppressed);
+        continue;
+      }
+      if (!isAssembly(instance)) { add(instance, childPath, isSuppressed); continue; }
       const key = subassemblyKey(instance);
       const child = definitions.get(key);
       let reason = purchasedAssemblyReason(instance.name.replace(/\s*<\d+>$/, ''), instance.partNumber, instance.documentId !== context.documentId);

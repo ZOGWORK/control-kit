@@ -6,6 +6,16 @@ const context = { documentId: 'doc1', workspaceOrVersion: 'w' as const, workspac
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../../fixtures/assembly-${name}.json`, import.meta.url), 'utf8')) as AssemblyDefinition;
 
 describe('assembly traversal and aggregation', () => {
+  it('lists an instance Onshape cannot resolve (only an id and a name) instead of failing the scan', () => {
+    // From the owner's scan of 2026-10-26: two linked REV hubs came back with no type and no document.
+    const result = aggregateAssembly({ rootAssembly: { instances: [
+      { id: 'h1', name: 'Control Hub (REV) <1>' } as never,
+      { id: 'p1', name: 'Plate', type: 'Part', documentId: 'doc1', elementId: 'e1', partId: 'p' },
+    ] } }, context, 'Robot');
+    const hub = result.lines.find(line => line.name === 'Control Hub (REV)')!;
+    expect(hub).toMatchObject({ qty: 1, metadataIssue: { code: 'unresolved-reference' }, partStudioUrl: '' });
+    expect(result.lines).toHaveLength(2);
+  });
   it('recurses through two module occurrences and excludes suppressed parts from active totals', () => {
     const result = aggregateAssembly(fixture('simple'), context, 'Simple FTC Assembly');
     expect(result.stats.totalInstances).toBe(11);
