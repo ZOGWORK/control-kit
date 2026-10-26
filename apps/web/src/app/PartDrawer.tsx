@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { dispositions, dispositionLabel, type BomLine } from '@control-kit/shared';
 import { Alert } from '../components/arc/alert/alert';
-import { Button, Thumbnail } from './bits';
+import { Button, DispositionChip, LineCost, StockNote, Thumbnail } from './bits';
 import { Drawer, DrawerContent, useDrawerItem } from '../components/arc/drawer/drawer';
 import type { ControlKit } from './useControlKit';
 import { money, vendorLabel, vendorLookup } from './model';
@@ -65,6 +65,13 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
   const vendor = line.vendor;
   return <div className="stack">
     <PartPicture kit={kit} line={line} />
+    {/* What this part is at a glance: how it is obtained, its match, its cost, its stock. */}
+    <div className="drawer-status">
+      <DispositionChip line={line} />
+      {vendor && <span className={`match-pill ${line.matchStatus}`}>{matchLabel[line.matchStatus]}</span>}
+      {vendor && <StockNote stock={vendor.stock} />}
+      <span className="drawer-cost"><LineCost line={line} /></span>
+    </div>
     {line.metadataIssue && <Alert tone="warning" title={line.missingMetadataReason ?? 'Missing data'} />}
     {line.purchasedAssembly && <p className="small">Listed as one product because {line.purchasedAssembly.reason}. Its {line.purchasedAssembly.parts} internal part{line.purchasedAssembly.parts === 1 ? '' : 's'} (gearbox, bearings, screws inside it) are not listed separately.{line.purchasedAssembly.includes?.length ? ` It also includes ${line.purchasedAssembly.includes.join(', ')}, placed beside it from the same imported Part Studio.` : ''}</p>}
 

@@ -175,6 +175,57 @@ export function composition(summary: Summary): Share[] {
   return shares.filter(share => share.count);
 }
 
+/**
+ * What a rescan changed. Lines are compared by the part itself (document, Part Studio, part, configuration), not by
+ * the line key, whose revision changes on every edit.
+ */
+export type ScanChanges = { added: BomLine[]; removed: BomLine[]; quantity: number; decided: number; retyped: number; newlyPriced: number; stock: number; subtotalDelta: number | null };
+// A product listed as one unit (a purchased subassembly) has no part id; its document, element, and configuration
+// already name it, so a rename in Onshape is not a removed part and an added one. Only a line with nothing else to go
+// on (an unresolved instance) falls back to its name.
+const partOf = (line: BomLine) => `${line.documentId}:${line.elementId}:${line.partId ?? (line.purchasedAssembly ? '(assembly)' : line.name)}:${line.configuration ?? ''}`;
+/** A part as a whole: an assembly can hold one part at several revisions, each its own line, so they are added up. */
+type Part = { line: BomLine; qty: number; dispositions: string; priced: boolean; stock: string };
+function parts(result: ScanResult) {
+  const map = new Map<string, Part>();
+  for (const line of result.lines) {
+    const part = map.get(partOf(line));
+    // One revision carries the order's total and the others are `orderedWith` it, so a part is priced when all are covered.
+    if (!part) { map.set(partOf(line), { line, qty: line.qty, dispositions: line.disposition, priced: covered(line), stock: line.vendor?.stock ?? '' }); continue; }
+    part.qty += line.qty;
+    part.dispositions = [...new Set([...part.dispositions.split(','), line.disposition])].sort().join(',');
+    part.priced &&= covered(line);
+    part.stock = [...new Set([...part.stock.split(','), line.vendor?.stock ?? ''])].sort().join(',');
+  }
+  return map;
+}
+export function scanChanges(before: ScanResult, after: ScanResult): ScanChanges {
+  const [old, now] = [parts(before), parts(after)];
+  const kept = [...now].filter(([key]) => old.has(key)).map(([key, part]) => [part, old.get(key)!] as const);
+  const total = (result: ScanResult) => summarize(result).subtotal;
+  const [was, is] = [total(before), total(after)];
+  return {
+    added: [...now].filter(([key]) => !old.has(key)).map(([, part]) => part.line),
+    removed: [...old].filter(([key]) => !now.has(key)).map(([, part]) => part.line),
+    quantity: kept.filter(([part, earlier]) => part.qty !== earlier.qty).length,
+    decided: kept.filter(([part, earlier]) => earlier.dispositions === 'review' && part.dispositions !== 'review').length,
+    // How a decided part is obtained changed (CNC to 3D print, Buy to Fastener), which may change nothing else.
+    retyped: kept.filter(([part, earlier]) => earlier.dispositions !== 'review' && part.dispositions !== earlier.dispositions).length,
+    newlyPriced: kept.filter(([part, earlier]) => part.priced && !earlier.priced).length,
+    // In stock to out of stock (or back) changes what to order even when nothing else does.
+    stock: kept.filter(([part, earlier]) => part.stock !== earlier.stock && part.line.vendor && earlier.line.vendor).length,
+    subtotalDelta: was === null && is === null ? null : Math.round(((is ?? 0) - (was ?? 0)) * 100) / 100,
+  };
+}
+export const hasChanges = (changes: ScanChanges) => Boolean(changes.added.length || changes.removed.length || changes.quantity || changes.decided || changes.retyped || changes.newlyPriced || changes.stock || changes.subtotalDelta);
+
+/** Overview search: parts whose name, part number, or SKU contain the text, best (name starts with it) first. */
+export function findParts(result: ScanResult, query: string, count = 6) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  return filterParts(result, 'all', needle, 'name').sort((a, b) => Number(!a.name.toLowerCase().startsWith(needle)) - Number(!b.name.toLowerCase().startsWith(needle))).slice(0, count);
+}
+
 /** "4 minutes ago", for scan and catalog times. Never used in the first render, which has no clock yet. */
 export function ago(iso: string, now: number) {
   const minutes = Math.round((now - Date.parse(iso)) / 60000);

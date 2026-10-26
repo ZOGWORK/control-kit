@@ -82,8 +82,8 @@ a { color: inherit; }
 .num { font-family: var(--ck-mono); font-variant-numeric: tabular-nums; }
 .muted { color: var(--ck-text-muted); }
 .small { font-size: 12px; }
-.link { color: var(--ck-volt); text-decoration: none; }
-.link:hover { text-decoration: underline; }
+.link { color: var(--ck-text); text-decoration: underline; text-decoration-color: var(--ck-line-strong); text-underline-offset: 3px; }
+.link:hover { text-decoration-color: currentColor; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* ---------- Shell ---------- */
@@ -337,6 +337,52 @@ button.row:hover { background: var(--ck-raised); }
 .catalog-strip summary::-webkit-details-marker { display: none; }
 .catalog-strip .chevron { margin-left: auto; color: var(--ck-text-muted); transition: transform 0.15s; }
 .catalog-strip[open] .chevron { transform: rotate(180deg); }
+
+/* Overview: find a part, and what the last rescan changed. */
+.find-part { position: relative; }
+.find-field { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--ck-line-strong); background: var(--ck-card); color: var(--ck-text-muted); }
+.find-field:focus-within { border-color: var(--ck-volt); }
+.find-field input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--ck-text); font: 14px var(--ck-sans); }
+.find-results { position: absolute; z-index: 6; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 4px; list-style: none; box-shadow: 0 12px 32px rgb(0 0 0 / 0.45); }
+.find-results button { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 10px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.find-results button:hover, .find-results button:focus-visible { background: var(--ck-muted); }
+.find-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-empty { padding: 8px 10px; }
+.changes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.changes svg { color: var(--ck-buy); }
+.changes strong { font-weight: 500; }
+.changes-card { padding: 12px 16px; display: grid; gap: 4px; box-shadow: inset 3px 0 0 var(--ck-buy); }
+.changes-names { white-space: pre-wrap; }
+
+/* Section heads: an icon in the section's colour, so each list says what it is. */
+.section-title { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.section-icon { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 10px; background: var(--ck-muted); color: var(--ck-text-muted); }
+.section-icon svg { width: 18px; height: 18px; }
+.section-buy .section-icon { color: var(--ck-buy); background: color-mix(in srgb, var(--ck-buy) 14%, transparent); }
+.section-make .section-icon { color: var(--ck-make); background: color-mix(in srgb, var(--ck-make) 14%, transparent); }
+.section-attention .section-icon { color: var(--ck-attention); background: color-mix(in srgb, var(--ck-attention) 14%, transparent); }
+.section-done .section-icon { color: var(--ck-done); background: color-mix(in srgb, var(--ck-done) 14%, transparent); }
+.section-done h2 { color: var(--ck-done); }
+/* Panels that belong to one colour job carry it as a thin top edge. */
+.panel.tone-buy { box-shadow: inset 0 2px 0 var(--ck-buy); }
+.panel.tone-make { box-shadow: inset 0 2px 0 var(--ck-make); }
+.panel.tone-attention { box-shadow: inset 0 2px 0 var(--ck-attention); }
+.panel-head h2 .dot { vertical-align: middle; margin-right: 4px; }
+.group-total { font-size: 1rem; font-weight: 600; color: var(--ck-done); }
+.attention-text { color: var(--ck-attention); }
+.stock { font-weight: 500; }
+.stock.out { color: var(--ck-blocked); }
+.stock.low { color: var(--ck-attention); }
+/* Buy list summary, matching the Overview money card. */
+.buy-summary { padding: 16px; display: grid; gap: 10px; }
+.figures-row { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; color: var(--text-secondary); }
+.figures-row .num { color: inherit; font-weight: 600; }
+/* Part drawer: status at a glance under the picture. */
+.drawer-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.drawer-cost { margin-left: auto; font-weight: 600; }
+.match-pill { padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--ck-line); color: var(--text-secondary); }
+.match-pill.exact, .match-pill.confirmed { color: var(--ck-done); border-color: color-mix(in srgb, var(--ck-done) 35%, transparent); }
+.match-pill.possible { color: var(--ck-attention); border-color: color-mix(in srgb, var(--ck-attention) 35%, transparent); }
 
 /* Toolbar above lists. */
 .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }

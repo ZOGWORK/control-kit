@@ -1,6 +1,6 @@
-import { Download, ExternalLink } from 'lucide-react';
+import { Download, ExternalLink, Wrench } from 'lucide-react';
 import { Alert } from '../components/arc/alert/alert';
-import { Button } from './bits';
+import { Button, SectionHead } from './bits';
 import { EmptyState } from '../components/arc/empty-state/empty-state';
 import { Progress } from '../components/arc/progress/progress';
 import type { ControlKit } from './useControlKit';
@@ -15,9 +15,9 @@ export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) =
   if (!total) return <section className="panel"><EmptyState title="Nothing to make yet" description="Parts appear here when they are marked 3D print, CNC, 2D cut, or other fabrication. Name tags like (3D PRINT) or a print material set this automatically."
     action={<Button size="sm" onClick={() => go('review')}>Review parts</Button>} /></section>;
   return <>
+    <SectionHead icon={<Wrench />} tone="make" title="Make">{total} parts the team prints or fabricates. STEP files come straight from Onshape, one per part, with a manifest of sources and quantities.</SectionHead>
     {/* "Download build pack" lands here while the workbook builds, so its failure has to show here too. */}
     {kit.excel === 'failed' && <Alert tone="warning" title="The Excel file could not be built">The STEP files below are unaffected. <Button size="sm" variant="ghost" onClick={() => void kit.downloadExcel()}>Try again</Button><Button size="sm" variant="ghost" onClick={() => void kit.downloadCsv()}>Download CSV</Button></Alert>}
-    <div className="section-head"><div><h2>Make</h2><p>{total} parts to print or fabricate. STEP files come straight from Onshape, one per part, with a manifest of sources and quantities.</p></div></div>
 
     <section className="panel" aria-labelledby="step-export">
       <div className="panel-head">
@@ -38,8 +38,8 @@ export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) =
       </div>}
     </section>
 
-    {groups.map(group => <section key={group.disposition} className="panel" aria-label={group.label}>
-      <div className="panel-head"><div><h2>{group.label}</h2><p>{group.lines.length} part{group.lines.length === 1 ? '' : 's'}, {group.lines.reduce((sum, line) => sum + line.qty, 0)} pieces</p></div></div>
+    {groups.map(group => <section key={group.disposition} className="panel tone-make" aria-label={group.label}>
+      <div className="panel-head"><div><h2><span className="dot make" aria-hidden /> {group.label}</h2><p>{group.lines.length} part{group.lines.length === 1 ? '' : 's'}, {group.lines.reduce((sum, line) => sum + line.qty, 0)} pieces</p></div></div>
       <div className="rows">{group.lines.map(line => <div key={line.bomLineKey} className="row">
         <div className="row-main">
           <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><span>{line.name}</span></button>

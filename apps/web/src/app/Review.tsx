@@ -4,7 +4,8 @@ import SegmentedControl from '../components/arc/segmented-control/segmented-cont
 import type { ControlKit } from './useControlKit';
 import { aiCandidateRecord, needsAiReview, type BomLine } from '@control-kit/shared';
 import { reviewQueue, shortLabel, vendorLabel, type QueueKind } from './model';
-import { Button, PartMeta, Thumbnail } from './bits';
+import { CheckCircle2, ListChecks } from 'lucide-react';
+import { Button, PartMeta, SectionHead, Thumbnail } from './bits';
 
 type Filter = 'all' | QueueKind | 'ai';
 const page = 25;
@@ -76,12 +77,12 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
 
   const uncertain = kit.result!.lines.filter(needsAiReview).length;
   const aiButton = kit.ai.enabled && uncertain > 0 && <Button size="sm" variant="secondary" loading={kit.ai.running} disabled={!kit.result!.scanId || kit.result!.vendorMatching === 'pending'} onClick={() => void kit.runAiReview()}>Recheck {uncertain} with AI</Button>;
-  if (!queue.length) return <section className="panel"><EmptyState title="Nothing to review" description="Every part has a decision. New or changed parts show up here after a rescan." />{aiButton}{kit.ai.note && <p className="muted small" role="status">{kit.ai.note}</p>}</section>;
+  if (!queue.length) return <>
+    <SectionHead icon={<CheckCircle2 />} tone="done" title="Review complete" actions={aiButton}>Every part has a decision. New or changed parts show up here after a rescan.</SectionHead>
+    {kit.ai.note && <p className="muted small" role="status">{kit.ai.note}</p>}
+  </>;
   return <>
-    <div className="section-head">
-      <div><h2>{queue.length} parts need a decision</h2><p>Your choices apply to everyone who scans this document and are kept across rescans. Choose a part to see the evidence behind it.</p></div>
-      {aiButton}
-    </div>
+    <SectionHead icon={<ListChecks />} tone="attention" title={`${queue.length} ${queue.length === 1 ? 'part needs' : 'parts need'} a decision`} actions={aiButton}>Your choices apply to everyone who scans this document and are kept across rescans. Choose a part to see the evidence behind it.</SectionHead>
     {kit.ai.note && <p className="muted small" role="status">{kit.ai.note}</p>}
     <SegmentedControl label="Show" value={filter} onValueChange={value => { setFilter(value as Filter); setShown(page); }} options={[
       { value: 'all', label: `All ${queue.length}` },
@@ -101,6 +102,8 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
         const busy = kit.saving.has(line.bomLineKey);
         // Only a whole-list operation (Accept all, loading shared choices) blocks every row; one save blocks only its own.
         const locked = Boolean(kit.pending) || !kit.result!.scanId || busy;
+        // Only the highlighted row's likely answer is primary, so the list never shows a column of volt buttons.
+        const lead = index === active ? 'primary' : 'secondary';
         return <div key={line.bomLineKey} id={`review-${line.bomLineKey}`} role="listitem" aria-current={index === active ? 'true' : undefined} className={`row review-row ${index === active ? 'focused' : ''}`} onMouseEnter={() => setActive(index)}>
           <div className="row-main">
             <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><Thumbnail line={line} /><span>{line.name}</span></button>
@@ -110,14 +113,14 @@ export function Review({ kit, open }: { kit: ControlKit; open: (key: string) => 
           </div>
           <div className="row-aside">
             {line.aiSuggestion && <>
-              <Button size="sm" disabled={locked} onClick={() => void kit.acceptAi(line)}>Use AI suggestion</Button>
+              <Button size="sm" variant={lead} disabled={locked} onClick={() => void kit.acceptAi(line)}>Use AI suggestion</Button>
               <Button size="sm" variant="ghost" disabled={locked} onClick={() => kit.dismissAi(line)}>Dismiss</Button>
             </>}
             {kind === 'match' && <>
-              <Button size="sm" disabled={locked} onClick={() => void kit.decide(line, 'confirmed')}>Confirm match</Button>
+              <Button size="sm" variant={line.aiSuggestion ? 'secondary' : lead} disabled={locked} onClick={() => void kit.decide(line, 'confirmed')}>Confirm match</Button>
               <Button size="sm" variant="ghost" disabled={locked} onClick={() => void kit.decide(line, 'rejected')}>Not this</Button>
             </>}
-            {kind === 'suggested' && <Button size="sm" disabled={locked} onClick={() => void kit.setDisposition(line, line.suggestedDisposition!)}>Mark {shortLabel[line.suggestedDisposition!]}</Button>}
+            {kind === 'suggested' && <Button size="sm" variant={line.aiSuggestion ? 'secondary' : lead} disabled={locked} onClick={() => void kit.setDisposition(line, line.suggestedDisposition!)}>Mark {shortLabel[line.suggestedDisposition!]}</Button>}
             {(kind === 'match' || line.suggestedDisposition !== 'buy') && <Button size="sm" variant="secondary" disabled={locked} onClick={() => void kit.setDisposition(line, 'buy')}>Buy</Button>}
             {line.suggestedDisposition !== 'print' && <Button size="sm" variant="secondary" disabled={locked} onClick={() => void kit.setDisposition(line, 'print')}>3D print</Button>}
             <Button size="sm" variant="ghost" disabled={locked} title="Not a real part to buy or make, such as a body that is part of an imported product" onClick={() => void kit.setDisposition(line, 'ignore')}>Not needed</Button>
