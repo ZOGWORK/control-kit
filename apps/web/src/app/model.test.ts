@@ -59,6 +59,18 @@ describe('Control Kit view model', () => {
     expect(changes.removed.map(line => line.name)).toEqual(['Old bracket']);
     expect(changes).toMatchObject({ quantity: 1, newlyPriced: 1, subtotalDelta: 17.98 });
     expect(hasChanges(scanChanges(before, before))).toBe(false);
+    // One part at two revisions is one part: an unchanged rescan reports nothing, and dropping a revision is a quantity change.
+    const single = scan(parts('Spacer', 1, 'spacer'));
+    const revisions = { ...single, lines: [{ ...single.lines[0], disposition: 'cnc' as const }, { ...single.lines[0], disposition: 'cnc' as const, bomLineKey: `${single.lines[0].bomLineKey}:rev2`, sourceId: 'rev2', qty: 2 }] };
+    expect(hasChanges(scanChanges(revisions, revisions))).toBe(false);
+    expect(scanChanges(revisions, { ...revisions, lines: revisions.lines.slice(1) }).quantity).toBe(1);
+    // A decided part made a different way is a change even when nothing else moves.
+    const retyped = { ...revisions, lines: revisions.lines.map(line => ({ ...line, disposition: 'print' as const })) };
+    expect(scanChanges(revisions, retyped).retyped).toBe(1);
+    // A part whose second revision rides on the first one's order is priced; a vendor going out of stock is a change.
+    const withVendor = (stock: 'in' | 'out') => ({ ...revisions, lines: revisions.lines.map((line, index) => ({ ...line, vendor: { ...vendor('2802-0004-0010', 10, 8.99), stock }, lineTotalUsd: index ? null : 8.99, orderedWith: index ? line.bomLineKey : null })) });
+    expect(scanChanges(revisions, withVendor('in')).newlyPriced).toBe(1);
+    expect(scanChanges(withVendor('in'), withVendor('out')).stock).toBe(1);
     expect(findParts(after, 'mount').map(line => line.name)).toEqual(['Sensor mount']);
   });
   it('takes a workspace colour as the brand accent only when it reads on graphite and under button text', () => {

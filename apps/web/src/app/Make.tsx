@@ -16,6 +16,8 @@ export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) =
     action={<Button size="sm" onClick={() => go('review')}>Review parts</Button>} /></section>;
   return <>
     <SectionHead icon={<Wrench />} tone="make" title="Make">{total} parts the team prints or fabricates. STEP files come straight from Onshape, one per part, with a manifest of sources and quantities.</SectionHead>
+    {/* "Download build pack" lands here while the workbook builds, so its failure has to show here too. */}
+    {kit.excel === 'failed' && <Alert tone="warning" title="The Excel file could not be built">The STEP files below are unaffected. <Button size="sm" variant="ghost" onClick={() => void kit.downloadExcel()}>Try again</Button><Button size="sm" variant="ghost" onClick={() => void kit.downloadCsv()}>Download CSV</Button></Alert>}
 
     <section className="panel" aria-labelledby="step-export">
       <div className="panel-head">

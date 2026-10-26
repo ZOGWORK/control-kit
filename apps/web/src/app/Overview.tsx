@@ -48,7 +48,8 @@ export function Overview({ kit, cp, summary, go, open, now }: { kit: ControlKit;
   else if (summary.buyLines && !ready.order.unmatched) done.push('Every matched part is priced');
   if (ready.order.outOfStock) moves.push({ key: 'stock', icon: <PackageX aria-hidden />, tone: 'blocked', title: `${parts(ready.order.outOfStock)} out of stock`,
     detail: 'The vendor lists these as out of stock. The buy list shows in-stock alternatives where there are any.', action: <Button variant="secondary" size="sm" onClick={() => go('buy')}>Open buy list</Button> });
-  else if (ready.order.total - ready.order.unmatched > 0) done.push('Everything matched is in stock');
+  // "In stock" only when every matched part says so; a catalog may not know a product's stock.
+  else if (ready.order.total - ready.order.unmatched > 0) done.push(buyList(result).vendors.every(group => group.lines.every(line => line.vendor!.stock === 'in' || line.vendor!.stock === 'low')) ? 'Everything matched is in stock' : 'No matched part is reported out of stock');
   if (summary.dataIssues && topIssue) moves.push({ key: 'issues', icon: <AlertTriangle aria-hidden />, tone: 'blocked', title: `${parts(summary.dataIssues)} ${summary.dataIssues === 1 ? 'is' : 'are'} missing data`,
     detail: `${summary.dataIssues === 1 ? 'Reason' : 'Most often'}: ${lowerFirst(metadataIssueText[topIssue[0] as keyof typeof metadataIssueText])}${summary.dataIssues === 1 ? '' : ` (${topIssue[1]})`}.`,
     action: <Button variant="secondary" size="sm" onClick={() => go('parts')}>See parts</Button> });
@@ -93,8 +94,8 @@ function Changes({ kit }: { kit: ControlKit }) {
   if (!hasChanges(changes)) return <p className="changes muted small"><History aria-hidden size={14} />No changes since your last scan.</p>;
   const items = [
     changes.added.length && `${parts(changes.added.length)} added`, changes.removed.length && `${parts(changes.removed.length)} removed`,
-    changes.quantity && `${changes.quantity} quantity ${changes.quantity === 1 ? 'change' : 'changes'}`, changes.decided && `${parts(changes.decided)} decided`,
-    changes.newlyPriced && `${parts(changes.newlyPriced)} newly priced`,
+    changes.quantity && `${changes.quantity} quantity ${changes.quantity === 1 ? 'change' : 'changes'}`, changes.decided && `${parts(changes.decided)} decided`, changes.retyped && `${parts(changes.retyped)} now made or bought differently`,
+    changes.newlyPriced && `${parts(changes.newlyPriced)} newly priced`, changes.stock && `${changes.stock} stock ${changes.stock === 1 ? 'change' : 'changes'}`,
     changes.subtotalDelta && `subtotal ${changes.subtotalDelta > 0 ? '+' : '−'}${money(Math.abs(changes.subtotalDelta))}`,
   ].filter(Boolean);
   const names = [...changes.added.slice(0, 3).map(line => `+ ${line.name}`), ...changes.removed.slice(0, 3).map(line => `− ${line.name}`)];
