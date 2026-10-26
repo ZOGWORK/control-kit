@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import type { Plugin } from 'vite';
 import { aggregateAssembly, classifyScan, mergeBom, wantsStep, type AssemblyDefinition, type CatalogHealth, type ScanResult } from '../../packages/shared/src/index';
@@ -98,7 +98,8 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
             response.write(`${JSON.stringify({ type: 'progress', stage, step, current, total: 3, instances: 0, counts: extra })}\n`);
             await new Promise(resolve => setTimeout(resolve, Number(process.env.CK_FIXTURE_DELAY ?? 250)));
           }
-          return response.end(`${JSON.stringify({ type: 'result', result: classifyScan(result, settings, savedChoices(result)) })}\n`);
+          // Like the Worker, every scan gets its own id, so a rescan reads as a new scan ("Since your last scan").
+          return response.end(`${JSON.stringify({ type: 'result', result: classifyScan({ ...result, scanId: randomUUID() }, settings, savedChoices(result)) })}\n`);
         }
         const job = () => ({ jobId: '00000000-0000-4000-8000-0000000000bb', done: true, assemblyName: result.assemblyName, documentName: result.documentName, revision: null, scannedAt: result.scannedAt,
           parts: result.lines.filter(wantsStep).map((line, index) => ({ lineKey: line.bomLineKey, name: line.name, qty: line.qty, disposition: line.disposition, partId: line.partId, configuration: line.configuration,
