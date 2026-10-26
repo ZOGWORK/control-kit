@@ -58,7 +58,7 @@ function Privacy() {
       <h2>What leaves Control Kit</h2>
       <ul className="landing-list">
         <li><strong>Control Point</strong>, only if you link a Control Point account and press Send: the reviewed bill of materials goes to the workspace you pick. While the account is linked, Control Kit keeps its Control Point access token, encrypted, with your Control Point account name and workspaces; unlinking deletes them. A record of what was sent is kept for a year.</li>
-        <li><strong>AI review</strong>, only when you ask for it: for each undecided part, its name, description, material, part number, configuration, quantity, where it is used in the assembly, and its candidate products, along with the assembly's name, are sent to Google Gemini, or to Anthropic if Gemini is unavailable. Nothing else from your document is sent.</li>
+        <li><strong>AI review</strong>, only when you ask for it: for each undecided part, its name, description, material, part number, configuration, quantity, where it is used in the assembly, whether it comes from this document, a linked document, or standard content, how Control Kit currently sorts it, and its candidate products, along with the assembly's name, are sent to Google Gemini, or to Anthropic if Gemini is unavailable. Nothing else from your document is sent.</li>
         <li>Nothing else. Vendor prices come from the vendors' public catalogs, which Control Kit reads on its own schedule, not with your data.</li>
       </ul>
     </section>
