@@ -147,7 +147,6 @@ function Meter({ tone, label, ready, total, detail }: { tone: 'buy' | 'make'; la
  * this scan is sent, viewing it there is.
  */
 function PrimaryBar({ kit, cp, primary, summary, go }: { kit: ControlKit; cp: ControlPoint; primary: PrimaryAction; summary: Summary; go: (view: View) => void }) {
-  const result = kit.result!;
   const workspace = primary.kind === 'build-pack' && cp.workspace?.canEditCad ? cp.workspace : null;
   // "View" only when this exact BOM, with the files a send would attach now, already went to this workspace.
   const sentNow = workspace && cp.sentCurrent ? cp.sent : null;
