@@ -32,7 +32,7 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
   // Control Point link stand-in (docs/control-point-link.md §3). `CK_CONTROL_POINT` starts it as off, unlinked
   // (default), linked, or none (linked with no workspace); "Link Control Point" here links at once with two workspaces.
   const workspaces = [
-    { id: 12, name: 'HORS', ftcNumber: '6980', accentColor: process.env.CK_CP_ACCENT ?? '#2f6bff', canEditCad: true, cadUrl: 'https://tryctrlpoint.org/cad-parts' },
+    { id: 12, name: 'HORS', ftcNumber: '6980', accentColor: process.env.CK_CP_ACCENT ?? '#5b8cff', canEditCad: true, cadUrl: 'https://tryctrlpoint.org/cad-parts' },
     { id: 31, name: 'Robotics Club', ftcNumber: null, accentColor: null, canEditCad: false, cadUrl: 'https://tryctrlpoint.org/cad-parts' },
   ];
   const cpMode = process.env.CK_CONTROL_POINT ?? 'unlinked';
@@ -58,6 +58,12 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
           const upstream = await fetch(`${catalogOrigin}/api/catalog/raw?key=${encodeURIComponent(key)}`);
           response.statusCode = upstream.status;
           return response.end(await upstream.text());
+        }
+        if (url.pathname === '/api/preview/assembly') {
+          const file = previewDir && `${previewDir}/assembly.png`;
+          if (!file || !existsSync(file)) return json({ error: 'No saved assembly picture.' }, 404);
+          response.setHeader('content-type', 'image/png');
+          return response.end(readFileSync(file));
         }
         if (url.pathname === '/api/preview') {
           const file = previewDir && `${previewDir}/${createHash('sha256').update(url.searchParams.get('line') ?? '').digest('hex')}.png`;

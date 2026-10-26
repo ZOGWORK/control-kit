@@ -545,7 +545,15 @@ export function useControlKit(context: URLSearchParams) {
     return URL.createObjectURL(await response.blob());
   }
 
-  return { context, buildWorkbook, lastStepZip, previous, ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
+  /** The whole assembly drawn by Onshape at the scanned revision; cached by the Worker, so only a new revision costs a request. */
+  async function assemblyPicture(signal: AbortSignal): Promise<string> {
+    if (!result?.scanId) throw new Error('Scan this assembly first.');
+    const response = await api(`/api/preview/assembly?${new URLSearchParams({ scanId: result.scanId })}`, { signal });
+    if (!response.ok) throw new Error('No picture');
+    return URL.createObjectURL(await response.blob());
+  }
+
+  return { assemblyPicture, context, buildWorkbook, lastStepZip, previous, ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
     acceptSuggestions, bulk, pending, settings, savingSettings, saveSettings, signOut, excel, downloadExcel, downloadCsv, step, downloadStep };
 }
 export type ControlKit = ReturnType<typeof useControlKit>;

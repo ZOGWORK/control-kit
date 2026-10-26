@@ -236,6 +236,9 @@ button.row:hover { background: var(--ck-raised); }
 
 /* Overview status card: one bar of every unique part by how it is handled, then the two readiness meters. */
 .status { padding: 16px; display: grid; gap: 12px; }
+.hero-picture { margin: -16px -16px 0; height: 180px; border-radius: 14px 14px 0 0; overflow: hidden; background: #f4f4f5; display: grid; place-items: center; }
+.hero-picture img { width: 100%; height: 100%; object-fit: contain; }
+@media (max-width: 520px) { .hero-picture { height: 140px; } }
 .status-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
 .status-head h2 { font-size: 1.25rem; }
 .share-bar { display: flex; gap: 2px; height: 10px; border-radius: 999px; overflow: hidden; background: var(--ck-muted); }

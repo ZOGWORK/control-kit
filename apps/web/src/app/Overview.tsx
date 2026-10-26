@@ -55,7 +55,7 @@ export function Overview({ kit, cp, summary, go, open, now }: { kit: ControlKit;
 
   return <div className="overview">
     <FindPart kit={kit} open={open} />
-    <StatusCard result={result} summary={summary} ready={ready} />
+    <StatusCard kit={kit} summary={summary} ready={ready} />
     {kit.previous && <Changes kit={kit} />}
     <PrimaryBar kit={kit} cp={cp} primary={primary} summary={summary} go={go} />
     {stale.length > 0 && <div className="stale-note"><Alert tone="warning" title="Some vendor prices may be out of date">
@@ -105,9 +105,11 @@ function Changes({ kit }: { kit: ControlKit }) {
 }
 
 /** What the scan found, as one bar that adds up, then how ready the team is to order and to build. */
-function StatusCard({ result, summary, ready }: { result: NonNullable<ControlKit['result']>; summary: Summary; ready: Readiness }) {
+function StatusCard({ kit, summary, ready }: { kit: ControlKit; summary: Summary; ready: Readiness }) {
+  const result = kit.result!;
   const shares = composition(summary);
   return <section className="panel status" aria-labelledby="status-title">
+    <AssemblyPicture kit={kit} />
     <div className="status-head">
       <h2 id="status-title"><span className="num">{summary.uniqueLines}</span> unique parts</h2>
       <p className="muted small"><span className="num">{summary.instances}</span> placed in the assembly{summary.suppressedInstances ? <>, <span className="num">{summary.suppressedInstances}</span> suppressed</> : null}</p>
@@ -191,6 +193,19 @@ function Moves({ kit, moves, done }: { kit: ControlKit; moves: Move[]; done: str
     {moves.length > 3 && <div className="panel-body"><Button variant="ghost" size="sm" onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show ${moves.length - 3} more`}<ChevronDown aria-hidden size={14} className={all ? 'flip' : undefined} /></Button></div>}
     {done.length > 0 && <ul className="done-strip" aria-label="Done">{done.map(item => <li key={item}><Check aria-hidden size={13} strokeWidth={3} />{item}</li>)}</ul>}
   </section>;
+}
+
+/** The robot itself, so the numbers have something to belong to. Hidden when Onshape cannot draw it. */
+function AssemblyPicture({ kit }: { kit: ControlKit }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    let made: string | null = null;
+    setUrl(null);
+    kit.assemblyPicture(controller.signal).then(value => { made = value; setUrl(value); }).catch(() => undefined);
+    return () => { controller.abort(); if (made) URL.revokeObjectURL(made); };
+  }, [kit.result?.scanId]);
+  return url ? <figure className="hero-picture"><img src={url} alt={`${kit.result!.assemblyName}, as modelled in Onshape`} /></figure> : null;
 }
 
 /** A small Onshape picture of a part blocking the order. Pictures are cached per revision, so a rescan costs nothing. */

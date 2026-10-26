@@ -55,7 +55,7 @@ export function useControlPoint(kit: ControlKit) {
       const data = event.data as { type?: string; reason?: string } | null;
       if (event.origin !== workerOrigin() || !data?.type?.startsWith('control-point-link')) return;
       setBusy(null);
-      if (data.type === 'control-point-link-failed') setError(data.reason === 'access_denied' ? 'Linking was cancelled in Control Point.' : 'Control Point could not be linked. Try again.');
+      if (data.type === 'control-point-link-failed') setError(data.reason === 'cancelled' ? 'Linking was cancelled in Control Point.' : 'Control Point could not be linked. Try again.');
       void refresh();
     };
     window.addEventListener('message', onMessage);
@@ -107,7 +107,7 @@ export function useControlPoint(kit: ControlKit) {
       else filesNotIncluded.push({ name: 'STEP files', reason: 'Not exported in this session. Download STEP files from Make, then send again to attach them.' });
       const payload = await buildControlPointPayload(result, { context, workspaceId: workspace.id, files, filesNotIncluded });
       const response = await api(`/api/control-point/send?${new URLSearchParams({ scanId: result.scanId })}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
-      if (response.status === 401) { await refresh(); throw new Error('Control Point ended the link. Link it again to send.'); }
+      if (response.status === 409 && (await response.clone().json().catch(() => null) as { code?: string } | null)?.code === 'revoked') { await refresh(); throw new Error('Control Point ended the link. Link it again to send.'); }
       if (response.status === 413) throw new Error('This BOM with its files is over 12 MB. Send it without the STEP files, or ask for a larger limit.');
       if (!response.ok) throw new Error(await message(response, 'The send failed. Your scan, Excel, and STEP files are untouched; try again.'));
       const body = await response.json() as { importId: number; url: string; sentAt: string; created: number; updated: number; duplicate: boolean };
