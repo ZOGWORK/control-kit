@@ -4,7 +4,7 @@ export { applyClassificationChoice, classificationIdentity, classifyLine, classi
 import { purchasedAssemblyReason } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, Confidence, Disposition, DispositionSource, Provenance, UserSettings } from './classifier';
 export type { Attribution, LibraryMapping, LicensedImage, VendorId, VendorRecord, MatchResult } from './matching';
-export { buildControlPointPayload, CONTROL_POINT_CAD_URL, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter } from './control-point';
+export { buildControlPointPayload, CONTROL_POINT_CAD_URL, ControlPointError, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter } from './control-point';
 export { recalculatePurchasing, updatePurchasing } from './purchasing';
 export { isBundle, knownProduct, withKnownPack } from './known-products';
 export { AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, aiCandidateRecord, aiDispositions, aiReviewHash, aiReviewInstructions, aiReviewSchema, applyAiReview, buildAiReviewRequest, lineCandidates, needsAiReview, parseAiReview } from './ai-review';
@@ -13,7 +13,7 @@ import { recalculatePurchasing } from './purchasing';
 export { batchKey, catalogReadKey, catalogVendors, clearCatalogMemoryCache, indexKey, matchCatalog, pointerKey } from './catalog-read';
 export type { MatchProgress } from './catalog-read';
 export type { CatalogReader, IndexEntry } from './catalog-read';
-export type { ControlPointAdapter, ControlPointBomPayload, ControlPointCadPart, ControlPointFile, ControlPointLine } from './control-point';
+export type { ControlPointAccount, ControlPointAdapter, ControlPointBomPayload, ControlPointCadPart, ControlPointFile, ControlPointImport, ControlPointImportSummary, ControlPointLine, ControlPointWorkspace } from './control-point';
 export { checkStep, exportManifest, stepDispositions, stepFileName, wantsStep } from './step';
 export type { ExportPart, StepCheck } from './step';
 export { bomColumns, bomIdentity, bomProperties, bomText, flagMissingSources, mergeBom } from './bom';

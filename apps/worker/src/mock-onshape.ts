@@ -122,6 +122,9 @@ export function createMockOnshape() {
       if (external[1] === 'bad-file') return new Response('<html><body>Error</body></html>', { headers: { 'content-type': 'text/html' } });
       return new Response(mockStep(stepNames[external[1]] ?? external[1]), { headers: { 'content-type': 'application/octet-stream' } });
     }
+    // A shaded view: a stand-in PNG naming what was drawn, so tests can tell a part from the whole assembly.
+    const shaded = url.pathname.match(/^\/api\/v\d+\/(assemblies|parts|partstudios)\/d\/(simple|robot|empty)\/([wvm])\/([^/]+)\/e\/[^/]+(?:\/partid\/[^/]+)?\/shadedviews$/);
+    if (shaded) { apiRequests++; return json(200, { images: [btoa(`PNG ${shaded[1]} ${shaded[3]}/${shaded[4]}`)] }); }
     if (url.pathname.startsWith('/api/')) {
       apiRequests++;
       if (url.searchParams.has('always401')) return json(401, { error: 'expired' });
