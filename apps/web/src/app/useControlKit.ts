@@ -193,7 +193,7 @@ export function useControlKit(context: URLSearchParams) {
           if (!line) continue;
           let event: ScanEvent;
           try { event = JSON.parse(line) as ScanEvent; } catch { throw new Error('The scan sent a reply Control Kit could not read. Try again.'); }
-          if (event.type === 'progress') setProgress(previous => ({ ...event, counts: { ...previous?.counts, ...event.counts } }));
+          if (event.type === 'progress' && generation === scanGeneration.current) setProgress(previous => ({ ...event, counts: { ...previous?.counts, ...event.counts } }));
           if (event.type === 'rate-limit') setProgress(previous => previous && { ...previous, retry: `Onshape is rate-limiting; retrying in ${Math.ceil(event.retryInMs / 1000)}s` });
           // A result that arrives after sign-out or a newer scan is dropped.
           if (event.type === 'result') finished = true;
@@ -201,7 +201,8 @@ export function useControlKit(context: URLSearchParams) {
             let scanned = event.result;
             if (scanned.vendorMatching === 'pending') {
               setProgress(previous => previous && { ...previous, stage: 'Reading vendor catalogs…', step: 'catalogs' });
-              scanned = await matchInBrowser(scanned, controller.signal, progress => setProgress(previous => previous && {
+              // A catalog read can finish after this scan was replaced; only the current scan's progress is shown.
+              scanned = await matchInBrowser(scanned, controller.signal, progress => generation === scanGeneration.current && setProgress(previous => previous && {
                 ...previous, stage: progress.catalogs < progress.catalogsTotal ? 'Reading vendor catalogs…' : 'Matching parts to vendor products…',
                 step: progress.catalogs < progress.catalogsTotal ? 'catalogs' : 'matching', counts: { ...previous.counts, ...progress },
               }));
