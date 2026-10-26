@@ -1,12 +1,12 @@
 import type { AssemblyContext, BomLine, ScanResult } from './index';
-import type { Disposition } from './classifier';
+import { classificationIdentity, type Disposition } from './classifier';
 
 /**
  * The bundle a reviewed scan attaches to Control Point: every line (active, suppressed, and missing-metadata), scan
  * metadata, the workbook and STEP zip as files, and each line in Control Point's CAD parts shape with every Control
  * Kit field kept beside it. Built from the scan the person already reviewed (their accepted AI suggestions are saved
- * choices by then), with no rescan or rematch. There is no network adapter: the live endpoint, auth, and file-upload
- * contract are unconfirmed, so only the in-memory test adapter below exists.
+ * choices by then), with no rescan or rematch. The link contract is docs/control-point-link.md: the Worker holds the
+ * token and talks to Control Point through a `ControlPointAdapter` (HTTP in the Worker, in memory for tests).
  */
 export const CONTROL_POINT_CAD_URL = 'https://tryctrlpoint.org/cad-parts';
 /** Files up to this size travel inside the bundle (base64); larger ones as a reference with name, size, and hash. */
@@ -18,7 +18,9 @@ export type ControlPointCadPart = {
   source: 'printed' | 'purchased' | 'gobilda' | 'other'; unit_cost: number; status: 'to_order' | 'ordered' | 'received' | 'printed' | 'installed'; notes: string;
 };
 export type ControlPointLine = {
-  key: string; name: string; qty: number; unitsPerPack: number | null; packsToOrder: number | null; packPriceUsd: number | null; lineTotalUsd: number | null;
+  key: string;
+  /** `documentId:elementId:partId:configuration`, stable across revisions: Control Point's `ck_part_key`. */
+  identity: string; name: string; qty: number; unitsPerPack: number | null; packsToOrder: number | null; packPriceUsd: number | null; lineTotalUsd: number | null;
   vendor: string | null; sku: string | null; vendorUrl: string | null; stock: string;
   disposition: Disposition; dispositionSource: BomLine['dispositionSource']; manualOverride: Disposition | null;
   /** Legacy three-way type, kept for readers of the first payload version. */
@@ -53,11 +55,29 @@ export type ControlPointBomPayload = {
   filesNotIncluded: Array<{ name: string; reason: string }>;
 };
 
+export type ControlPointAccount = { email: string; name: string };
+export type ControlPointWorkspace = { id: number; name: string; ftcNumber: string | null; accentColor: string | null; canEditCad: boolean; cadUrl: string };
+/** Control Point's answer to a BOM import (contract §2); `duplicate` means the same key was already imported and nothing changed. */
+export type ControlPointImport = {
+  importId: number; duplicate: boolean; workspace: { id: number; name: string; ftcNumber: string | null };
+  created: number; updated: number; markedRemoved: number; filesStored: number; url: string; sentAt: string;
+};
+export type ControlPointImportSummary = { importId: number; idempotencyKey: string; sentAt: string; sentBy: string; created: number; updated: number; markedRemoved: number; url: string };
+/** A refused Control Point call: HTTP status, Control Point's error code (`revoked`, `not_member`, ...), and any `Retry-After` seconds. */
+export class ControlPointError extends Error {
+  constructor(readonly status: number, readonly code: string, readonly detail: string | null = null, readonly retryAfter: number | null = null) { super(`Control Point ${status} ${code}`); }
+}
+/**
+ * Control Point's integration API as the Worker uses it (contract §1 step 4 and §2). Every call except the code
+ * exchange carries the account's bearer token; a refusal throws `ControlPointError`. `sendBom` takes the body the
+ * browser built as-is (the Worker streams it without parsing) and its byte length.
+ */
 export interface ControlPointAdapter {
-  isLinked(userId: string): Promise<boolean>;
-  linkAccount(userId: string, code: string): Promise<void>;
-  unlinkAccount(userId: string): Promise<void>;
-  syncBom(userId: string, payload: ControlPointBomPayload): Promise<{ workspaceRecordId: string }>;
+  exchangeCode(code: string, redirectUri: string): Promise<{ accessToken: string; account: ControlPointAccount }>;
+  workspaces(token: string): Promise<{ account: ControlPointAccount; workspaces: ControlPointWorkspace[] }>;
+  sendBom(token: string, workspaceId: number, body: ReadableStream<Uint8Array> | string, length: number): Promise<ControlPointImport>;
+  imports(token: string, workspaceId: number, documentId: string, elementId: string): Promise<ControlPointImportSummary[]>;
+  revoke(token: string): Promise<void>;
 }
 
 const hex = (buffer: ArrayBuffer) => [...new Uint8Array(buffer)].map(value => value.toString(16).padStart(2, '0')).join('');
@@ -71,7 +91,7 @@ function base64(bytes: Uint8Array) {
 function toLine(line: BomLine): ControlPointLine {
   const vendor = line.vendor;
   return {
-    key: line.bomLineKey, name: line.name, qty: line.qty, unitsPerPack: vendor?.packSizeVerified ? vendor.packSize : null, packsToOrder: line.packsToOrder,
+    key: line.bomLineKey, identity: classificationIdentity(line), name: line.name, qty: line.qty, unitsPerPack: vendor?.packSizeVerified ? vendor.packSize : null, packsToOrder: line.packsToOrder,
     packPriceUsd: vendor?.priceUsd ?? null, lineTotalUsd: line.lineTotalUsd, vendor: vendor?.vendorId ?? null, sku: vendor?.sku ?? null, vendorUrl: vendor?.url ?? null,
     stock: vendor?.stock ?? 'unknown', disposition: line.disposition, dispositionSource: line.dispositionSource, manualOverride: line.manualClassification,
     type: line.classification, matchStatus: line.matchStatus, matchConfidence: line.matchConfidence, matchReasons: line.matchReasons, dispositionEvidence: line.dispositionEvidence,
@@ -121,10 +141,12 @@ async function file(name: string, mediaType: string, bytes: Uint8Array): Promise
 }
 
 /**
- * Stable for identical BOM data across rescans: the key is document, element, revision, and a hash of the scan's
- * content (lines, suppressed and missing-metadata lines, totals). Timestamps, scan ids, and file bytes are left out.
+ * Stable for identical BOM data across rescans: the key is the Control Point workspace, document, element, revision,
+ * and a hash of the scan's content (lines, suppressed and missing-metadata lines, totals), so one scan sent to two
+ * workspaces is two imports. Timestamps, scan ids, and file bytes are left out. `workspaceId` is null only for a
+ * preview that is never sent.
  */
-export async function buildControlPointPayload(result: ScanResult, options: { context?: AssemblyContext; files?: Array<{ name: string; mediaType: string; bytes: Uint8Array }>; filesNotIncluded?: Array<{ name: string; reason: string }> } = {}): Promise<ControlPointBomPayload> {
+export async function buildControlPointPayload(result: ScanResult, options: { workspaceId: number | null; context?: AssemblyContext; files?: Array<{ name: string; mediaType: string; bytes: Uint8Array }>; filesNotIncluded?: Array<{ name: string; reason: string }> }): Promise<ControlPointBomPayload> {
   const lines = result.lines.map(toLine).sort(byKey);
   const suppressedLines = result.suppressed.map(toLine).sort(byKey);
   const missingMetadataLines = result.missingMetadata.map(toLine).sort(byKey);
@@ -138,7 +160,7 @@ export async function buildControlPointPayload(result: ScanResult, options: { co
   const revision = result.diagnostics?.revision ?? null;
   const contentHash = await sha256(JSON.stringify({ name: assembly.name, suppressedCount, totals, lines, suppressedLines, missingMetadataLines,
     revisions: result.lines.map(line => [line.bomLineKey, line.sourceType, line.sourceId]).sort(([a], [b]) => String(a).localeCompare(String(b))) }));
-  const idempotencyKey = await sha256(`${result.documentId}:${result.elementId}:${revision ? `${revision.type}/${revision.id}` : ''}:${contentHash}`);
+  const idempotencyKey = await sha256(`${options.workspaceId ?? ''}:${result.documentId}:${result.elementId}:${revision ? `${revision.type}/${revision.id}` : ''}:${contentHash}`);
   const sorted = [...result.lines].sort((a, b) => a.bomLineKey.localeCompare(b.bomLineKey));
   return {
     idempotencyKey, source: 'control-kit', bundleVersion: 2, assembly, revision, generatedAt: result.scannedAt,
@@ -151,23 +173,47 @@ export async function buildControlPointPayload(result: ScanResult, options: { co
   };
 }
 
-/** In-memory contract test adapter only. It never performs I/O or contacts Control Point. */
+const mockToken = 'ckp_mock';
+/**
+ * In-memory Control Point for tests: one account with the given workspaces, imports kept per workspace by
+ * idempotency key (a repeat answers `duplicate: true` and changes nothing), and a token that `revoke` ends.
+ */
 export class MockControlPointAdapter implements ControlPointAdapter {
-  readonly payloads: ControlPointBomPayload[] = [];
-  private readonly linked = new Set<string>();
-  private readonly records = new Map<string, string>();
-  async isLinked(userId: string) { return this.linked.has(userId); }
-  async linkAccount(userId: string, code: string) {
-    if (!userId || !code) throw new Error('A user and mock code are required.');
-    this.linked.add(userId);
+  readonly payloads: Array<{ workspaceId: number; payload: ControlPointBomPayload }> = [];
+  private revoked = false;
+  private readonly imported = new Map<string, ControlPointImport & { documentId: string; elementId: string; idempotencyKey: string }>();
+  constructor(readonly account: ControlPointAccount = { email: 'student@example.org', name: 'Student' }, readonly list: ControlPointWorkspace[] = [
+    { id: 12, name: 'HORS', ftcNumber: '6980', accentColor: null, canEditCad: true, cadUrl: CONTROL_POINT_CAD_URL },
+  ]) {}
+  private check(token: string) { if (this.revoked || token !== mockToken) throw new ControlPointError(401, 'revoked'); }
+  async exchangeCode(code: string) {
+    if (!code) throw new ControlPointError(400, 'invalid_grant');
+    this.revoked = false;
+    return { accessToken: mockToken, account: this.account };
   }
-  async unlinkAccount(userId: string) { this.linked.delete(userId); }
-  async syncBom(userId: string, payload: ControlPointBomPayload) {
-    if (!this.linked.has(userId)) throw new Error('Mock account is not linked.');
-    this.payloads.push(structuredClone(payload));
-    const key = `${userId}:${payload.idempotencyKey}`;
-    let workspaceRecordId = this.records.get(key);
-    if (!workspaceRecordId) { workspaceRecordId = `mock-${this.records.size + 1}`; this.records.set(key, workspaceRecordId); }
-    return { workspaceRecordId };
+  async workspaces(token: string) { this.check(token); return { account: this.account, workspaces: structuredClone(this.list) }; }
+  async sendBom(token: string, workspaceId: number, body: ReadableStream<Uint8Array> | string) {
+    this.check(token);
+    const workspace = this.list.find(item => item.id === workspaceId);
+    if (!workspace) throw new ControlPointError(403, 'not_member');
+    if (!workspace.canEditCad) throw new ControlPointError(403, 'no_cad_edit');
+    const payload = JSON.parse(typeof body === 'string' ? body : await new Response(body).text()) as ControlPointBomPayload;
+    if (payload.source !== 'control-kit' || payload.bundleVersion !== 2 || !Array.isArray(payload.cadParts)) throw new ControlPointError(400, 'bad_payload');
+    const key = `${workspaceId}:${payload.idempotencyKey}`;
+    const earlier = this.imported.get(key);
+    if (earlier) return { ...earlier, duplicate: true };
+    this.payloads.push({ workspaceId, payload: structuredClone(payload) });
+    const importId = this.imported.size + 1;
+    const result: ControlPointImport = { importId, duplicate: false, workspace: { id: workspace.id, name: workspace.name, ftcNumber: workspace.ftcNumber },
+      created: payload.cadParts.length, updated: 0, markedRemoved: 0, filesStored: payload.files.filter(item => item.delivery === 'inline').length,
+      url: `${CONTROL_POINT_CAD_URL}?import=${importId}`, sentAt: new Date().toISOString() };
+    this.imported.set(key, { ...result, documentId: payload.assembly.documentId, elementId: payload.assembly.elementId, idempotencyKey: payload.idempotencyKey });
+    return result;
   }
+  async imports(token: string, workspaceId: number, documentId: string, elementId: string) {
+    this.check(token);
+    return [...this.imported.values()].filter(item => item.workspace.id === workspaceId && item.documentId === documentId && item.elementId === elementId).reverse().slice(0, 10)
+      .map(item => ({ importId: item.importId, idempotencyKey: item.idempotencyKey, sentAt: item.sentAt, sentBy: this.account.email, created: item.created, updated: item.updated, markedRemoved: item.markedRemoved, url: item.url }));
+  }
+  async revoke(token: string) { this.check(token); this.revoked = true; }
 }
