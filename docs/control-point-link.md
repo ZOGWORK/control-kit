@@ -57,7 +57,7 @@ Behaviour:
 - Otherwise one transaction:
   - Upsert an import record `cad_imports(team_id, idempotency_key UNIQUE per team, document_id, element_id, assembly_name, revision, part_count, sent_by, created_at, files)`.
   - For each `cadParts[i]`: the row is identified by `(team_id, ck_document_id, ck_element_id, ck_part_key)` where `ck_part_key = cadParts[i].extra.identity` (document:element:part:configuration from Control Kit, stable across revisions). New → insert with `status` from the payload. Existing → update name, section, quantity, source, unit_cost, notes, `ck_extra`, `ck_import_id`; **keep the people's fields** `status` (unless still `to_order`), `assignee`. Rows of this assembly missing from the new bundle are not deleted; they get `ck_removed_at` set and show as "Not in latest scan" in the Parts tab.
-  - Files (`files[]` with `content` base64): stored as CAD docs attached to the import (existing upload storage, R2 when configured). References without content are recorded as "available in Control Kit".
+  - Files (`files[]` with `delivery: 'inline'` and base64 bytes in `contentBase64`, as `ControlPointFile` defines them): stored as CAD docs attached to the import (existing upload storage, R2 when configured). Files with `delivery: 'reference'` are recorded as "available in Control Kit".
 - Response `200`:
 
 ```json

@@ -179,24 +179,38 @@ export function composition(summary: Summary): Share[] {
  * What a rescan changed. Lines are compared by the part itself (document, Part Studio, part, configuration), not by
  * the line key, whose revision changes on every edit.
  */
-export type ScanChanges = { added: BomLine[]; removed: BomLine[]; quantity: number; decided: number; newlyPriced: number; subtotalDelta: number | null };
+export type ScanChanges = { added: BomLine[]; removed: BomLine[]; quantity: number; decided: number; retyped: number; newlyPriced: number; subtotalDelta: number | null };
 const partOf = (line: BomLine) => `${line.documentId}:${line.elementId}:${line.partId ?? line.name}:${line.configuration ?? ''}`;
+/** A part as a whole: an assembly can hold one part at several revisions, each its own line, so they are added up. */
+type Part = { line: BomLine; qty: number; dispositions: string; priced: boolean };
+function parts(result: ScanResult) {
+  const map = new Map<string, Part>();
+  for (const line of result.lines) {
+    const part = map.get(partOf(line));
+    if (!part) { map.set(partOf(line), { line, qty: line.qty, dispositions: line.disposition, priced: priced(line) }); continue; }
+    part.qty += line.qty;
+    part.dispositions = [...new Set([...part.dispositions.split(','), line.disposition])].sort().join(',');
+    part.priced &&= priced(line);
+  }
+  return map;
+}
 export function scanChanges(before: ScanResult, after: ScanResult): ScanChanges {
-  const old = new Map(before.lines.map(line => [partOf(line), line]));
-  const now = new Map(after.lines.map(line => [partOf(line), line]));
-  const kept = after.lines.filter(line => old.has(partOf(line)));
+  const [old, now] = [parts(before), parts(after)];
+  const kept = [...now].filter(([key]) => old.has(key)).map(([key, part]) => [part, old.get(key)!] as const);
   const total = (result: ScanResult) => summarize(result).subtotal;
   const [was, is] = [total(before), total(after)];
   return {
-    added: after.lines.filter(line => !old.has(partOf(line))),
-    removed: before.lines.filter(line => !now.has(partOf(line))),
-    quantity: kept.filter(line => line.qty !== old.get(partOf(line))!.qty).length,
-    decided: kept.filter(line => line.disposition !== 'review' && old.get(partOf(line))!.disposition === 'review').length,
-    newlyPriced: kept.filter(line => priced(line) && !priced(old.get(partOf(line))!)).length,
+    added: [...now].filter(([key]) => !old.has(key)).map(([, part]) => part.line),
+    removed: [...old].filter(([key]) => !now.has(key)).map(([, part]) => part.line),
+    quantity: kept.filter(([part, earlier]) => part.qty !== earlier.qty).length,
+    decided: kept.filter(([part, earlier]) => earlier.dispositions === 'review' && part.dispositions !== 'review').length,
+    // How a decided part is obtained changed (CNC to 3D print, Buy to Fastener), which may change nothing else.
+    retyped: kept.filter(([part, earlier]) => earlier.dispositions !== 'review' && part.dispositions !== earlier.dispositions).length,
+    newlyPriced: kept.filter(([part, earlier]) => part.priced && !earlier.priced).length,
     subtotalDelta: was === null && is === null ? null : Math.round(((is ?? 0) - (was ?? 0)) * 100) / 100,
   };
 }
-export const hasChanges = (changes: ScanChanges) => Boolean(changes.added.length || changes.removed.length || changes.quantity || changes.decided || changes.newlyPriced || changes.subtotalDelta);
+export const hasChanges = (changes: ScanChanges) => Boolean(changes.added.length || changes.removed.length || changes.quantity || changes.decided || changes.retyped || changes.newlyPriced || changes.subtotalDelta);
 
 /** Overview search: parts whose name, part number, or SKU contain the text, best (name starts with it) first. */
 export function findParts(result: ScanResult, query: string, count = 6) {
