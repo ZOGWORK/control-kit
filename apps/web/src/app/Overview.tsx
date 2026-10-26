@@ -92,7 +92,7 @@ function Changes({ kit }: { kit: ControlKit }) {
   const items = [
     changes.added.length && `${parts(changes.added.length)} added`, changes.removed.length && `${parts(changes.removed.length)} removed`,
     changes.quantity && `${changes.quantity} quantity ${changes.quantity === 1 ? 'change' : 'changes'}`, changes.decided && `${parts(changes.decided)} decided`, changes.retyped && `${parts(changes.retyped)} now made or bought differently`,
-    changes.newlyPriced && `${parts(changes.newlyPriced)} newly priced`,
+    changes.newlyPriced && `${parts(changes.newlyPriced)} newly priced`, changes.stock && `${changes.stock} stock ${changes.stock === 1 ? 'change' : 'changes'}`,
     changes.subtotalDelta && `subtotal ${changes.subtotalDelta > 0 ? '+' : '−'}${money(Math.abs(changes.subtotalDelta))}`,
   ].filter(Boolean);
   const names = [...changes.added.slice(0, 3).map(line => `+ ${line.name}`), ...changes.removed.slice(0, 3).map(line => `− ${line.name}`)];

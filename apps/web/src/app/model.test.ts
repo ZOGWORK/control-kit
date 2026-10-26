@@ -67,6 +67,10 @@ describe('Control Kit view model', () => {
     // A decided part made a different way is a change even when nothing else moves.
     const retyped = { ...revisions, lines: revisions.lines.map(line => ({ ...line, disposition: 'print' as const })) };
     expect(scanChanges(revisions, retyped).retyped).toBe(1);
+    // A part whose second revision rides on the first one's order is priced; a vendor going out of stock is a change.
+    const withVendor = (stock: 'in' | 'out') => ({ ...revisions, lines: revisions.lines.map((line, index) => ({ ...line, vendor: { ...vendor('2802-0004-0010', 10, 8.99), stock }, lineTotalUsd: index ? null : 8.99, orderedWith: index ? line.bomLineKey : null })) });
+    expect(scanChanges(revisions, withVendor('in')).newlyPriced).toBe(1);
+    expect(scanChanges(withVendor('in'), withVendor('out')).stock).toBe(1);
     expect(findParts(after, 'mount').map(line => line.name)).toEqual(['Sensor mount']);
   });
   it('never puts a possible match under a vendor or into a total', () => {
