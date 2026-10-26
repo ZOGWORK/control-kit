@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { aiCandidateRecord, applyAiReview, applyClassificationChoice, applyMatchDecision, buildAiReviewRequest, classificationIdentity, classifyScan, decisionRecord, matchCatalog, type AiProvider, type AiReviewItem, type BomLine, type ClassificationOverride, type ExportPart, type MatchProgress, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
+import { makeListKey } from './model';
 /** Spreadsheet and ZIP builders load on first download, keeping them out of the initial bundle. */
 const exporters = () => import('@control-kit/excel');
 
@@ -17,9 +18,9 @@ type ScanEvent =
   | { type: 'error'; message: string };
 
 export const contextKeys = ['documentId', 'workspaceOrVersion', 'workspaceOrVersionId', 'elementId'] as const;
-const workerUrl = import.meta.env.VITE_WORKER_URL ?? '';
-const api = (path: string, init: RequestInit = {}) => fetch(`${workerUrl}${path}`, { credentials: 'include', ...init });
-const postJson = (path: string, body: unknown) => api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+export const workerUrl = import.meta.env.VITE_WORKER_URL ?? '';
+export const api = (path: string, init: RequestInit = {}) => fetch(`${workerUrl}${path}`, { credentials: 'include', ...init });
+export const postJson = (path: string, body: unknown) => api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const overridesOf = (result: ScanResult) => Object.fromEntries(result.lines.filter(line => line.manualClassification).map(line => [line.bomLineKey, line.manualClassification!]));
 function saveFile(bytes: Uint8Array, filename: string, mime: string) {
   const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
@@ -62,6 +63,8 @@ export function useControlKit(context: URLSearchParams) {
   /** The STEP export in progress, if any. Sign-out ends it; a rescan leaves it to finish for the scan it started from. */
   const stepRun = useRef<number | null>(null);
   const stepRuns = useRef(0);
+  /** The last STEP ZIP this session built, so a Control Point send can attach it without exporting again. */
+  const lastStepZip = useRef<{ scanId: string; makeList: string; name: string; bytes: Uint8Array } | null>(null);
   const sessionCheck = useRef(0);
   const query = new URLSearchParams(contextKeys.map(key => [key, context.get(key) ?? '']));
   const connectUrl = `${workerUrl}/oauth/start?${query}`;
@@ -438,14 +441,19 @@ export function useControlKit(context: URLSearchParams) {
     setSession({ connected: false });
   }
 
+  /** The Excel workbook for the current scan, with the logo when it loads within three seconds. */
+  async function buildWorkbook() {
+    if (!result) throw new Error('Scan first.');
+    const logo = await fetch('/control-kit-logo.png', { signal: AbortSignal.timeout(3000) })
+      .then(async response => response.ok ? new Uint8Array(await response.arrayBuffer()) : undefined).catch(() => undefined);
+    const { buildExcelWorkbook } = await exporters();
+    return buildExcelWorkbook(result, new Date(), logo);
+  }
   async function downloadExcel() {
     if (!result || excel === 'working') return;
     setExcel('working');
     try {
-      const logo = await fetch('/control-kit-logo.png', { signal: AbortSignal.timeout(3000) })
-        .then(async response => response.ok ? new Uint8Array(await response.arrayBuffer()) : undefined).catch(() => undefined);
-      const { buildExcelWorkbook } = await exporters();
-      const workbook = buildExcelWorkbook(result, new Date(), logo);
+      const workbook = await buildWorkbook();
       saveFile(workbook.bytes, workbook.filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       setExcel('idle');
     } catch { setExcel('failed'); }
@@ -462,6 +470,8 @@ export function useControlKit(context: URLSearchParams) {
    */
   async function downloadStep() {
     if (!result?.scanId || stepRun.current !== null) return;
+    // The make list this export covers; a later change to it makes the ZIP out of date for Control Point.
+    const makeList = makeListKey(result);
     const run = ++stepRuns.current;
     stepRun.current = run;
     // False once sign-out has ended this export; it then stops without touching state.
@@ -515,6 +525,7 @@ export function useControlKit(context: URLSearchParams) {
       if (!active()) return;
       const zip = buildStepZip({ ...job, files });
       saveFile(zip.bytes, zip.filename, 'application/zip');
+      lastStepZip.current = { scanId: result.scanId, makeList, name: zip.filename, bytes: zip.bytes };
       setStep(current => current && { ...current, running: false, zipMade: ready > 0 });
     } catch (cause) {
       if (!active()) return;
@@ -537,7 +548,15 @@ export function useControlKit(context: URLSearchParams) {
     return URL.createObjectURL(await response.blob());
   }
 
-  return { previous, ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
+  /** The whole assembly drawn by Onshape at the scanned revision; cached by the Worker, so only a new revision costs a request. */
+  async function assemblyPicture(signal: AbortSignal): Promise<string> {
+    if (!result?.scanId) throw new Error('Scan this assembly first.');
+    const response = await api(`/api/preview/assembly?${new URLSearchParams({ scanId: result.scanId })}`, { signal });
+    if (!response.ok) throw new Error('No picture');
+    return URL.createObjectURL(await response.blob());
+  }
+
+  return { assemblyPicture, context, buildWorkbook, lastStepZip, previous, ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
     acceptSuggestions, bulk, pending, settings, savingSettings, saveSettings, signOut, excel, downloadExcel, downloadCsv, step, downloadStep };
 }
 export type ControlKit = ReturnType<typeof useControlKit>;

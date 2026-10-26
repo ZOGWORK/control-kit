@@ -1,4 +1,4 @@
-import { dispositionLabel, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorId } from '@control-kit/shared';
+import { dispositionLabel, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorId } from '@control-kit/shared';
 
 /** The app's sections, in the order a team works through them. */
 export type View = 'overview' | 'review' | 'parts' | 'buy' | 'make';
@@ -225,6 +225,32 @@ export function findParts(result: ScanResult, query: string, count = 6) {
   if (!needle) return [];
   return filterParts(result, 'all', needle, 'name').sort((a, b) => Number(!a.name.toLowerCase().startsWith(needle)) - Number(!b.name.toLowerCase().startsWith(needle))).slice(0, count);
 }
+
+/**
+ * A linked Control Point workspace's colour as the brand accent, the way Control Point paints its own canvas. It
+ * replaces only `--ck-volt` and its derivatives; status colours never move. A colour too dark to see on the graphite
+ * background, or one no text colour can sit on readably, is refused and the app stays volt.
+ */
+export type Accent = { accent: string; hover: string; soft: string; ink: string };
+const channels = (hex: string) => [1, 3, 5].map(index => parseInt(hex.slice(index, index + 2), 16));
+const luminance = (rgb: number[]) => {
+  const [r, g, b] = rgb.map(value => { const c = value / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+export const contrast = (a: string, b: string) => { const [x, y] = [luminance(channels(a)), luminance(channels(b))].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+export function workspaceAccent(color: string | null | undefined, background = '#0a0a0b'): Accent | null {
+  if (!color || !/^#[0-9a-f]{6}$/i.test(color.trim())) return null;
+  const accent = color.trim().toLowerCase();
+  // Dark text on a light accent, white on a dark one: whichever reads better, and it must pass for button text.
+  const ink = contrast(accent, '#0a0a0b') >= contrast(accent, '#ffffff') ? '#0a0a0b' : '#ffffff';
+  if (contrast(accent, background) < 3 || contrast(accent, ink) < 4.5) return null;
+  const [r, g, b] = channels(accent);
+  const mix = (toward: number, amount: number) => `#${[r, g, b].map(value => Math.round(value + (toward - value) * amount).toString(16).padStart(2, '0')).join('')}`;
+  return { accent, hover: mix(255, 0.2), soft: `rgb(${r} ${g} ${b} / 0.12)`, ink };
+}
+
+/** The parts a STEP export covers, so a ZIP exported before the make list changed is never sent as current. */
+export const makeListKey = (result: ScanResult) => result.lines.filter(wantsStep).map(line => `${line.bomLineKey}:${line.disposition}:${line.qty}`).sort().join('|');
 
 /** "4 minutes ago", for scan and catalog times. Never used in the first render, which has no clock yet. */
 export function ago(iso: string, now: number) {

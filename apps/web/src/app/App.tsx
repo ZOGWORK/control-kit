@@ -13,6 +13,9 @@ import { Make } from './Make';
 import { PartDrawer } from './PartDrawer';
 import { SettingsDrawer } from './SettingsDrawer';
 import { Landing } from './Landing';
+import { useControlPoint } from './useControlPoint';
+import { WorkspaceMark } from './ControlPoint';
+import { CONTROL_POINT_CAD_URL } from '@control-kit/shared';
 
 const views: View[] = ['overview', 'review', 'parts', 'buy', 'make'];
 const viewLabel: Record<View, string> = { overview: 'Overview', review: 'Review', parts: 'Parts', buy: 'Buy list', make: 'Make' };
@@ -104,6 +107,7 @@ function ScanProgress({ kit }: { kit: ControlKit }) {
 
 function Workspace({ kit }: { kit: ControlKit }) {
   const result = kit.result!;
+  const cp = useControlPoint(kit);
   const [view, setView] = useState<View>(() => (views as string[]).includes(location.hash.slice(1)) ? location.hash.slice(1) as View : 'overview');
   const [selected, setSelected] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -134,6 +138,8 @@ function Workspace({ kit }: { kit: ControlKit }) {
         </button>)}
       </nav>
       <div className="sidebar-foot">
+        {cp.workspace ? <a className="nav-item" href={cp.workspace.cadUrl ?? CONTROL_POINT_CAD_URL} target="_blank" rel="noopener noreferrer"><WorkspaceMark workspace={cp.workspace} size={18} /><span>{cp.workspace.name}</span><span className="count">Control Point</span></a>
+          : cp.link && <button type="button" className="nav-item" onClick={() => setSettingsOpen(true)}><img src="/control-point-icon.png" alt="" className="nav-logo" /><span>Control Point</span><span className="count">{cp.link.linked ? 'pick workspace' : 'not linked'}</span></button>}
         <button type="button" className="nav-item" onClick={() => setSettingsOpen(true)}><Settings aria-hidden /><span>Settings</span></button>
         <button type="button" className="nav-item" onClick={() => void kit.signOut()}><LogOut aria-hidden /><span>Sign out</span><span className="count">{kit.session?.user?.name}</span></button>
       </div>
@@ -142,6 +148,8 @@ function Workspace({ kit }: { kit: ControlKit }) {
       <header className="topbar">
         <Logo />
         <div className="topbar-title"><h1>{result.assemblyName}</h1>{subtitle && <p>{subtitle}</p>}</div>
+        {cp.workspace && <a className="workspace-chip" href={cp.workspace.cadUrl ?? CONTROL_POINT_CAD_URL} target="_blank" rel="noopener noreferrer" title={`Control Point workspace ${cp.workspace.name}`}>
+          <WorkspaceMark workspace={cp.workspace} size={20} /><span>{cp.workspace.name}</span></a>}
         <div className="topbar-actions">
           <Button variant="secondary" size="sm" loading={Boolean(kit.progress)} onClick={() => void kit.scan()}><RefreshCw aria-hidden size={14} /> Rescan</Button>
           <Button variant="ghost" size="sm" aria-label="Settings" className="settings-narrow" onClick={() => setSettingsOpen(true)}><Settings aria-hidden size={16} /></Button>
@@ -155,7 +163,7 @@ function Workspace({ kit }: { kit: ControlKit }) {
       <main className="content">
         {kit.error && <Alert tone="danger" title={kit.error} onDismiss={kit.clearError} />}
         {kit.progress && <section className="panel"><div className="panel-body" style={{ paddingTop: 16 }}><ScanProgress kit={kit} /></div></section>}
-        {view === 'overview' && <Overview kit={kit} summary={summary} go={setView} open={open} now={now} />}
+        {view === 'overview' && <Overview kit={kit} cp={cp} summary={summary} go={setView} open={open} now={now} />}
         {view === 'review' && <Review kit={kit} open={open} />}
         {view === 'parts' && <Parts kit={kit} open={open} />}
         {view === 'buy' && <BuyList kit={kit} open={open} go={setView} />}
@@ -163,6 +171,6 @@ function Workspace({ kit }: { kit: ControlKit }) {
       </main>
     </div>
     <PartDrawer kit={kit} line={line} onClose={() => setSelected(null)} />
-    <SettingsDrawer kit={kit} open={settingsOpen} onOpenChange={setSettingsOpen} />
+    <SettingsDrawer kit={kit} cp={cp} open={settingsOpen} onOpenChange={setSettingsOpen} />
   </div>;
 }

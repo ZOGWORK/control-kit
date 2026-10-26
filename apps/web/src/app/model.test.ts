@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateAssembly, classifyScan, recalculatePurchasing, type AssemblyInstance, type BomLine, type ScanResult, type VendorRecord } from '@control-kit/shared';
-import { buyList, catalogState, catalogStateText, catalogsComplete, composition, filterParts, findParts, hasChanges, money, primaryAction, readiness, reviewQueue, scanChanges, staleCatalogs, summarize, topCosts } from './model';
+import { buyList, catalogState, catalogStateText, catalogsComplete, composition, filterParts, findParts, hasChanges, money, primaryAction, readiness, reviewQueue, makeListKey, scanChanges, staleCatalogs, summarize, topCosts, workspaceAccent } from './model';
 
 const vendor = (sku: string, packSize: number | null, priceUsd: number | null): VendorRecord => ({ vendorId: 'gobilda', sku, normalizedSku: sku.replace(/\D/g, ''), name: 'Screw', normalizedName: 'screw', url: 'https://www.gobilda.com/x/',
   priceUsd, packSize, packSizeVerified: packSize !== null, stock: 'in', stockQty: null, category: 'hardware', updatedAt: '2026-10-24T00:00:00Z', source: 'sitemap' });
@@ -75,6 +75,25 @@ describe('Control Kit view model', () => {
     const kit = { ...single, lines: [{ ...single.lines[0], partId: null, purchasedAssembly: { parts: 6, reason: 'its name has a vendor part number' } }] };
     expect(hasChanges(scanChanges(kit, { ...kit, lines: [{ ...kit.lines[0], name: 'Renamed motor' }] }))).toBe(false);
     expect(findParts(after, 'mount').map(line => line.name)).toEqual(['Sensor mount']);
+  });
+  it('takes a workspace colour as the brand accent only when it reads on graphite and under button text', () => {
+    expect(workspaceAccent('#5b8cff')).toMatchObject({ accent: '#5b8cff', ink: '#0a0a0b' });
+    expect(workspaceAccent('#e11d48')).toMatchObject({ ink: '#ffffff' });
+    // #2f6bff puts white text at 4.49:1, just under 4.5, so it is refused.
+    expect(workspaceAccent('#2f6bff')).toBeNull();
+    expect(workspaceAccent('#ffc700')?.ink).toBe('#0a0a0b');
+    // Too dark to see on the background, malformed, or missing: the app stays volt.
+    expect(workspaceAccent('#1a1a40')).toBeNull();
+    expect(workspaceAccent('blue')).toBeNull();
+    expect(workspaceAccent(null)).toBeNull();
+  });
+  it('ties a STEP export to the make list it covered', () => {
+    const result = scan([...parts('Sensor mount [3DP]', 1, 'm'), ...parts('Mystery part', 1, 'x')]);
+    const exported = makeListKey(result);
+    expect(makeListKey(result)).toBe(exported);
+    // Marking another part to print changes what a STEP ZIP must contain.
+    const changed = { ...result, lines: result.lines.map(line => line.partId === 'x' ? { ...line, disposition: 'print' as const } : line) };
+    expect(makeListKey(changed)).not.toBe(exported);
   });
   it('never puts a possible match under a vendor or into a total', () => {
     const result = scan(parts('Wheel', 4, 'wheel'), lines => { lines[0].vendor = vendor('3606-0014-0096', 1, 12); lines[0].matchStatus = 'possible'; });

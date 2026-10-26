@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react';
 import { Button } from './bits';
 import { Drawer, DrawerContent } from '../components/arc/drawer/drawer';
 import type { ControlKit } from './useControlKit';
+import type { ControlPoint } from './useControlPoint';
+import { ControlPointSettings } from './ControlPoint';
 
 /** Team number and account. The team number helps spot team-designed parts named after the team. */
-export function SettingsDrawer({ kit, open, onOpenChange }: { kit: ControlKit; open: boolean; onOpenChange: (open: boolean) => void }) {
+export function SettingsDrawer({ kit, cp, open, onOpenChange }: { kit: ControlKit; cp: ControlPoint; open: boolean; onOpenChange: (open: boolean) => void }) {
   const [team, setTeam] = useState(kit.settings.teamNumber ?? '');
   const [saved, setSaved] = useState(false);
   useEffect(() => { if (open) { setTeam(kit.settings.teamNumber ?? ''); setSaved(false); } }, [open, kit.settings.teamNumber]);
@@ -20,6 +22,7 @@ export function SettingsDrawer({ kit, open, onOpenChange }: { kit: ControlKit; o
           </label>
           <div className="inline-actions"><Button type="submit" size="sm" loading={kit.savingSettings} disabled={!valid}>Save</Button>{saved && <span className="muted small" role="status">Saved</span>}</div>
         </form>
+        <ControlPointSettings cp={cp} />
         <div className="stack">
           <h3>Account</h3>
           <p className="muted small">Connected to Onshape as {kit.session?.user?.name}. Control Kit only reads your documents.</p>

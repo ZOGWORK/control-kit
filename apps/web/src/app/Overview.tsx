@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowRight, Check, ChevronDown, FileSpreadsheet, History, ListChecks, PackageX, Search, Store, Tag, Wrench } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, ChevronDown, ExternalLink, FileSpreadsheet, History, Send, ListChecks, PackageX, Search, Store, Tag, Wrench } from 'lucide-react';
 import { metadataIssueText, type BomLine } from '@control-kit/shared';
 import { Alert } from '../components/arc/alert/alert';
 import { Button, DispositionChip } from './bits';
 import type { ControlKit } from './useControlKit';
+import type { ControlPoint } from './useControlPoint';
+import { ControlPointCard } from './ControlPoint';
 import { ago, buyList, catalogsComplete, catalogState, catalogStateText, composition, findParts, hasChanges, money, percent, primaryAction, readiness, scanChanges, staleCatalogs, topCosts, unmatchedParts, vendorLabel,
   type PrimaryAction, type Readiness, type Summary, type View } from './model';
 
@@ -16,7 +18,7 @@ const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month
 /** A problem still standing between this scan and a complete order and build list. */
 type Move = { key: string; icon: ReactNode; tone: 'attention' | 'blocked'; title: string; detail: string; action?: ReactNode; lines?: BomLine[] };
 
-export function Overview({ kit, summary, go, open, now }: { kit: ControlKit; summary: Summary; go: (view: View) => void; open: (key: string) => void; now: number | null }) {
+export function Overview({ kit, cp, summary, go, open, now }: { kit: ControlKit; cp: ControlPoint; summary: Summary; go: (view: View) => void; open: (key: string) => void; now: number | null }) {
   const result = kit.result!;
   const ready = readiness(result, summary);
   const primary = primaryAction(summary, ready);
@@ -54,9 +56,9 @@ export function Overview({ kit, summary, go, open, now }: { kit: ControlKit; sum
 
   return <div className="overview">
     <FindPart kit={kit} open={open} />
-    <StatusCard result={result} summary={summary} ready={ready} />
+    <StatusCard kit={kit} summary={summary} ready={ready} />
     {kit.previous && <Changes kit={kit} />}
-    <PrimaryBar kit={kit} primary={primary} summary={summary} go={go} />
+    <PrimaryBar kit={kit} cp={cp} primary={primary} summary={summary} go={go} />
     {stale.length > 0 && <div className="stale-note"><Alert tone="warning" title="Some vendor prices may be out of date">
       {stale.map(vendor => `${vendorLabel[vendor.vendorId]} (${catalogStateText(vendor).toLowerCase()})`).join(', ')}. Prices are as of {result.vendorDataUpdatedAt ? day(result.vendorDataUpdatedAt) : 'an earlier date'}; check prices and stock on the vendor's site before ordering.
     </Alert></div>}
@@ -65,6 +67,7 @@ export function Overview({ kit, summary, go, open, now }: { kit: ControlKit; sum
       <MoneyCard kit={kit} summary={summary} ready={ready} go={go} />
       <BuyByVendor kit={kit} go={go} />
       {summary.make.total > 0 && <MakeByMethod summary={summary} go={go} />}
+      <ControlPointCard kit={kit} cp={cp} now={now} />
       <Downloads kit={kit} summary={summary} go={go} />
       {health && <CatalogStrip kit={kit} now={now} />}
     </div>
@@ -103,9 +106,11 @@ function Changes({ kit }: { kit: ControlKit }) {
 }
 
 /** What the scan found, as one bar that adds up, then how ready the team is to order and to build. */
-function StatusCard({ result, summary, ready }: { result: NonNullable<ControlKit['result']>; summary: Summary; ready: Readiness }) {
+function StatusCard({ kit, summary, ready }: { kit: ControlKit; summary: Summary; ready: Readiness }) {
+  const result = kit.result!;
   const shares = composition(summary);
   return <section className="panel status" aria-labelledby="status-title">
+    <AssemblyPicture kit={kit} />
     <div className="status-head">
       <h2 id="status-title"><span className="num">{summary.uniqueLines}</span> unique parts</h2>
       <p className="muted small"><span className="num">{summary.instances}</span> placed in the assembly{summary.suppressedInstances ? <>, <span className="num">{summary.suppressedInstances}</span> suppressed</> : null}</p>
@@ -136,13 +141,28 @@ function Meter({ tone, label, ready, total, detail }: { tone: 'buy' | 'make'; la
   </div>;
 }
 
-/** The single primary action, sticky at the bottom of the Onshape panel so it stays in reach while scrolling. */
-function PrimaryBar({ kit, primary, summary, go }: { kit: ControlKit; primary: PrimaryAction; summary: Summary; go: (view: View) => void }) {
+/**
+ * The single primary action, sticky at the bottom of the Onshape panel so it stays in reach while scrolling. Once the
+ * order and build list are complete and a Control Point workspace is chosen, sending there becomes the action; after
+ * this scan is sent, viewing it there is.
+ */
+function PrimaryBar({ kit, cp, primary, summary, go }: { kit: ControlKit; cp: ControlPoint; primary: PrimaryAction; summary: Summary; go: (view: View) => void }) {
+  const workspace = primary.kind === 'build-pack' && cp.workspace?.canEditCad ? cp.workspace : null;
+  // "View" only when this exact BOM, with the files a send would attach now, already went to this workspace.
+  const sentNow = workspace && cp.sentCurrent ? cp.sent : null;
+  const buildPack = () => { void kit.downloadExcel(); if (summary.make.total) { go('make'); void kit.downloadStep(); } };
+  if (sentNow) return <div className="primary-bar">
+    <a className="primary-link" href={sentNow.url} target="_blank" rel="noopener noreferrer">View in {workspace!.name} <ExternalLink aria-hidden size={15} /></a>
+    <Button variant="secondary" onClick={buildPack}>Download build pack</Button>
+  </div>;
+  if (workspace) return <div className="primary-bar">
+    <Button loading={cp.busy === 'send'} onClick={() => void cp.send()}><Send aria-hidden size={16} />Send full BOM to {workspace.name}</Button>
+    <Button variant="secondary" onClick={buildPack}><FileSpreadsheet aria-hidden size={15} />Build pack</Button>
+  </div>;
   const run = () => {
     if (primary.kind === 'review') return go('review');
     if (primary.kind !== 'build-pack') return go('buy');
-    void kit.downloadExcel();
-    if (summary.make.total) { go('make'); void kit.downloadStep(); }
+    buildPack();
   };
   const hint = primary.kind === 'build-pack'
     ? summary.make.total ? 'Excel BOM plus STEP files for every part to make.' : 'Excel BOM with live purchasing totals.'
@@ -174,6 +194,19 @@ function Moves({ kit, moves, done }: { kit: ControlKit; moves: Move[]; done: str
     {moves.length > 3 && <div className="panel-body"><Button variant="ghost" size="sm" onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show ${moves.length - 3} more`}<ChevronDown aria-hidden size={14} className={all ? 'flip' : undefined} /></Button></div>}
     {done.length > 0 && <ul className="done-strip" aria-label="Done">{done.map(item => <li key={item}><Check aria-hidden size={13} strokeWidth={3} />{item}</li>)}</ul>}
   </section>;
+}
+
+/** The robot itself, so the numbers have something to belong to. Hidden when Onshape cannot draw it. */
+function AssemblyPicture({ kit }: { kit: ControlKit }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    let made: string | null = null;
+    setUrl(null);
+    kit.assemblyPicture(controller.signal).then(value => { made = value; setUrl(value); }).catch(() => undefined);
+    return () => { controller.abort(); if (made) URL.revokeObjectURL(made); };
+  }, [kit.result?.scanId]);
+  return url ? <figure className="hero-picture"><img src={url} alt={`${kit.result!.assemblyName}, as modelled in Onshape`} /></figure> : null;
 }
 
 /** A small Onshape picture of a part blocking the order. Pictures are cached per revision, so a rescan costs nothing. */
