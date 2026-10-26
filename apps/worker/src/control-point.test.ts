@@ -210,6 +210,20 @@ describe('Control Point linking', () => {
       expect((await storedLink())?.token).toBe(after);
     } finally { vi.useRealTimers(); }
   });
+  it('keeps a link finished in another window while an unlink waited on revoke', async () => {
+    const cookie = await session();
+    await link(cookie);
+    const before = (await storedLink())!.token;
+    const held = holdOnce(/\/revoke$/);
+    const unlinking = call('/api/control-point/unlink', { cookie, method: 'POST' });
+    await held.arrived;
+    await link(cookie);
+    const after = (await storedLink())!.token;
+    expect(after).not.toBe(before);
+    held.release();
+    expect(await (await unlinking).json()).toMatchObject({ linked: true });
+    expect((await storedLink())?.token).toBe(after);
+  });
   it('unlinks on request, revoking at Control Point, and keeps sent records', async () => {
     const cookie = await session();
     await link(cookie);

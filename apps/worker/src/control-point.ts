@@ -350,9 +350,11 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);
     const link = await readLink(env, user.id);
     // Best effort: the link is removed here even when Control Point cannot be reached. Sent records are kept.
-    if (link) await adapter.revoke(link.token).catch(() => undefined);
-    await env.APP_STATE.delete(linkKey(user.id));
-    return reply({ linked: false, available });
+    if (!link) return reply({ linked: false, available });
+    await adapter.revoke(link.token).catch(() => undefined);
+    // Only the grant this unlink read: a link finished in another window while revoke ran stays, and is shown.
+    const current = await forgetLink(env, user.id, link.token);
+    return reply(current ? linkView(current) : { linked: false, available });
   }
   return reply({ error: 'Not found' }, 404);
 }
