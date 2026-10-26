@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { buildControlPointPayload, controlPointIdempotencyKey, type AssemblyContext } from '@control-kit/shared';
+import { buildControlPointPayload, controlPointIdempotencyKey, INLINE_FILE_LIMIT_BYTES, type AssemblyContext } from '@control-kit/shared';
 import { api, postJson, workerUrl, type ControlKit } from './useControlKit';
-import { workspaceAccent, type Accent } from './model';
+import { makeListKey, workspaceAccent, type Accent } from './model';
 
 /** One Control Point workspace the linked account belongs to (`docs/control-point-link.md` §2). */
 export type Workspace = { id: number; name: string; ftcNumber: string | null; accentColor: string | null; canEditCad: boolean; cadUrl?: string };
@@ -70,7 +70,11 @@ export function useControlPoint(kit: ControlKit) {
   // The key a send would carry now: it changes with the BOM, the workspace, and which files would go inline (the
   // workbook always, the STEP ZIP once exported this session), so "sent" means this exact BOM went to this workspace.
   const [currentKey, setCurrentKey] = useState<string | null>(null);
-  const zipReady = Boolean(kit.step?.zipMade) && kit.lastStepZip.current?.scanId === result?.scanId;
+  // The STEP ZIP goes with a send only when it was exported from this scan's current make list; it goes inline (and so
+  // into the key) only up to the payload's inline limit, larger ZIPs travel as references, exactly as the builder decides.
+  const zip = kit.lastStepZip.current;
+  const zipCurrent = Boolean(kit.step?.zipMade) && Boolean(result) && zip?.scanId === result?.scanId && zip?.makeList === makeListKey(result!);
+  const zipReady = zipCurrent && zip!.bytes.length <= INLINE_FILE_LIMIT_BYTES;
   useEffect(() => {
     setCurrentKey(null);
     if (!result || !workspace) return;
@@ -79,6 +83,7 @@ export function useControlPoint(kit: ControlKit) {
       .then(key => { if (live) setCurrentKey(key); }).catch(() => undefined);
     return () => { live = false; };
   }, [result, workspace?.id, zipReady]);
+
   const sentCurrent = Boolean(sent && workspace && currentKey && sent.workspaceId === workspace.id && sent.idempotencyKey === currentKey);
   const accent: Accent | null = workspaceAccent(workspace?.accentColor);
   useEffect(() => {
@@ -117,9 +122,11 @@ export function useControlPoint(kit: ControlKit) {
       const filesNotIncluded: Array<{ name: string; reason: string }> = [];
       try { const book = await kit.buildWorkbook(); files.push({ name: book.filename, mediaType: XLSX_TYPE, bytes: book.bytes }); }
       catch { filesNotIncluded.push({ name: 'Excel BOM', reason: 'The workbook could not be built in the browser.' }); }
-      const zip = kit.lastStepZip.current;
-      if (zip && zip.scanId === result.scanId) files.push({ name: zip.name, mediaType: 'application/zip', bytes: zip.bytes });
-      else filesNotIncluded.push({ name: 'STEP files', reason: 'Not exported in this session. Download STEP files from Make, then send again to attach them.' });
+      const exported = kit.lastStepZip.current;
+      if (exported && exported.scanId === result.scanId && exported.makeList === makeListKey(result)) files.push({ name: exported.name, mediaType: 'application/zip', bytes: exported.bytes });
+      else filesNotIncluded.push({ name: 'STEP files', reason: exported && exported.scanId === result.scanId
+        ? 'The make list changed after the STEP files were exported. Download them again from Make, then send again to attach them.'
+        : 'Not exported in this session. Download STEP files from Make, then send again to attach them.' });
       const payload = await buildControlPointPayload(result, { context, workspaceId: workspace.id, files, filesNotIncluded });
       // The workspace named on the button travels with the send; the Worker refuses it if the saved one changed meanwhile.
       const response = await api(`/api/control-point/send?${new URLSearchParams({ scanId: result.scanId, workspaceId: String(workspace.id) })}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { aiCandidateRecord, applyAiReview, applyClassificationChoice, applyMatchDecision, buildAiReviewRequest, classificationIdentity, classifyScan, decisionRecord, matchCatalog, type AiProvider, type AiReviewItem, type BomLine, type ClassificationOverride, type ExportPart, type MatchProgress, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
+import { makeListKey } from './model';
 /** Spreadsheet and ZIP builders load on first download, keeping them out of the initial bundle. */
 const exporters = () => import('@control-kit/excel');
 
@@ -63,7 +64,7 @@ export function useControlKit(context: URLSearchParams) {
   const stepRun = useRef<number | null>(null);
   const stepRuns = useRef(0);
   /** The last STEP ZIP this session built, so a Control Point send can attach it without exporting again. */
-  const lastStepZip = useRef<{ scanId: string; name: string; bytes: Uint8Array } | null>(null);
+  const lastStepZip = useRef<{ scanId: string; makeList: string; name: string; bytes: Uint8Array } | null>(null);
   const sessionCheck = useRef(0);
   const query = new URLSearchParams(contextKeys.map(key => [key, context.get(key) ?? '']));
   const connectUrl = `${workerUrl}/oauth/start?${query}`;
@@ -469,6 +470,8 @@ export function useControlKit(context: URLSearchParams) {
    */
   async function downloadStep() {
     if (!result?.scanId || stepRun.current !== null) return;
+    // The make list this export covers; a later change to it makes the ZIP out of date for Control Point.
+    const makeList = makeListKey(result);
     const run = ++stepRuns.current;
     stepRun.current = run;
     // False once sign-out has ended this export; it then stops without touching state.
@@ -522,7 +525,7 @@ export function useControlKit(context: URLSearchParams) {
       if (!active()) return;
       const zip = buildStepZip({ ...job, files });
       saveFile(zip.bytes, zip.filename, 'application/zip');
-      lastStepZip.current = { scanId: result.scanId, name: zip.filename, bytes: zip.bytes };
+      lastStepZip.current = { scanId: result.scanId, makeList, name: zip.filename, bytes: zip.bytes };
       setStep(current => current && { ...current, running: false, zipMade: ready > 0 });
     } catch (cause) {
       if (!active()) return;

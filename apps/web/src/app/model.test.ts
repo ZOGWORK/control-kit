@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateAssembly, classifyScan, recalculatePurchasing, type AssemblyInstance, type BomLine, type ScanResult, type VendorRecord } from '@control-kit/shared';
-import { buyList, catalogState, catalogStateText, catalogsComplete, composition, filterParts, findParts, hasChanges, money, primaryAction, readiness, reviewQueue, scanChanges, staleCatalogs, summarize, topCosts, workspaceAccent } from './model';
+import { buyList, catalogState, catalogStateText, catalogsComplete, composition, filterParts, findParts, hasChanges, money, primaryAction, readiness, reviewQueue, makeListKey, scanChanges, staleCatalogs, summarize, topCosts, workspaceAccent } from './model';
 
 const vendor = (sku: string, packSize: number | null, priceUsd: number | null): VendorRecord => ({ vendorId: 'gobilda', sku, normalizedSku: sku.replace(/\D/g, ''), name: 'Screw', normalizedName: 'screw', url: 'https://www.gobilda.com/x/',
   priceUsd, packSize, packSizeVerified: packSize !== null, stock: 'in', stockQty: null, category: 'hardware', updatedAt: '2026-10-24T00:00:00Z', source: 'sitemap' });
@@ -86,6 +86,14 @@ describe('Control Kit view model', () => {
     expect(workspaceAccent('#1a1a40')).toBeNull();
     expect(workspaceAccent('blue')).toBeNull();
     expect(workspaceAccent(null)).toBeNull();
+  });
+  it('ties a STEP export to the make list it covered', () => {
+    const result = scan([...parts('Sensor mount [3DP]', 1, 'm'), ...parts('Mystery part', 1, 'x')]);
+    const exported = makeListKey(result);
+    expect(makeListKey(result)).toBe(exported);
+    // Marking another part to print changes what a STEP ZIP must contain.
+    const changed = { ...result, lines: result.lines.map(line => line.partId === 'x' ? { ...line, disposition: 'print' as const } : line) };
+    expect(makeListKey(changed)).not.toBe(exported);
   });
   it('never puts a possible match under a vendor or into a total', () => {
     const result = scan(parts('Wheel', 4, 'wheel'), lines => { lines[0].vendor = vendor('3606-0014-0096', 1, 12); lines[0].matchStatus = 'possible'; });

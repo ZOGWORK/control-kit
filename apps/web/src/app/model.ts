@@ -1,4 +1,4 @@
-import { dispositionLabel, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorId } from '@control-kit/shared';
+import { dispositionLabel, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorId } from '@control-kit/shared';
 
 /** The app's sections, in the order a team works through them. */
 export type View = 'overview' | 'review' | 'parts' | 'buy' | 'make';
@@ -248,6 +248,9 @@ export function workspaceAccent(color: string | null | undefined, background = '
   const mix = (toward: number, amount: number) => `#${[r, g, b].map(value => Math.round(value + (toward - value) * amount).toString(16).padStart(2, '0')).join('')}`;
   return { accent, hover: mix(255, 0.2), soft: `rgb(${r} ${g} ${b} / 0.12)`, ink };
 }
+
+/** The parts a STEP export covers, so a ZIP exported before the make list changed is never sent as current. */
+export const makeListKey = (result: ScanResult) => result.lines.filter(wantsStep).map(line => `${line.bomLineKey}:${line.disposition}:${line.qty}`).sort().join('|');
 
 /** "4 minutes ago", for scan and catalog times. Never used in the first render, which has no clock yet. */
 export function ago(iso: string, now: number) {
