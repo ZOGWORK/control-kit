@@ -46,7 +46,8 @@ export function Overview({ kit, summary, go, now }: { kit: ControlKit; summary: 
   else if (summary.buyLines && !ready.order.unmatched) done.push('Every matched part is priced');
   if (ready.order.outOfStock) moves.push({ key: 'stock', icon: <PackageX aria-hidden />, tone: 'blocked', title: `${parts(ready.order.outOfStock)} out of stock`,
     detail: 'The vendor lists these as out of stock. The buy list shows in-stock alternatives where there are any.', action: <Button variant="secondary" size="sm" onClick={() => go('buy')}>Open buy list</Button> });
-  else if (ready.order.total - ready.order.unmatched > 0) done.push('Everything matched is in stock');
+  // "In stock" only when every matched part says so; a catalog may not know a product's stock.
+  else if (ready.order.total - ready.order.unmatched > 0) done.push(buyList(result).vendors.every(group => group.lines.every(line => line.vendor!.stock === 'in' || line.vendor!.stock === 'low')) ? 'Everything matched is in stock' : 'No matched part is reported out of stock');
   if (summary.dataIssues && topIssue) moves.push({ key: 'issues', icon: <AlertTriangle aria-hidden />, tone: 'blocked', title: `${parts(summary.dataIssues)} ${summary.dataIssues === 1 ? 'is' : 'are'} missing data`,
     detail: `${summary.dataIssues === 1 ? 'Reason' : 'Most often'}: ${lowerFirst(metadataIssueText[topIssue[0] as keyof typeof metadataIssueText])}${summary.dataIssues === 1 ? '' : ` (${topIssue[1]})`}.`,
     action: <Button variant="secondary" size="sm" onClick={() => go('parts')}>See parts</Button> });
