@@ -50,14 +50,15 @@ function Privacy() {
         <li>For you alone: the assembly and its bill of materials for 30 days per revision, your latest scan for a week, part pictures for 30 days, and exported STEP files for an hour. These make rescans fast and keep Onshape requests low.</li>
         <li>Your team number, if you enter one in Settings.</li>
         <li>Your team's part choices, saved with the document for everyone who scans it, with the name of who made each change. The history of changes is kept for a year.</li>
+        <li>AI review's suggestions for 30 days, so asking again about the same parts gives the same answer without another AI call.</li>
         <li>Daily counts of Onshape requests and their results, with no names, documents, or part data.</li>
       </ul>
     </section>
     <section className="landing-section">
       <h2>What leaves Control Kit</h2>
       <ul className="landing-list">
-        <li><strong>Control Point</strong>, only if you link a Control Point account and press Send: the reviewed bill of materials goes to the workspace you pick. A record of what was sent is kept for a year.</li>
-        <li><strong>AI review</strong>, only when you ask for it: the names, descriptions, and candidate products of the undecided parts are sent to Google Gemini, or to Anthropic if Gemini is unavailable. Nothing else from your document is sent.</li>
+        <li><strong>Control Point</strong>, only if you link a Control Point account and press Send: the reviewed bill of materials goes to the workspace you pick. While the account is linked, Control Kit keeps its Control Point access token, encrypted, with your Control Point account name and workspaces; unlinking deletes them. A record of what was sent is kept for a year.</li>
+        <li><strong>AI review</strong>, only when you ask for it: for each undecided part, its name, description, material, part number, configuration, quantity, where it is used in the assembly, and its candidate products, along with the assembly's name, are sent to Google Gemini, or to Anthropic if Gemini is unavailable. Nothing else from your document is sent.</li>
         <li>Nothing else. Vendor prices come from the vendors' public catalogs, which Control Kit reads on its own schedule, not with your data.</li>
       </ul>
     </section>

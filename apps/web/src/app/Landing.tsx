@@ -62,7 +62,7 @@ export function Landing() {
         <li>Onshape sign-in tokens are stored encrypted on our server; your browser holds only an opaque session cookie.</li>
         <li>To make rescans fast and cheap, Control Kit keeps, for you alone, the assembly and its bill of materials for 30 days per revision, your latest scan for a week, part pictures for 30 days, and exported STEP files for an hour.</li>
         <li>Vendor prices come from the vendors' public catalogs. Totals are list prices before shipping, tax, or team discounts.</li>
-        <li>If AI review is turned on and you ask for it, the names, descriptions, and candidate products of the undecided parts are sent to Google Gemini, or to Anthropic if Gemini is unavailable. Nothing is sent unless you click it.</li>
+        <li>If AI review is turned on and you ask for it, the undecided parts' names, descriptions, part numbers, and candidate products, with a few details from the assembly, are sent to Google Gemini, or to Anthropic if Gemini is unavailable. Nothing is sent unless you click it.</li>
       </ul>
       <p className="muted small">The full details are on the <a className="link" href="/privacy">privacy page</a>.</p>
     </section>

@@ -65,7 +65,7 @@ Matches what the Worker does (see the [privacy page](https://control-kit.pages.d
 - Stores Onshape tokens encrypted on the server for 30 days after last use; the browser holds only a random session cookie. Signing out deletes them.
 - Keeps, per user, the assembly and BOM for 30 days per revision, the latest scan for a week, part pictures for 30 days, and STEP files for an hour.
 - Keeps the team's part choices with the document, with who made each change; the change history for a year.
-- Sends data elsewhere only when you ask: the reviewed BOM to Control Point when you link it and press Send, and undecided part names to Google Gemini or Anthropic when you ask for AI review.
+- Sends data elsewhere only when you ask: the reviewed BOM to Control Point when you link it and press Send (the Control Point token is kept encrypted until you unlink), and the undecided parts' names, descriptions, part numbers, and candidate products to Google Gemini or Anthropic when you ask for AI review.
 - Runs on Cloudflare over HTTPS. No ads, no selling data, no tracking.
 
 ## Permissions to explain
@@ -81,7 +81,7 @@ Onshape publishes no image sizes, so these are large and sharp enough to be scal
 
 | File | Size | Use and caption |
 | --- | --- | --- |
-| `icon/control-kit-tile-512.png` | 512 × 512 | App icon on a light tile. `icon/control-kit-512.png` is the transparent mark; 256, 128, 64, 48, and 32 px versions sit beside both. |
+| `icon/control-kit-tile-512.png` | 512 × 512 | App icon on a light tile. `icon/control-kit-512.png` is the transparent mark. Both come in 512, 256, 128, 64, 48, and 32 px. |
 | `feature-graphic.png` | 2400 × 1260 | Feature graphic (also served at 1200 × 630 as the site's share image). |
 | `1-overview.png` | 2560 × 1600 | Every part of the robot, sorted into buy and make, with the known cost so far. |
 | `2-buy-list.png` | 2560 × 1600 | A buy list matched to vendor SKUs, rounded to whole packs, priced only when verified. |
