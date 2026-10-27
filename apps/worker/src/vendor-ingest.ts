@@ -6,12 +6,14 @@ import type { Kv } from './index';
 /**
  * `feed` vendors are Shopify stores whose public `/products.json` lists 250 products with every variant's SKU, price, and
  * availability per request, so a whole catalog takes a handful of requests instead of one page fetch per product.
+ * `officialFeed` vendors gave permission to use their own feed and are never crawled: `runVendor` hands them to that
+ * feed's importer before any crawl code runs (REV since 2026-10-26, `rev-feed.ts`).
  */
-export const vendorSources: Record<VendorId, { origin: string; sitemap: string; feed?: boolean }> = {
+export const vendorSources: Record<VendorId, { origin: string; sitemap?: string; feed?: boolean; officialFeed?: string }> = {
   gobilda: { origin: 'https://www.gobilda.com', sitemap: 'https://www.gobilda.com/xmlsitemap.php' },
   servocity: { origin: 'https://www.servocity.com', sitemap: 'https://www.servocity.com/xmlsitemap.php' },
   andymark: { origin: 'https://andymark.com', sitemap: 'https://andymark.com/sitemap.xml', feed: true },
-  rev: { origin: 'https://www.revrobotics.com', sitemap: 'https://www.revrobotics.com/xmlsitemap.php' },
+  rev: { origin: 'https://www.revrobotics.com', officialFeed: 'https://dashboard.revrobotics.com/feeds/usa/products.json' },
   pitsco: { origin: 'https://www.pitsco.com', sitemap: 'https://www.pitsco.com/sitemap.xml', feed: true },
 };
 export const feedUrl = (vendor: VendorId, page: number) => `${vendorSources[vendor].origin}/products.json?limit=250&page=${page}`;
@@ -362,6 +364,8 @@ async function abandonIfReplaced(vendor: VendorId, kv: Kv, startedOn: string | n
  * Parse problems skip the page with a reason; network failures stop the run after saving what was fetched.
  */
 export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fetch, options: { maxProducts?: number; maxFeedPages?: number; maxRequests?: number; feedFreshHours?: number; minRequestMs?: number; retireAfterMs?: number; now?: () => Date } = {}): Promise<VendorRun> {
+  // A vendor that gave Control Kit its own feed is never crawled; `runRevFeed` loads it (the scheduled handler picks).
+  if (vendorSources[vendor].officialFeed) throw new Error(`${vendor} is loaded from its official feed and is never crawled`);
   const started = Date.now();
   const now = options.now ?? (() => new Date());
   const maxProducts = Math.max(1, Math.min(options.maxProducts ?? 40, 500));
@@ -500,7 +504,7 @@ export async function runVendor(vendor: VendorId, kv: Kv, fetcher: Fetcher = fet
       }
     } else {
       if (!crawl) {
-        const root = await fetchText(vendorSources[vendor].sitemap);
+        const root = await fetchText(vendorSources[vendor].sitemap!);
         const sitemaps = sitemapLocations(root).filter(url => /(?:type=products|sitemap_products)/i.test(url) && allowedUrl(vendor, url));
         if (!sitemaps.length) throw new Error('No public product sitemap found');
         crawl = { gen: crypto.randomUUID().slice(0, 8), startedAt: now().toISOString(), sitemaps, sitemapIndex: 0, urlCount: 0, urlIndex: 0, batches: 0, records: 0, skipped: {}, skipSamples: [], failing: null, done: false };

@@ -5,7 +5,7 @@ import { Alert } from '../components/arc/alert/alert';
 import { Button } from './bits';
 import type { ControlKit } from './useControlKit';
 import type { ControlPoint, Workspace } from './useControlPoint';
-import { ago, money } from './model';
+import { ago, feedDates, money } from './model';
 
 const CONTROL_POINT = 'https://tryctrlpoint.org';
 export const createWorkspaceUrl = `${CONTROL_POINT}/teams?tab=workspaces&new=1`;
@@ -80,7 +80,7 @@ function Preview({ kit }: { kit: ControlKit }) {
       })}</span>
       <span className="num muted small">{items.length} parts</span>
     </li>)}</ul>
-    <figcaption className="muted small">Preview: this is how {result.assemblyName} would appear in Control Point, every part To Order, unpriced parts left blank rather than $0.</figcaption>
+    <figcaption className="muted small">Preview: this is how {result.assemblyName} would appear in Control Point, every part To Order, unpriced parts left blank rather than $0.{feedDates(result.lines).map(note => ` ${note}.`).join('')}</figcaption>
   </figure>;
 }
 

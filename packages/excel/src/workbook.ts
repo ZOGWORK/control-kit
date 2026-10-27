@@ -57,6 +57,12 @@ const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print',
 const matchText: Record<BomLine['matchStatus'], string> = { exact: 'Exact SKU', confirmed: 'Confirmed', possible: 'Possible, not confirmed', rejected: 'Rejected', unmatched: 'No match' };
 const order: Disposition[] = ['buy', 'hardware', 'print', 'cnc', 'cut-2d', 'fabricate', 'review', 'ignore'];
 const date = (iso: string | null | undefined) => iso && Number.isFinite(Date.parse(iso)) ? iso.slice(0, 10) : 'unknown';
+/**
+ * When a product's price and stock were read. REV's feed terms require its update time beside every REV price and stock
+ * shown, so an official feed's records give the date and time; a crawled page gives the date it was fetched.
+ */
+const asOf = (vendor: VendorRecord) => vendor.parser === 'official-feed' && Number.isFinite(Date.parse(vendor.updatedAt))
+  ? `${vendorName[vendor.vendorId]} feed updated ${new Date(vendor.updatedAt).toISOString().slice(0, 16).replace('T', ' ')} UTC` : date(vendor.updatedAt);
 /** Only an exact or confirmed match identifies the product a team orders; anything else is a candidate. */
 const ordered = (line: BomLine) => Boolean(line.vendor && (line.matchStatus === 'exact' || line.matchStatus === 'confirmed'));
 const verifiedPack = (line: BomLine) => ordered(line) && line.vendor!.packSizeVerified && line.vendor!.packSize && !isBundle(line.vendor!.name) ? line.vendor!.packSize : null;
@@ -125,13 +131,13 @@ function headers(target: Sheet, row: number, names: string[]) {
 }
 
 /** The part name links to its product page; the Onshape column opens the Part Studio that holds the part. */
-const BUY_HEADERS = ['#', 'Part', 'Qty Needed', 'Pack Size', 'Packs to Order', 'Vendor', 'SKU', 'Pack Price', 'Line Total', 'Stock', 'Match', 'Onshape Part Studio', 'Notes'];
+const BUY_HEADERS = ['#', 'Part', 'Qty Needed', 'Pack Size', 'Packs to Order', 'Vendor', 'SKU', 'Pack Price', 'Line Total', 'Stock', 'Price and Stock As Of', 'Match', 'Onshape Part Studio', 'Notes'];
 /**
  * One row per part the team buys, grouped by vendor. Line Total is a live `Packs × Pack Price` formula only where the match
  * is exact or confirmed and the pack size and price are verified; every other row keeps its financial cells blank.
  */
 function buySheet(result: ScanResult, now: Date) {
-  const target = sheet('Buy list', BUY_HEADERS.length, { 2: 44, 13: 52 });
+  const target = sheet('Buy list', BUY_HEADERS.length, { 2: 44, 11: 30, 14: 52 });
   heading(target, 'BUY LIST', result, now, 1);
   // Fasteners follow the parts to buy: listed with their CAD counts, never priced (an exact SKU would have made them Buy).
   const lines = result.lines.filter(line => line.disposition === 'buy' || line.disposition === 'hardware')
@@ -165,9 +171,10 @@ function buySheet(result: ScanResult, now: Date) {
     if (priced(line)) put(target, row, 9, `E${row}*H${row}`, band(index, S.money, S.moneyAlt), 'f', undefined, line.lineTotalUsd!);
     else put(target, row, 9, '', body);
     const level = stock(line); put(target, row, 10, level.value, level.value ? level.style : body);
-    put(target, row, 11, matchText[line.matchStatus], body);
-    put(target, row, 12, 'Open Part Studio', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
-    put(target, row, 13, purchaseNotes(line, result), band(index, S.wrap, S.wrapAlt));
+    put(target, row, 11, vendor ? asOf(vendor) : '', body);
+    put(target, row, 12, matchText[line.matchStatus], body);
+    put(target, row, 13, 'Open Part Studio', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+    put(target, row, 14, purchaseNotes(line, result), band(index, S.wrap, S.wrapAlt));
   });
   if (!lines.length) put(target, first, 1, 'No parts are marked Buy yet. Decide parts in Control Kit, then download again.', S.muted);
   target.filter = `A6:${cellRef(BUY_HEADERS.length, last)}`;
@@ -268,7 +275,7 @@ function exceptionsSheet(result: ScanResult, now: Date) {
   const rows: Array<{ kind: string; line: BomLine; detail: string }> = [
     ...result.lines.filter(line => line.disposition === 'ignore').map(line => ({ kind: 'Not needed', line, detail: 'Marked not needed by your team: not bought or made' })),
     ...result.lines.filter(line => ordered(line) && line.disposition === 'buy' && ['out', 'low'].includes(line.vendor!.stock))
-      .map(line => ({ kind: line.vendor!.stock === 'out' ? 'Out of stock' : 'Low stock', line, detail: `${product(line.vendor!)} as of ${date(line.vendor!.updatedAt)}` })),
+      .map(line => ({ kind: line.vendor!.stock === 'out' ? 'Out of stock' : 'Low stock', line, detail: `${product(line.vendor!)}, ${line.vendor!.parser === 'official-feed' ? '' : 'as of '}${asOf(line.vendor!)}` })),
     ...result.lines.filter(line => line.unresolvedSubassembly).map(line => ({ kind: 'Unresolved subassembly', line, detail: line.missingMetadataReason ?? 'Its parts could not be read' })),
     ...result.missingMetadata.filter(line => !line.suppressed && !line.unresolvedSubassembly)
       .map(line => ({ kind: 'Missing data', line, detail: line.metadataIssue ? metadataIssueText[line.metadataIssue.code] : line.missingMetadataReason ?? 'Metadata unavailable' })),
@@ -363,7 +370,7 @@ export function buildExcelWorkbook(result: ScanResult, now = new Date(), logo?: 
   return { bytes: zipSync(files, { level: 6 }), filename: buildFilename(result.assemblyName, now).filename };
 }
 
-export const CSV_HEADERS = ['#', 'Part', 'Qty Needed', 'How obtained', 'Pack Size', 'Packs to Order', 'Vendor', 'SKU', 'Pack Price', 'Line Total', 'Stock', 'Match', 'Product URL', 'Onshape URL', 'Notes'];
+export const CSV_HEADERS = ['#', 'Part', 'Qty Needed', 'How obtained', 'Pack Size', 'Packs to Order', 'Vendor', 'SKU', 'Pack Price', 'Line Total', 'Stock', 'Price and Stock As Of', 'Match', 'Product URL', 'Onshape URL', 'Notes'];
 /**
  * Plain fallback with the workbook's rules: every active part, one row each. Pack Size, Packs to Order, and Line Total are
  * filled only for an exact or confirmed product with a verified pack size and price; a possible match is only named in Notes.
@@ -386,7 +393,7 @@ export function buildBomCsv(result: ScanResult, now = new Date()): CsvExport {
     const charged = buying && priced(line);
     return [String(index + 1), text(line.name), String(line.qty), text(shortLabel[line.disposition]), buying ? String(verifiedPack(line) ?? '') : '', charged ? String(line.packsToOrder) : '',
       text(vendor ? vendorName[vendor.vendorId] : ''), text(vendor?.sku), !buying || !vendor || vendor.priceUsd === null ? '' : vendor.priceUsd.toFixed(2), charged ? line.lineTotalUsd!.toFixed(2) : '',
-      text(stock(line).value), text(matchText[line.matchStatus]), text(vendor ? safeUrl(vendor.url) : ''), text(safeUrl(line.partStudioUrl)), text(purchaseNotes(line, result))].join(',');
+      text(stock(line).value), text(vendor ? asOf(vendor) : ''), text(matchText[line.matchStatus]), text(vendor ? safeUrl(vendor.url) : ''), text(safeUrl(line.partStudioUrl)), text(purchaseNotes(line, result))].join(',');
   })];
   const { filename } = buildFilename(result.assemblyName, now);
   return { bytes: strToU8(`\uFEFF${rows.join('\r\n')}\r\n`), filename: filename.replace(/\.xlsx$/, '.csv') };

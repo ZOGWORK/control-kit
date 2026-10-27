@@ -1,4 +1,4 @@
-import { dispositionLabel, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorId } from '@control-kit/shared';
+import { dispositionLabel, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorId, type VendorRecord } from '@control-kit/shared';
 
 /** The app's sections, in the order a team works through them. */
 export type View = 'overview' | 'review' | 'parts' | 'buy' | 'make';
@@ -11,6 +11,27 @@ export const chipLabel = (line: BomLine) => line.suppressed ? 'Suppressed' : dis
 export const shortLabel: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Fabricate', hardware: 'Fastener', ignore: 'Not needed', review: 'Needs review' };
 const dollars = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 export const money = (value: number) => dollars.format(value);
+const stamp = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+/**
+ * When a product's price and stock were read. REV's feed terms require its update time beside every REV price and stock
+ * shown, so an official feed's records give the date and time; a crawled page gives the date it was fetched.
+ */
+export function priceDate(vendor: VendorRecord) {
+  const at = new Date(vendor.updatedAt);
+  if (!Number.isFinite(at.getTime())) return 'update time unknown';
+  return vendor.parser === 'official-feed' ? `${vendorLabel[vendor.vendorId]} feed updated ${stamp.format(at)}` : `as of ${at.toLocaleDateString()}`;
+}
+/** The official feeds behind a scan's matched products, each with its oldest update time, for notes beside totals. */
+export function feedDates(lines: BomLine[]) {
+  const oldest = new Map<VendorId, VendorRecord>();
+  for (const line of lines) {
+    const vendor = line.vendor;
+    if (!vendor || vendor.parser !== 'official-feed' || line.matchStatus === 'rejected') continue;
+    const seen = oldest.get(vendor.vendorId);
+    if (!seen || vendor.updatedAt < seen.updatedAt) oldest.set(vendor.vendorId, vendor);
+  }
+  return [...oldest.values()].map(priceDate);
+}
 
 /** A line can be paid for only with a confirmed or exact match, a verified pack size, and a price. */
 export const priced = (line: BomLine) => line.lineTotalUsd !== null;

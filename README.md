@@ -95,16 +95,17 @@ Failed parts are also shown in the app. If every part fails, no ZIP is produced 
 
 ## Vendor catalog refresh
 
-Vendor crawls are **paused** since 2026-10-25 at the owner's request: they used most of the free plan's daily KV writes, and the published catalogs stay as they are (staged loads with `scripts/catalog-load.ts` still work). When enabled, five staggered Worker crons run every hour: goBILDA at :00, ServoCity at :12, AndyMark at :24, REV at :36, and Pitsco at :48; the schedule is kept as a comment in `wrangler.toml`. Each run respects `robots.txt` and stays within [Cloudflare's 50-subrequest free-plan limit](https://developers.cloudflare.com/changelog/post/2026-02-11-subrequests-limit/).
+Vendor crawls are **paused** since 2026-10-25 at the owner's request: they used most of the free plan's daily KV writes, and the published catalogs stay as they are (staged loads with `scripts/catalog-load.ts` still work). When enabled, five staggered Worker crons run every hour: goBILDA at :00, ServoCity at :12, AndyMark at :24, REV at :36 (its official feed, never a crawl), and Pitsco at :48; the schedule is kept as a comment in `wrangler.toml`. Each run respects `robots.txt` and stays within [Cloudflare's 50-subrequest free-plan limit](https://developers.cloudflare.com/changelog/post/2026-02-11-subrequests-limit/).
 
 - **AndyMark and Pitsco** are Shopify stores. A run reads up to four pages of the store's public `/products.json` feed, 250 products each, with every variant's SKU, price, and availability. A full catalog takes two or three runs (AndyMark: 9 pages, 5,313 SKUs; Pitsco: 6 pages, 1,625 SKUs, as of 2026-10-25). Fetching their product pages one by one drew HTTP 429 responses.
-- **goBILDA, ServoCity, and REV** are BigCommerce stores with no public feed. A run fetches at most 40 product pages from the product sitemap, at no more than two requests per second. A first full crawl takes about 60 runs for goBILDA (2,387 pages), 130 for ServoCity (5,152), and 10 for REV (390).
+- **goBILDA and ServoCity** are BigCommerce stores with no public feed. A run fetches at most 40 product pages from the product sitemap, at no more than two requests per second. A first full crawl takes about 60 runs for goBILDA (2,387 pages) and 130 for ServoCity (5,152).
+- **REV** is never crawled. Since 2026-10-26 REV's catalog comes only from its official feed, used with REV's permission: `https://dashboard.revrobotics.com/feeds/usa/products.json`, refreshed daily at midnight Central Time (`apps/worker/src/rev-feed.ts`). Its cron checks the feed at most every six hours with the last ETag, stages a changed feed, and publishes it on a later run after validating it again; an unreachable, malformed, or truncated feed (under 500 products, or over 10% unusable rows) leaves the live catalog as it was. REV's terms are shown in the app and workbook: every REV product links to its REV product page, and every REV price and stock shows the feed's update time. To load it by hand: `npx tsx scripts/catalog-load.ts stage --vendor rev`, then `validate` and `publish` as below (REV refuses `--crawl` and `--spot`, which would fetch its pages).
 
 A rate-limited request (HTTP 429) is retried twice after the vendor's `Retry-After`, at most 10 seconds, before the run stops and resumes next hour.
 
 **Parsing.** The Shopify feed yields one record per variant with a SKU, linked to that variant. Each product page yields one record per purchasable SKU:
 - Shopify pages: from the page's variant list, with a variant-specific link (kept for pages; the crawl now uses the feed).
-- BigCommerce family pages (goBILDA, ServoCity, REV): from their child rows.
+- BigCommerce family pages (goBILDA, ServoCity): from their child rows.
 - Otherwise: from Product JSON-LD.
 
 A record must carry a real vendor SKU; none is derived from a name. A pack size is recorded only with its evidence, such as `variant label "25 Pack"`. Pages that are redirect stubs, lack product data, or lack a SKU are skipped and counted by reason. A page whose fetch fails holds the crawl position for up to three runs, then is skipped, so one bad page cannot stall a vendor.

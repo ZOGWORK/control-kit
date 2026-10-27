@@ -2,7 +2,7 @@ import { ExternalLink, FileSpreadsheet, ShoppingCart } from 'lucide-react';
 import { Alert } from '../components/arc/alert/alert';
 import { EmptyState } from '../components/arc/empty-state/empty-state';
 import type { ControlKit } from './useControlKit';
-import { buyList, catalogsComplete, fasteners, money, summarize, type View } from './model';
+import { buyList, catalogsComplete, fasteners, feedDates, money, priceDate, summarize, type View } from './model';
 import { Button, LineCost, SectionHead, StockNote } from './bits';
 
 /**
@@ -25,7 +25,7 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
     {kit.excel === 'failed' && <Alert tone="warning" title="The Excel file could not be built">Download the CSV instead; it has the same rows without formatting.</Alert>}
     {summary.buyLines > 0 && <section className="panel buy-summary" aria-label="Order summary">
       <div className="money-figure"><span className={`money-value num ${summary.subtotal === null ? 'none' : ''}`}>{summary.subtotal === null ? 'None priced' : money(summary.subtotal)}</span>
-        <span className="small muted">{complete ? 'purchasing total' : 'known subtotal'}, list prices before shipping and tax</span></div>
+        <span className="small muted">{complete ? 'purchasing total' : 'known subtotal'}, list prices before shipping and tax{feedDates(vendors.flatMap(group => group.lines)).map(note => `; ${note}`).join('')}</span></div>
       <div className="split-bar" role="img" aria-label={`${summary.pricedLines} of ${summary.buyLines} parts priced`}>
         <span className="split priced" style={{ flexGrow: summary.pricedLines }} /><span className="split unpriced" style={{ flexGrow: summary.buyLines - summary.pricedLines }} /></div>
       <ul className="figures-row">
@@ -55,6 +55,7 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
               {line.priceCheck && <span className="warn">{line.priceCheck}</span>}
               {vendor.priceUsd !== null && <span className="num">{money(vendor.priceUsd)} per pack</span>}
               <StockNote stock={vendor.stock} />
+              <span className="muted">{priceDate(vendor)}</span>
             </span>
           </div>
           <div className="row-aside"><LineCost line={line} /></div>

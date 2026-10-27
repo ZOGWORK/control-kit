@@ -2,6 +2,7 @@
 //
 //   npx tsx scripts/catalog-load.ts stage    --vendor gobilda --feed goBILDA.csv [--map sku="Product Code" --map packQty="Qty/Pack"]
 //   npx tsx scripts/catalog-load.ts stage    --vendor gobilda --crawl work/backfill/gobilda.json
+//   npx tsx scripts/catalog-load.ts stage    --vendor rev [--feed products.json]
 //   npx tsx scripts/catalog-load.ts validate --vendor gobilda --gen <gen> [--expect 1121-0010-0264,1309-0016-4008] [--spot 20]
 //   npx tsx scripts/catalog-load.ts publish  --vendor gobilda --gen <gen> [--expect ...] [--spot 20]
 //   npx tsx scripts/catalog-load.ts retire   --vendor gobilda [--limit 200]
@@ -11,14 +12,18 @@
 // that vendor until the feed is older than VENDOR_STALE_HOURS. `retire` deletes replaced generations whose day of
 // rollback is over, which the crawl normally does, so they do not pile up while crawls are paused. It fetches nothing
 // from vendor sites. Uses wrangler's credentials; never prints records.
+//
+// REV is loaded only from its official feed (apps/worker/src/rev-feed.ts): `stage --vendor rev` makes one GET of the
+// feed (or reads a saved copy with --feed), and REV refuses crawl dumps and --spot, which would fetch its product pages.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeSku, type VendorId, type VendorRecord } from '../packages/shared/src/index';
 import { propagationMs, publishStaged, spotCheck, stageCatalog, validateStaged } from '../apps/worker/src/catalog-publish';
 import { normalizeFeedRows, parseCsv, parseJsonFeed, type FeedField } from '../apps/worker/src/feed-import';
+import { checkRevFeed, fetchRevFeed, parseRevFeed, revMinRecords } from '../apps/worker/src/rev-feed';
 import { applyPackEvidence, batchKey, pointerKey, retireReplaced, type CatalogPointer } from '../apps/worker/src/vendor-ingest';
 import type { Kv } from '../apps/worker/src/index';
 
@@ -61,10 +66,11 @@ async function liveRecords(gen: string) {
 }
 async function validate(gen: string) {
   const expect = (flag('expect') ?? '').split(',').map(sku => sku.trim()).filter(Boolean).map(sku => normalizeSku(sku, vendor));
-  const result = await validateStaged(vendor, kv, gen, { expectSkus: expect, minRecords: Number(flag('min') ?? 1) });
+  const result = await validateStaged(vendor, kv, gen, { expectSkus: expect, minRecords: Number(flag('min') ?? (vendor === 'rev' ? revMinRecords : 1)) });
   console.log(`${vendor} ${gen}: ${result.records} records, ${result.priced} priced, ${result.verifiedPacks} verified packs; live ${result.liveRecords ?? 'none'}`);
   for (const problem of result.problems) console.log(`  PROBLEM ${problem}`);
   const spot = Number(flag('spot') ?? 0);
+  if (spot && vendor === 'rev') throw new Error('REV product pages are never fetched; its feed is checked by validate without --spot');
   let spotOk = true;
   if (spot) {
     const checks = await spotCheck(await liveRecords(gen), url => fetch(url, { headers: { 'user-agent': 'Control Kit vendor catalog (+https://github.com/ZOGWORK/control-kit)' } }), spot);
@@ -82,7 +88,22 @@ if (mode === 'stage') {
   let rejected = 0;
   let source: 'crawl' | 'official-feed';
   let skipped = {};
-  if (flag('feed')) {
+  if (vendor === 'rev') {
+    if (flag('crawl')) throw new Error('REV is never crawled; stage it from its official feed');
+    let body: string; let updatedAt: string;
+    if (flag('feed')) { body = readFileSync(flag('feed')!, 'utf8'); updatedAt = statSync(flag('feed')!).mtime.toISOString(); }
+    else {
+      const response = await fetchRevFeed();
+      if (response.status !== 'ok') throw new Error('REV feed answered 304 without a validator');
+      body = response.body; updatedAt = response.updatedAt;
+    }
+    const feed = parseRevFeed(body, updatedAt);
+    console.log(`rev: ${feed.rows} feed rows updated ${updatedAt}; ${feed.records.length} usable, ${feed.rejected.length} rejected`);
+    for (const reason of [...new Set(feed.rejected.map(item => item.reason))]) console.log(`  rejected (${feed.rejected.filter(item => item.reason === reason).length}): ${reason}, e.g. row ${feed.rejected.find(item => item.reason === reason)!.row}`);
+    const problems = checkRevFeed(feed);
+    if (problems.length) throw new Error(`Not staged: ${problems.join('; ')}`);
+    records = feed.records; rejected = feed.rejected.length; source = 'official-feed';
+  } else if (flag('feed')) {
     const text = readFileSync(flag('feed')!, 'utf8');
     const rows = flag('feed')!.toLowerCase().endsWith('.json') ? parseJsonFeed(text) : parseCsv(text);
     const mapping = Object.fromEntries(flags('map').map(pair => pair.split('=').map(part => part.trim().replace(/^"|"$/g, '')))) as Partial<Record<FeedField, string>>;

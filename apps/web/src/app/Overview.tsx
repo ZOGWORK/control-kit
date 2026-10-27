@@ -6,7 +6,7 @@ import { Button, DispositionChip } from './bits';
 import type { ControlKit } from './useControlKit';
 import type { ControlPoint } from './useControlPoint';
 import { ControlPointCard } from './ControlPoint';
-import { ago, buyList, catalogsComplete, catalogState, catalogStateText, composition, findParts, hasChanges, money, percent, primaryAction, readiness, scanChanges, staleCatalogs, topCosts, unmatchedParts, vendorLabel,
+import { ago, buyList, catalogsComplete, catalogState, catalogStateText, composition, feedDates, findParts, hasChanges, money, percent, primaryAction, readiness, scanChanges, staleCatalogs, topCosts, unmatchedParts, vendorLabel,
   type PrimaryAction, type Readiness, type Summary, type View } from './model';
 
 /** "1 part", "3 parts". */
@@ -229,7 +229,7 @@ function MoneyCard({ kit, summary, ready, go }: { kit: ControlKit; summary: Summ
   const missing = summary.buyLines - summary.pricedLines;
   return <section className="panel" aria-labelledby="money">
     <div className="panel-head"><div><h2 id="money">{complete ? 'Purchasing total' : 'Known subtotal'}</h2>
-      <p>List prices{result.vendorDataUpdatedAt ? ` as of ${day(result.vendorDataUpdatedAt)}` : ''}, before shipping and tax.</p></div>
+      <p>List prices{result.vendorDataUpdatedAt ? ` as of ${day(result.vendorDataUpdatedAt)}` : ''}, before shipping and tax.{feedDates(result.lines).map(note => ` ${note}.`).join('')}</p></div>
       <Button variant="ghost" size="sm" onClick={() => go('buy')}>Buy list<ArrowRight aria-hidden size={14} /></Button></div>
     <div className="panel-body money">
       <div className="money-figure"><span className={`money-value num ${summary.subtotal === null ? 'none' : ''}`}>{summary.subtotal === null ? 'None priced' : money(summary.subtotal)}</span>
@@ -254,9 +254,10 @@ function BuyByVendor({ kit, go }: { kit: ControlKit; go: (view: View) => void })
     <div className="panel-head"><div><h2 id="by-vendor">Buy by vendor</h2><p>Matched parts grouped by where they are ordered.</p></div></div>
     <div className="rows">{vendors.map(group => {
       const out = group.lines.filter(line => line.vendor?.stock === 'out').length;
+      const [feed] = feedDates(group.lines);
       return <button key={group.vendorId} type="button" className="row vendor-row" onClick={() => go('buy')}>
         <div className="row-main"><span className="row-title"><span className="dot buy" aria-hidden /><span>{group.label}</span></span>
-          <span className="row-meta"><span>{parts(group.lines.length)}</span>{group.unpriced > 0 && <span>{group.unpriced} unpriced</span>}{out > 0 && <span className="blocked-text">{out} out of stock</span>}</span></div>
+          <span className="row-meta"><span>{parts(group.lines.length)}</span>{group.unpriced > 0 && <span>{group.unpriced} unpriced</span>}{out > 0 && <span className="blocked-text">{out} out of stock</span>}{feed && <span className="muted">{feed}</span>}</span></div>
         <span className="num">{group.subtotal === null ? <span className="muted small">not priced</span> : money(group.subtotal)}</span>
       </button>;
     })}
