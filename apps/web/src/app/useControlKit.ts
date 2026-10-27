@@ -55,17 +55,22 @@ export function useControlKit(context: URLSearchParams) {
   const [pending, setPending] = useState<string | null>(null);
   /** Lines whose choice is being saved. Saves run side by side, so deciding the next part never waits for the last one. */
   const [saving, setSaving] = useState<ReadonlySet<string>>(new Set());
-  // Every save marks its line here first; a choice refresh skips lines saved or saving after it asked (`editedSince`).
+  // Every save marks its line and which choice it changes (type or product); a choice refresh skips just that choice on
+  // a line saved or saving after it asked (`editedSince`), so a type save never hides a product picked up meanwhile.
+  type ChoiceKind = 'type' | 'product';
   const editClock = useRef(0);
   const lastEdit = useRef(new Map<string, number>());
-  const savingNow = useRef<ReadonlySet<string>>(new Set());
-  const markSaving = (key: string, on: boolean) => {
-    if (on) lastEdit.current.set(key, ++editClock.current);
-    setSaving(current => { const next = new Set(current); if (on) next.add(key); else next.delete(key); savingNow.current = next; return next; });
+  const savingNow = useRef(new Set<string>());
+  const markSaving = (key: string, on: boolean, kind: ChoiceKind) => {
+    const tag = `${kind}:${key}`;
+    if (on) { lastEdit.current.set(tag, ++editClock.current); savingNow.current.add(tag); } else savingNow.current.delete(tag);
+    setSaving(current => { const next = new Set(current); if (on) next.add(key); else next.delete(key); return next; });
   };
-  /** Lines a person was saving when `since` was taken, is saving now, or started saving after it. */
-  const editedSince = (since: { clock: number; saving: ReadonlySet<string> }) => (key: string) =>
-    since.saving.has(key) || savingNow.current.has(key) || (lastEdit.current.get(key) ?? 0) > since.clock;
+  /** Whether a person was saving this choice of the line when `since` was taken, is saving it now, or started after. */
+  const editedSince = (since: { clock: number; saving: ReadonlySet<string> }) => (kind: ChoiceKind, key: string) => {
+    const tag = `${kind}:${key}`;
+    return since.saving.has(tag) || savingNow.current.has(tag) || (lastEdit.current.get(tag) ?? 0) > since.clock;
+  };
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
   const [excel, setExcel] = useState<'idle' | 'working' | 'failed'>('idle');
   const [step, setStep] = useState<ExportState | null>(null);
@@ -164,7 +169,7 @@ export function useControlKit(context: URLSearchParams) {
     if (!reopened.scanId) return;
     // Choices wait for the refresh, so nothing saved meanwhile can be overwritten by the older answer. A refresh started
     // by a Control Point pull can overlap a save already running; those lines keep what the person chose.
-    const edited = editedSince({ clock: editClock.current, saving: savingNow.current });
+    const edited = editedSince({ clock: editClock.current, saving: new Set(savingNow.current) });
     setPending('refresh');
     try {
       const response = await postJson('/api/choices', { documentId: reopened.documentId, scanId: reopened.scanId });
@@ -174,9 +179,9 @@ export function useControlKit(context: URLSearchParams) {
         if (!current || current.scanId !== reopened.scanId) return current;
         const lines = current.lines.map(line => {
           const choice = choices[line.bomLineKey];
-          if (!choice || edited(line.bomLineKey)) return line;
-          const next = { ...line, manualClassification: choice.disposition };
-          const decision = choice.decision;
+          if (!choice) return line;
+          const next = edited('type', line.bomLineKey) ? { ...line } : { ...line, manualClassification: choice.disposition };
+          const decision = edited('product', line.bomLineKey) ? null : choice.decision;
           // An unmatched line can take a pick from its near matches too (a choice made in Control Point), as the matcher allows.
           const picked = decision && ['possible', 'confirmed', 'rejected', 'unmatched'].includes(line.matchStatus) ? decisionRecord(line, decision as Parameters<typeof decisionRecord>[1]) : null;
           if (decision && picked) {
@@ -303,7 +308,7 @@ export function useControlKit(context: URLSearchParams) {
   /** Confirms or rejects the line's match; `pick` confirms one of its choices instead. */
   async function decide(line: BomLine, decision: 'confirmed' | 'rejected', pick?: VendorRecord, options: { keepAi?: boolean } = {}): Promise<boolean> {
     if (!result || !(pick ?? line.vendor) || pending || saving.has(line.bomLineKey)) return false;
-    markSaving(line.bomLineKey, true);
+    markSaving(line.bomLineKey, true, 'product');
     const generation = scanGeneration.current;
     const vendor = (pick ?? line.vendor)!;
     const previous = { matchStatus: line.matchStatus, vendor: line.vendor, alternatives: line.alternatives };
@@ -324,7 +329,7 @@ export function useControlKit(context: URLSearchParams) {
       });
       setError('Could not save the match choice. Try again.');
       return false;
-    } finally { markSaving(line.bomLineKey, false); }
+    } finally { markSaving(line.bomLineKey, false, 'product'); }
   }
 
   useEffect(() => {
@@ -415,12 +420,12 @@ export function useControlKit(context: URLSearchParams) {
   /** Set how a part is obtained (or `null` for automatic). Shared with everyone who scans the document. */
   async function setDisposition(line: BomLine, choice: ClassificationOverride | null, options: { keepAi?: boolean } = {}): Promise<boolean> {
     if (!result || pending || saving.has(line.bomLineKey)) return false;
-    markSaving(line.bomLineKey, true);
+    markSaving(line.bomLineKey, true, 'type');
     try {
       const saved = await saveChoice(line, choice, options.keepAi);
       if (!saved) setError(`Could not save the choice for ${line.name}. Try again.`);
       return saved;
-    } finally { markSaving(line.bomLineKey, false); }
+    } finally { markSaving(line.bomLineKey, false, 'type'); }
   }
 
   /**
