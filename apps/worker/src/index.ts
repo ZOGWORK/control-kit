@@ -80,7 +80,9 @@ export function kvDecisionStore(env: Env): DecisionStore {
         if (decision.type) {
           const current = await readDispositionRecord(env, scan.documentId, decision.identity);
           const value = decision.type.value === null ? null : parseOverride(decision.type.value);
-          if (newer(decision.type.at, current?.at) && (current?.disposition ?? null) !== value) {
+          // The type in force: the shared record, or without one an older per-person override (which a reset must clear).
+          const effective = current ? current.disposition : await readDisposition(env, userId, scan.documentId, decision.identity);
+          if (newer(decision.type.at, current?.at) && (effective ?? null) !== value) {
             await saveDisposition(env, userId, scan.documentId, decision.identity, { disposition: value, by: `${decision.type.by} in Control Point`, byId: 'control-point', at: decision.type.at });
             types++;
           }

@@ -397,6 +397,18 @@ describe('choices made in Control Point', () => {
     expect((await choices(cookie, result))[line.bomLineKey].disposition).toBe('cnc');
   });
 
+  it('clears an older per-person type when Control Point resets the part', async () => {
+    const { cookie, result } = await ready();
+    const line = result.lines[1];
+    const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity(line)))), byte => byte.toString(16).padStart(2, '0')).join('');
+    env.APP_STATE.values.set(`override:mock-user:${result.documentId}:${digest}`, 'printed');
+    expect((await choices(cookie, result))[line.bomLineKey].disposition).toBe('print');
+    cp.setDecisions(12, result.documentId, [{ identity: identity(line), elementId: line.elementId, type: { value: null, by: 'Lee', at: '2026-10-26T19:00:00.000Z' }, product: null }]);
+    expect(await (await post(cookie, '/api/control-point/decisions', { documentId: result.documentId, scanId: result.scanId })).json()).toEqual({ types: 1, products: 0 });
+    expect((await choices(cookie, result))[line.bomLineKey]).toMatchObject({ disposition: null, dispositionBy: 'Lee in Control Point' });
+    expect(env.APP_STATE.values.has(`override:mock-user:${result.documentId}:${digest}`)).toBe(false);
+  });
+
   it("needs the person's own scan and a chosen workspace, and ends the link when Control Point revokes it", async () => {
     const cookie = await session();
     const result = await scan(cookie);

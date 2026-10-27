@@ -55,7 +55,17 @@ export function useControlKit(context: URLSearchParams) {
   const [pending, setPending] = useState<string | null>(null);
   /** Lines whose choice is being saved. Saves run side by side, so deciding the next part never waits for the last one. */
   const [saving, setSaving] = useState<ReadonlySet<string>>(new Set());
-  const markSaving = (key: string, on: boolean) => setSaving(current => { const next = new Set(current); if (on) next.add(key); else next.delete(key); return next; });
+  // Every save marks its line here first; a choice refresh skips lines saved or saving after it asked (`editedSince`).
+  const editClock = useRef(0);
+  const lastEdit = useRef(new Map<string, number>());
+  const savingNow = useRef<ReadonlySet<string>>(new Set());
+  const markSaving = (key: string, on: boolean) => {
+    if (on) lastEdit.current.set(key, ++editClock.current);
+    setSaving(current => { const next = new Set(current); if (on) next.add(key); else next.delete(key); savingNow.current = next; return next; });
+  };
+  /** Lines a person was saving when `since` was taken, is saving now, or started saving after it. */
+  const editedSince = (since: { clock: number; saving: ReadonlySet<string> }) => (key: string) =>
+    since.saving.has(key) || savingNow.current.has(key) || (lastEdit.current.get(key) ?? 0) > since.clock;
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
   const [excel, setExcel] = useState<'idle' | 'working' | 'failed'>('idle');
   const [step, setStep] = useState<ExportState | null>(null);
@@ -152,7 +162,9 @@ export function useControlKit(context: URLSearchParams) {
   /** Applies the document's current shared choices and the person's match decisions to a reopened scan. */
   async function refreshChoices(reopened: ScanResult) {
     if (!reopened.scanId) return;
-    // Choices wait for the refresh, so nothing saved meanwhile can be overwritten by the older answer.
+    // Choices wait for the refresh, so nothing saved meanwhile can be overwritten by the older answer. A refresh started
+    // by a Control Point pull can overlap a save already running; those lines keep what the person chose.
+    const edited = editedSince({ clock: editClock.current, saving: savingNow.current });
     setPending('refresh');
     try {
       const response = await postJson('/api/choices', { documentId: reopened.documentId, scanId: reopened.scanId });
@@ -162,7 +174,7 @@ export function useControlKit(context: URLSearchParams) {
         if (!current || current.scanId !== reopened.scanId) return current;
         const lines = current.lines.map(line => {
           const choice = choices[line.bomLineKey];
-          if (!choice) return line;
+          if (!choice || edited(line.bomLineKey)) return line;
           const next = { ...line, manualClassification: choice.disposition };
           const decision = choice.decision;
           // An unmatched line can take a pick from its near matches too (a choice made in Control Point), as the matcher allows.
