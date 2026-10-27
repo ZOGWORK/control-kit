@@ -99,6 +99,8 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
         }
         if (url.pathname === '/control-point/start') { cpLinked = true; response.setHeader('content-type', 'text/html'); return response.end('<script>opener && opener.postMessage({ type: "control-point-linked" }, location.origin); close();</script>Linked.'); }
         if (url.pathname === '/api/scan') {
+          // A new scan reads a newer revision, so its own pictures replace any redrawn ones, as in the Worker.
+          redrawnAt.clear();
           response.setHeader('content-type', 'application/x-ndjson');
           // The same steps and counts the Worker sends, so the progress screen can be seen here.
           // A saved scan reports what it really read; its subassembly count is not kept, so it is left out.

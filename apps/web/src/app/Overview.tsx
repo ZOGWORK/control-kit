@@ -214,18 +214,29 @@ function AssemblyPicture({ kit }: { kit: ControlKit }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const shown = useRef<string | null>(null);
+  // Every load and redraw takes a number; only the latest one may change the picture, and nothing lands after unmount.
+  const latest = useRef(0);
+  const mounted = useRef(true);
   const figure = useRef<HTMLDivElement>(null);
   const menuId = useId();
-  const show = (next: AssemblyPictureResult) => {
+  const remember = (next: AssemblyView) => { try { localStorage.setItem(viewKey, next); } catch { /* the view is a convenience; the default still works */ } };
+  const settle = (request: number, next: AssemblyPictureResult) => {
+    if (!mounted.current || request !== latest.current) { URL.revokeObjectURL(next.url); return; }
     if (shown.current) URL.revokeObjectURL(shown.current);
     shown.current = next.url;
     setPicture(next);
+    setNote('');
   };
-  useEffect(() => () => { if (shown.current) URL.revokeObjectURL(shown.current); }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; if (shown.current) URL.revokeObjectURL(shown.current); shown.current = null; }; }, []);
   useEffect(() => {
+    const request = ++latest.current;
     const controller = new AbortController();
-    kit.assemblyPicture(view, controller.signal).then(next => { if (!controller.signal.aborted) { show(next); setNote(''); } })
-      .catch(error => { if (!controller.signal.aborted) setNote(error instanceof Error ? error.message : 'Onshape could not draw this view.'); });
+    kit.assemblyPicture(view, controller.signal).then(next => settle(request, next)).catch(error => {
+      if (controller.signal.aborted || request !== latest.current || !mounted.current) return;
+      // A remembered view Onshape cannot draw falls back to isometric, so the picture and its menu never disappear for good.
+      if (!shown.current && view !== 'isometric') { setView('isometric'); remember('isometric'); return; }
+      setNote(error instanceof Error ? error.message : 'Onshape could not draw this view.');
+    });
     return () => controller.abort();
   }, [result.scanId, view]);
   // The menu closes on Escape or a click outside the picture.
@@ -238,19 +249,17 @@ function AssemblyPicture({ kit }: { kit: ControlKit }) {
     return () => { document.removeEventListener('pointerdown', away); document.removeEventListener('keydown', escape); };
   }, [open]);
   if (!picture) return null;
-  const choose = (value: string) => {
-    const next = value as AssemblyView;
-    setView(next);
-    try { localStorage.setItem(viewKey, next); } catch { /* the view is a convenience; the default still works */ }
-  };
+  const choose = (value: string) => { setView(value as AssemblyView); remember(value as AssemblyView); };
   const redraw = async () => {
+    const request = ++latest.current;
     setBusy(true);
     setNote('');
-    try { show(await kit.redrawAssemblyPicture(view)); }
-    catch (error) { setNote(error instanceof Error ? error.message : 'Onshape could not redraw this picture.'); }
-    finally { setBusy(false); }
+    try { settle(request, await kit.redrawAssemblyPicture(view)); }
+    catch (error) { if (mounted.current && request === latest.current) setNote(error instanceof Error ? error.message : 'Onshape could not redraw this picture.'); }
+    finally { if (mounted.current) setBusy(false); }
   };
-  const label = pictureViews.find(option => option.value === view)!.label;
+  // The caption and description name the picture on screen, which may still be the previous view while the next one loads.
+  const label = pictureViews.find(option => option.value === picture.view)!.label;
   return <div ref={figure} className="hero"><figure className="hero-picture">
     <button type="button" className="hero-picture-button" aria-expanded={open} aria-controls={menuId} onClick={() => setOpen(value => !value)}
       aria-label={`${result.assemblyName}, as modelled in Onshape (${label.toLowerCase()} view). Change the picture`}>

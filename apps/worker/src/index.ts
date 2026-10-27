@@ -7,7 +7,7 @@ import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, revi
 export { AiAllowance } from './ai-allowance';
 import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
-import { assemblyNowKey, assemblyPreview, assemblyPreviewCacheKey, assemblyView, linePreview, previewCacheKey, PreviewUnavailableError, readAssemblyNow, redrawAssembly, redrawPauseMs, type AssemblyNow } from './preview';
+import { assemblyNowKey, assemblyPreview, assemblyPreviewCacheKey, assemblyView, linePreview, previewCacheKey, PreviewUnavailableError, readAssemblyNow, redrawAssembly, reserveRedraw, type AssemblySource } from './preview';
 import { clearCookie, readSignedEnvelope, seal, signedCookie, unseal, type SignedCookie } from './secrets';
 import { controlPointRoute, type ControlPointEnv } from './control-point';
 
@@ -116,6 +116,12 @@ function onshapeFetcher(env: Env, current: { id: string; data: Session }, ledger
     throw new Error('Onshape rate limit exhausted');
   };
 }
+/** The panel's workspace or version from `wvm`/`wvmId`, or null when it names neither. */
+function assemblySource(url: URL): AssemblySource | null {
+  const type = url.searchParams.get('wvm'), id = url.searchParams.get('wvmId') ?? '';
+  return (type === 'w' || type === 'v') && /^[A-Za-z0-9]{1,64}$/.test(id) ? { type, id } : null;
+}
+
 /** An assembly picture; `x-picture-drawn` holds when it was redrawn on request, absent for the scanned revision's picture. */
 function assemblyPicture(png: Uint8Array, drawnAt: string | null) {
   const headers: Record<string, string> = { 'content-type': 'image/png', 'cache-control': 'private, no-cache' };
@@ -360,7 +366,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!raw) return reply({ error: 'Scan this assembly again to see its picture.' }, 409);
     const result = JSON.parse(raw) as ScanResult;
     const view = assemblyView(url.searchParams.get('view'));
-    const drawn = await readAssemblyNow(env.APP_STATE, assemblyNowKey(current.data.user.id, result, view), result);
+    // A picture redrawn from this panel's own workspace or version, when the panel names it.
+    const source = assemblySource(url);
+    const drawn = source && await readAssemblyNow(env.APP_STATE, assemblyNowKey(current.data.user.id, result, source, view), result);
     if (drawn) return assemblyPicture(Uint8Array.from(atob(drawn.image), char => char.charCodeAt(0)), drawn.at);
     const ledger = new RequestLedger('preview');
     try {
@@ -379,22 +387,21 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
     const scanId = url.searchParams.get('scanId');
     if (!scanId || !/^[a-f0-9-]{36}$/.test(scanId)) return reply({ error: 'Invalid scan.' }, 400);
-    const type = url.searchParams.get('wvm');
-    const id = url.searchParams.get('wvmId') ?? '';
-    if ((type !== 'w' && type !== 'v') || !/^[A-Za-z0-9]{1,64}$/.test(id)) return reply({ error: 'Open Control Kit from an assembly tab to redraw its picture.' }, 400);
+    const source = assemblySource(url);
+    if (!source) return reply({ error: 'Open Control Kit from an assembly tab to redraw its picture.' }, 400);
     const raw = await env.APP_STATE.get(`scan:${current.data.user.id}:${scanId}`);
     if (!raw) return reply({ error: 'Scan this assembly again to see its picture.' }, 409);
     const result = JSON.parse(raw) as ScanResult;
     const view = assemblyView(url.searchParams.get('view'));
-    const key = assemblyNowKey(current.data.user.id, result, view);
-    const last = await env.APP_STATE.get(key).then(value => value ? (JSON.parse(value) as AssemblyNow).at : null).catch(() => null);
-    const wait = last ? Date.parse(last) + redrawPauseMs - Date.now() : 0;
-    if (wait > 0) return reply({ error: 'This picture was just redrawn. Try again in a minute.', retryAfter: Math.ceil(wait / 1000) }, 429);
+    const key = assemblyNowKey(current.data.user.id, result, source, view);
+    const reserved = await reserveRedraw(env.AI_ALLOWANCE, env.APP_STATE, key);
+    if (!reserved.ok) return reply({ error: 'This picture was just redrawn. Try again in a minute.', retryAfter: reserved.retryAfter }, 429);
     const ledger = new RequestLedger('preview');
     try {
-      const { png, at } = await redrawAssembly(result, { type, id }, key, env.APP_STATE, onshapeFetcher(env, current, ledger, { remaining: 3 }), env.ONSHAPE_API_VERSION, view);
+      const { png, at } = await redrawAssembly(result, source, key, env.APP_STATE, onshapeFetcher(env, current, ledger, { remaining: 3 }), env.ONSHAPE_API_VERSION, view);
       return assemblyPicture(png, at);
     } catch (error) {
+      await reserved.release();
       if (error instanceof SessionExpiredError) return reply({ error: 'Reconnect Onshape.' }, 401);
       if (error instanceof PreviewUnavailableError || error instanceof BudgetExhaustedError) return reply({ error: error instanceof PreviewUnavailableError ? error.message : 'Onshape is busy. Try again shortly.' }, 404);
       throw error;

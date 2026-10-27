@@ -1,5 +1,6 @@
 import type { BomLine, ScanResult } from '@control-kit/shared';
 import type { Kv } from './index';
+import type { GateReply, GateRequest } from './ai-allowance';
 
 type FetchOnshape = (path: string, init?: RequestInit) => Promise<Response>;
 const size = { outputWidth: '480', outputHeight: '320' };
@@ -46,17 +47,21 @@ export function assemblyPreviewPath(result: ScanResult, apiVersion: string, view
 export const assemblyPreviewCacheKey = (userId: string, result: ScanResult, view: AssemblyView = 'isometric') =>
   `${userId}:preview-assembly:${result.documentId}:${result.elementId}:${result.diagnostics?.revision?.type ?? ''}:${result.diagnostics?.revision?.id ?? result.scanId ?? 'unknown'}${view === 'isometric' ? '' : `:${view}`}`;
 
+/** The panel's workspace or version: where a redraw is drawn from. */
+export type AssemblySource = { type: 'w' | 'v'; id: string };
 /**
- * A picture drawn on request from the assembly as it is now (its workspace, or its version), kept per user, assembly,
- * and view with the time it was drawn. It replaces the scanned picture while it is newer than the scan.
+ * A picture drawn on request from the assembly as it is now, kept per user, assembly, workspace or version (so one
+ * branch never shows another's), and view, with the time it was drawn. It replaces the scanned picture while it is newer
+ * than the scan.
  */
-export const assemblyNowKey = (userId: string, result: ScanResult, view: AssemblyView) => `${userId}:preview-assembly-now:${result.documentId}:${result.elementId}:${view}`;
+export const assemblyNowKey = (userId: string, result: ScanResult, source: AssemblySource, view: AssemblyView) =>
+  `${userId}:preview-assembly-now:${result.documentId}:${result.elementId}:${source.type}:${source.id}:${view}`;
 export type AssemblyNow = { at: string; image: string };
 /** How long a person waits between redraws of one assembly and view: each costs a billable Onshape request. */
 export const redrawPauseMs = 60_000;
 
 /** The current workspace or version, drawn whole. */
-export function assemblyNowPath(result: ScanResult, source: { type: 'w' | 'v'; id: string }, apiVersion: string, view: AssemblyView) {
+export function assemblyNowPath(result: ScanResult, source: AssemblySource, apiVersion: string, view: AssemblyView) {
   return `/api/${apiVersion}/assemblies/d/${encodeURIComponent(result.documentId)}/${source.type}/${encodeURIComponent(source.id)}/e/${encodeURIComponent(result.elementId)}/shadedviews?${assemblyQuery(view)}`;
 }
 
@@ -94,7 +99,7 @@ export function assemblyPreview(result: ScanResult, cacheKey: string, kv: Kv, fe
 }
 
 /** One Onshape request for the assembly as it is now, stored with the time it was drawn. */
-export async function redrawAssembly(result: ScanResult, source: { type: 'w' | 'v'; id: string }, key: string, kv: Kv, fetchOnshape: FetchOnshape, apiVersion: string, view: AssemblyView): Promise<{ png: Uint8Array; at: string }> {
+export async function redrawAssembly(result: ScanResult, source: AssemblySource, key: string, kv: Kv, fetchOnshape: FetchOnshape, apiVersion: string, view: AssemblyView): Promise<{ png: Uint8Array; at: string }> {
   const response = await fetchOnshape(assemblyNowPath(result, source, apiVersion, view), { headers: { accept: 'application/json' } });
   if (!response.ok) throw new PreviewUnavailableError(response.status === 403 || response.status === 404 ? 'Onshape would not draw this assembly; its document may not be shared with you.' : `Onshape could not draw this assembly (HTTP ${response.status}).`);
   const body = await response.json().catch(() => null) as { images?: unknown } | null;
@@ -103,4 +108,24 @@ export async function redrawAssembly(result: ScanResult, source: { type: 'w' | '
   const at = new Date().toISOString();
   await kv.put(key, JSON.stringify({ at, image } satisfies AssemblyNow), { expirationTtl: 30 * 86400 });
   return { png: Uint8Array.from(atob(image), char => char.charCodeAt(0)), at };
+}
+
+/** The Durable Object namespace that holds pauses atomically (`AiAllowance`, instance "redraw"). */
+type Gates = { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
+/**
+ * Reserves one redraw before Onshape is asked, so two clicks arriving together cannot both spend a request. With the
+ * Durable Object the check and the reservation are one step; without it (local tests), the stored picture's time is the
+ * only check. A failed redraw gives its pause back.
+ */
+export async function reserveRedraw(gates: Gates | undefined, kv: Kv, key: string): Promise<{ ok: true; release(): Promise<void> } | { ok: false; retryAfter: number }> {
+  if (!gates) {
+    const last = await kv.get(key).then(value => value ? (JSON.parse(value) as AssemblyNow).at : null).catch(() => null);
+    const wait = last ? Date.parse(last) + redrawPauseMs - Date.now() : 0;
+    return wait > 0 ? { ok: false, retryAfter: Math.ceil(wait / 1000) } : { ok: true, release: async () => undefined };
+  }
+  const stub = gates.get(gates.idFromName('redraw'));
+  const ask = async (body: GateRequest) => await (await stub.fetch(new Request('https://allowance/', { method: 'POST', body: JSON.stringify(body) }))).json() as GateReply;
+  const reply = await ask({ action: 'gate', key, pauseMs: redrawPauseMs });
+  if (!reply.ok) return { ok: false, retryAfter: Math.ceil(reply.retryAfterMs / 1000) };
+  return { ok: true, release: async () => { await ask({ action: 'ungate', key, until: reply.until }).catch(() => undefined); } };
 }

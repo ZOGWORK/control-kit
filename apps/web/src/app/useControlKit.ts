@@ -21,7 +21,7 @@ export const contextKeys = ['documentId', 'workspaceOrVersion', 'workspaceOrVers
 export const workerUrl = import.meta.env.VITE_WORKER_URL ?? '';
 /** The angles the assembly's picture can be drawn from, as the Worker names them (`assemblyViews`). */
 export type AssemblyView = 'isometric' | 'front' | 'right' | 'top';
-export type AssemblyPictureResult = { url: string; drawnAt: string | null };
+export type AssemblyPictureResult = { url: string; drawnAt: string | null; view: AssemblyView };
 export const api = (path: string, init: RequestInit = {}) => fetch(`${workerUrl}${path}`, { credentials: 'include', ...init });
 export const postJson = (path: string, body: unknown) => api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const overridesOf = (result: ScanResult) => Object.fromEntries(result.lines.filter(line => line.manualClassification).map(line => [line.bomLineKey, line.manualClassification!]));
@@ -555,19 +555,21 @@ export function useControlKit(context: URLSearchParams) {
    * The whole assembly drawn by Onshape in one view: at the scanned revision (cached by the Worker, so only a new
    * revision or view costs a request), or the picture last redrawn on request while it is newer than the scan.
    */
+  // This tab's workspace or version, so a redrawn picture is only ever shown in the branch it was drawn from.
+  const pictureSource = () => ({ wvm: context.get('workspaceOrVersion') ?? '', wvmId: context.get('workspaceOrVersionId') ?? '' });
   async function assemblyPicture(view: AssemblyView, signal: AbortSignal): Promise<AssemblyPictureResult> {
     if (!result?.scanId) throw new Error('Scan this assembly first.');
-    const response = await api(`/api/preview/assembly?${new URLSearchParams({ scanId: result.scanId, view })}`, { signal });
+    const response = await api(`/api/preview/assembly?${new URLSearchParams({ scanId: result.scanId, view, ...pictureSource() })}`, { signal });
     if (!response.ok) throw new Error(await response.json().then((body: { error?: string }) => body.error).catch(() => undefined) ?? 'Onshape could not draw this view.');
-    return { url: URL.createObjectURL(await response.blob()), drawnAt: response.headers.get('x-picture-drawn') };
+    return { url: URL.createObjectURL(await response.blob()), drawnAt: response.headers.get('x-picture-drawn'), view };
   }
   /** Draws the assembly as it is now in this tab's workspace or version: one Onshape request, at most once a minute per view. */
   async function redrawAssemblyPicture(view: AssemblyView): Promise<AssemblyPictureResult> {
-    const wvm = context.get('workspaceOrVersion'), wvmId = context.get('workspaceOrVersionId');
+    const { wvm, wvmId } = pictureSource();
     if (!result?.scanId || (wvm !== 'w' && wvm !== 'v') || !wvmId) throw new Error('Open Control Kit from an assembly tab to redraw its picture.');
     const response = await api(`/api/preview/assembly/redraw?${new URLSearchParams({ scanId: result.scanId, view, wvm, wvmId })}`, { method: 'POST' });
     if (!response.ok) throw new Error(await response.json().then((body: { error?: string }) => body.error).catch(() => undefined) ?? 'Onshape could not redraw this picture.');
-    return { url: URL.createObjectURL(await response.blob()), drawnAt: response.headers.get('x-picture-drawn') };
+    return { url: URL.createObjectURL(await response.blob()), drawnAt: response.headers.get('x-picture-drawn'), view };
   }
 
   return { assemblyPicture, redrawAssemblyPicture, context, buildWorkbook, lastStepZip, previous, ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
