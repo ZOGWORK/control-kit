@@ -64,6 +64,9 @@ const newer = (at: string, than: string | undefined) => !than || Date.parse(at) 
 /**
  * Control Point's choices for a scan's parts saved as Control Kit's own (contract §5). Only parts in the person's scan,
  * only choices newer than what Control Kit holds, and only real changes are written, so an unchanged pull writes nothing.
+ * Each record is read right before its write. KV has no compare-and-swap, so a person's save landing between that read
+ * and the write can still be overwritten by an older Control Point choice, the same limit as two people saving a shared
+ * type at once (CLAUDE.md PR 4). Its never-overwritten history key survives, and the person's next save wins again.
  */
 export function kvDecisionStore(env: Env): DecisionStore {
   return {

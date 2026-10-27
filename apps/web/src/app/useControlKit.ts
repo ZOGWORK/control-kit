@@ -125,16 +125,26 @@ export function useControlKit(context: URLSearchParams) {
   }
   /**
    * When and by whom each line's saved choices were made, for the Control Point bundle (contract §2 v1.1): Control Point
-   * shows whichever of its own choice and Control Kit's is newer. Null when the Worker could not say.
+   * shows whichever of its own choice and Control Kit's is newer. A time travels only with the value it was saved for:
+   * when a teammate changed a choice after this scan loaded, the line still carries the older value, so it gets no time
+   * (and so never outranks a newer choice in Control Point). A cleared type keeps its time, so a reset is newer too.
+   * Null when the Worker could not say.
    */
   async function choiceTimes(scanned: ScanResult): Promise<ControlPointChoiceTimes | null> {
     if (!scanned.scanId) return null;
     const response = await postJson('/api/choices', { documentId: scanned.documentId, scanId: scanned.scanId }).catch(() => null);
     if (!response?.ok) return null;
     const { choices } = await response.json() as { choices: SavedChoices };
-    return Object.fromEntries(Object.entries(choices).map(([key, choice]) => [key, {
-      manualOverrideAt: choice.disposition ? choice.dispositionAt ?? null : null, manualOverrideBy: choice.disposition ? choice.dispositionBy ?? null : null,
-      matchDecisionAt: choice.decision?.status === 'confirmed' ? choice.decision.at ?? null : null }]));
+    const lines = new Map(scanned.lines.map(line => [line.bomLineKey, line]));
+    return Object.fromEntries(Object.entries(choices).flatMap(([key, choice]) => {
+      const line = lines.get(key);
+      if (!line) return [];
+      const sameType = (choice.disposition ?? null) === (line.manualClassification ?? null) && Boolean(choice.dispositionAt);
+      const decision = choice.decision;
+      const sameProduct = decision?.status === 'confirmed' && line.matchStatus === 'confirmed' && line.vendor?.vendorId === decision.vendorId && line.vendor?.normalizedSku === decision.normalizedSku;
+      return [[key, { manualOverrideAt: sameType ? choice.dispositionAt ?? null : null, manualOverrideBy: sameType ? choice.dispositionBy ?? null : null,
+        matchDecisionAt: sameProduct ? decision.at ?? null : null }]];
+    }));
   }
   /** Applies the document's current shared choices and the person's match decisions to a reopened scan. */
   async function refreshChoices(reopened: ScanResult) {

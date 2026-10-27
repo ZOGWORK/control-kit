@@ -84,9 +84,10 @@ export function useControlPoint(kit: ControlKit) {
     setCurrentKey(null);
     if (!result || !workspace) return;
     let live = true;
-    // The same choice times a send carries, so a choice saved since the last send shows as a change.
-    void kit.choiceTimes(result).then(choiceTimes => controlPointIdempotencyKey(result, { workspaceId: workspace.id,
-      inlineMediaTypes: [XLSX_TYPE, PICTURE_TYPE, ...(zipReady ? ['application/zip'] : [])], choiceTimes: choiceTimes ?? undefined }))
+    // The same choice times and files a send carries, so a choice saved since the last send shows as a change, and a
+    // send without a picture (Onshape would not draw one) still reads as current.
+    void Promise.all([kit.choiceTimes(result), assemblyPictureBytes()]).then(([choiceTimes, picture]) => controlPointIdempotencyKey(result, { workspaceId: workspace.id,
+      inlineMediaTypes: [XLSX_TYPE, ...(picture ? [PICTURE_TYPE] : []), ...(zipReady ? ['application/zip'] : [])], choiceTimes: choiceTimes ?? undefined }))
       .then(key => { if (live) setCurrentKey(key); }).catch(() => undefined);
     return () => { live = false; };
   }, [result, workspace?.id, zipReady]);
@@ -137,8 +138,15 @@ export function useControlPoint(kit: ControlKit) {
     finally { setBusy(null); }
   }
 
-  /** The scan's assembly picture as PNG bytes (cached by the Worker per revision), or null. */
-  async function assemblyPictureBytes() {
+  /** The scan's assembly picture as PNG bytes (cached by the Worker per revision, and here per scan), or null. */
+  const picture = useRef<{ scanId: string; bytes: Promise<Uint8Array | null> } | null>(null);
+  function assemblyPictureBytes() {
+    const scanId = result?.scanId;
+    if (!scanId) return Promise.resolve(null);
+    if (picture.current?.scanId !== scanId) picture.current = { scanId, bytes: drawPicture() };
+    return picture.current.bytes;
+  }
+  async function drawPicture() {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
