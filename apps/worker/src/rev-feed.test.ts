@@ -150,6 +150,25 @@ describe('REV catalog from the official feed', () => {
     expect(json<CatalogPointer>(kv, pointerKey('rev')).gen).toBe('manual');
     expect([...kv.values.keys()].some(key => key.includes(staged.gen))).toBe(false);
   });
+  it('finishes a publication that stopped before clearing its state, without deleting the live catalog', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    crawledCatalog(kv);
+    let clock = Date.parse('2026-10-26T12:00:00Z');
+    const now = () => new Date(clock);
+    const fetcher = feedServer(() => fullFeed());
+    await runRevFeed(kv, fetcher, { now });
+    const state = kv.values.get(revFeedStateKey)!;
+    clock += propagationMs;
+    await runRevFeed(kv, fetcher, { now });
+    // The run published, then failed before saving its state: the next run still sees the staged generation.
+    kv.values.set(revFeedStateKey, state);
+    const live = json<CatalogPointer>(kv, pointerKey('rev')).gen;
+    expect(await runRevFeed(kv, fetcher, { now })).toMatchObject({ action: 'published', records: 607 });
+    expect(json<CatalogPointer>(kv, pointerKey('rev')).gen).toBe(live);
+    expect((await liveRecords(kv)).length).toBe(607);
+    expect(json<{ staged: unknown }>(kv, revFeedStateKey).staged).toBeNull();
+  });
   it('deletes the replaced catalog once its day of rollback is over', async () => {
     quiet();
     const kv = new MemoryKv();

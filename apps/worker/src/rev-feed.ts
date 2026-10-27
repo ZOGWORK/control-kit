@@ -107,8 +107,10 @@ export async function fetchRevFeed(fetcher: Fetcher = fetch, options: { etag?: s
 }
 
 const json = async <T>(kv: Kv, key: string): Promise<T | null> => { const raw = await kv.get(key); if (!raw) return null; try { return JSON.parse(raw) as T; } catch { return null; } };
-/** A staged generation no reader was ever pointed at, so its keys can go at once. */
+/** A staged generation no reader was ever pointed at, so its keys can go at once. One the pointer names is never touched. */
 async function discardStaged(kv: Kv, gen: string) {
+  const live = await json<CatalogPointer>(kv, pointerKey('rev'));
+  if (live && [live.gen, live.previous?.gen, ...(live.retiring ?? []).map(entry => entry.gen)].includes(gen)) return;
   const manifest = await json<{ batches: number }>(kv, manifestKey('rev', gen));
   for (let batch = 0; batch < (manifest?.batches ?? 0); batch++) await kv.delete(batchKey('rev', gen, batch));
   await kv.delete(indexKey('rev', gen));
@@ -139,6 +141,11 @@ export async function runRevFeed(kv: Kv, fetcher: Fetcher = fetch, options: { no
   };
   try {
     if (state?.staged) {
+      // Already live: an earlier run published it but stopped before clearing the state. Only the state is finished.
+      if (pointer?.gen === state.staged.gen) {
+        await kv.put(revFeedStateKey, JSON.stringify({ ...state, staged: null } satisfies FeedState));
+        return summary('published', pointer.records);
+      }
       // A catalog published since this one was staged (a manual load of a newer feed) wins: the staged one is dropped.
       if ((pointer?.gen ?? null) !== state.staged.over) {
         await discardStaged(kv, state.staged.gen);
