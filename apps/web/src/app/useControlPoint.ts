@@ -143,7 +143,12 @@ export function useControlPoint(kit: ControlKit) {
   function assemblyPictureBytes() {
     const scanId = result?.scanId;
     if (!scanId) return Promise.resolve(null);
-    if (picture.current?.scanId !== scanId) picture.current = { scanId, bytes: drawPicture() };
+    if (picture.current?.scanId !== scanId) {
+      const entry = { scanId, bytes: drawPicture() };
+      picture.current = entry;
+      // Only a picture is kept: a failure (Onshape busy, a timeout) is asked again by the next send.
+      void entry.bytes.then(bytes => { if (!bytes && picture.current === entry) picture.current = null; });
+    }
     return picture.current.bytes;
   }
   async function drawPicture() {
@@ -186,6 +191,8 @@ export function useControlPoint(kit: ControlKit) {
       if (response.status === 413) throw new Error('This BOM with its files is over 12 MB. Send it without the STEP files, or ask for a larger limit.');
       if (!response.ok) throw new Error(await message(response, 'The send failed. Your scan, Excel, and STEP files are untouched; try again.'));
       const body = await response.json() as { importId: number; url: string; sentAt: string; created: number; updated: number; duplicate: boolean };
+      // What was just sent is current, whichever files it carried (a picture can arrive only at send time).
+      setCurrentKey(payload.idempotencyKey);
       setSent({ importId: body.importId, workspaceId: workspace.id, sentAt: body.sentAt, idempotencyKey: payload.idempotencyKey, url: body.url, created: body.created, updated: body.updated, duplicate: body.duplicate });
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'The send failed. Try again.'); }
     finally { setBusy(null); }
