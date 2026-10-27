@@ -11,7 +11,7 @@ const listed = false;
 const supportUrl = 'https://github.com/ZOGWORK/control-kit/issues';
 
 const features: Array<{ icon: ReactNode; title: string; text: string; image: string; alt: string }> = [
-  { icon: <Boxes aria-hidden />, title: 'Every part, sorted', image: 'overview', alt: 'Overview of a scanned FTC robot: 119 parts, 61 to buy, 55 to make, none waiting for review, $1768.05 priced so far',
+  { icon: <Boxes aria-hidden />, title: 'Every part, sorted', image: 'overview', alt: 'Overview of a scanned FTC robot: its Onshape picture, 119 unique parts split into 61 to buy, 55 to make, and 3 fasteners, $1,768.05 priced so far',
     text: "Control Kit reads the assembly and Onshape's bill of materials, then sorts every part into buy, make, or fastener. Vendor part numbers, standard hardware, linked libraries, and team tags such as \"(3D PRINT)\" decide most parts, so few are left for you." },
   { icon: <ShoppingCart aria-hidden />, title: 'A buy list with real prices', image: 'buy-list', alt: 'Buy list grouped by vendor, with SKUs, quantities, packs to order, prices, and stock',
     text: 'Parts are matched by SKU against the goBILDA, REV, ServoCity, AndyMark, and Pitsco catalogs. Orders round up to whole packs, and a part is priced only when its match, pack size, and price are all verified, so the total never looks complete when it isn\'t.' },
@@ -32,13 +32,13 @@ export function Landing() {
         <a className="landing-link" href={appStoreUrl} target="_blank" rel="noopener noreferrer">Onshape App Store</a>
       </div>
       {!listed && <p className="muted small">Control Kit's App Store listing is waiting for Onshape's review. The steps below work once it is listed.</p>}
-      <img className="landing-shot" src="/listing/overview.webp" width={1600} height={1000} alt={features[0].alt} />
+      <img className="landing-shot" src="/listing/in-onshape.webp" width={2000} height={1000} alt="Control Kit scanning the HORS robot in Onshape's right panel, beside the 3D assembly" />
     </header>
 
     <section className="landing-features" aria-label="What Control Kit does">
       {features.map((feature, index) => <article key={feature.title} className={`landing-feature${index % 2 ? ' flip' : ''}`}>
         <div className="landing-copy"><span className="landing-icon">{feature.icon}</span><h2>{feature.title}</h2><p>{feature.text}</p></div>
-        {index > 0 && <img className="landing-shot" src={`/listing/${feature.image}.webp`} width={1600} height={1000} loading="lazy" alt={feature.alt} />}
+        <img className="landing-shot" src={`/listing/${feature.image}.webp`} width={1600} height={1000} loading="lazy" alt={feature.alt} />
       </article>)}
     </section>
 

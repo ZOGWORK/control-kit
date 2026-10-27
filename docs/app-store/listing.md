@@ -2,7 +2,7 @@
 
 Copy and images for Control Kit's App Store entry. Paste them into Control Kit's store entry in the Onshape Developer Portal, signed in as the app's owner. Onshape reviews the entry before it is public.
 
-Every screenshot is the live app on the HORS assembly (MR. HORS, HORS 25-26) as scanned on 2026-10-26: 119 parts, 61 to buy, 55 to make, none waiting for review, $1,768.05 priced from 50 of 61 buy lines. They were rendered from that scan and the production vendor catalogs at 2560 × 1600 (the panel view at 840 × 1720), so they show exactly what a team sees. Onshape publishes no image sizes for listings; these are large enough to be scaled down.
+Every screenshot is the live app on the HORS assembly (MR. HORS, HORS 25-26) as scanned on 2026-10-26: 119 parts, 61 to buy, 55 to make, none waiting for review, $1,768.05 priced from 50 of 61 buy lines. They were rendered in the refreshed UI (2026-10-26) from that scan and the production vendor catalogs at 2560 × 1600 (the panel view at 840 × 1720), so they show exactly what a team sees. `5-scan.png` is a real capture of Onshape (2000 × 1000) with the panel scanning HORS beside the model. Onshape publishes no image sizes for listings; these are large enough to be scaled down.
 
 ## Name
 
@@ -32,7 +32,7 @@ Control Kit only reads documents; it never edits your CAD. A scan uses about thr
 | `2-buy-list.png` | A buy list matched to vendor SKUs, rounded to whole packs, priced only when verified. |
 | `3-part-details.png` | Each part's picture from Onshape and the evidence behind its decision. |
 | `4-make-list.png` | Parts to print and cut, ready to download as STEP files. |
-| `5-scan.png` | A scan reads the assembly, its bill of materials, and the vendor catalogs in seconds. |
+| `5-scan.png` | Right beside your model in Onshape, a scan reads the assembly, its bill of materials, and the vendor catalogs in seconds. |
 | `6-onshape-panel.png` | The same view in Onshape's right panel, beside your assembly. |
 
 Feature graphic: `feature-graphic.png` (2400 × 1260; also served at 1200 × 630 as the site's share image).
