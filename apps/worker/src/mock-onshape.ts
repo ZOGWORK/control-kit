@@ -124,7 +124,8 @@ export function createMockOnshape() {
     }
     // A shaded view: a stand-in PNG naming what was drawn, so tests can tell a part from the whole assembly.
     const shaded = url.pathname.match(/^\/api\/v\d+\/(assemblies|parts|partstudios)\/d\/(simple|robot|empty)\/([wvm])\/([^/]+)\/e\/[^/]+(?:\/partid\/[^/]+)?\/shadedviews$/);
-    if (shaded) { apiRequests++; return json(200, { images: [btoa(`PNG ${shaded[1]} ${shaded[3]}/${shaded[4]}`)] }); }
+    const view = url.searchParams.get('viewMatrix');
+    if (shaded) { apiRequests++; return json(200, { images: [btoa(`PNG ${shaded[1]} ${shaded[3]}/${shaded[4]}${view && view !== 'isometric' ? ` ${view}` : ''}`)] }); }
     if (url.pathname.startsWith('/api/')) {
       apiRequests++;
       if (url.searchParams.has('always401')) return json(401, { error: 'expired' });
