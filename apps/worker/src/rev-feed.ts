@@ -143,6 +143,10 @@ export async function runRevFeed(kv: Kv, fetcher: Fetcher = fetch, options: { no
     if (state?.staged) {
       // Already live: an earlier run published it but stopped before clearing the state. Only the state is finished.
       if (pointer?.gen === state.staged.gen) {
+        // The snapshot may be the one from before that publication, so it is rebuilt from the live pointer as publishStaged writes it.
+        const at = pointer.completedAt ?? pointer.publishedAt;
+        await kv.put(snapshotKey('rev'), JSON.stringify({ status: 'ok', updatedAt: at, lastRunAt: now().toISOString(), recordCount: pointer.records, source: 'official-feed', version: pointer.gen,
+          complete: true, skipped: pointer.skipped ?? {} } satisfies VendorSnapshot));
         await kv.put(revFeedStateKey, JSON.stringify({ ...state, staged: null } satisfies FeedState));
         return summary('published', pointer.records);
       }
