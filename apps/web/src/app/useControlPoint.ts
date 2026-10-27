@@ -150,7 +150,8 @@ export function useControlPoint(kit: ControlKit) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
-      const url = await kit.assemblyPicture(controller.signal);
+      // The isometric view shows the whole robot; Control Point shows it uncropped.
+      const { url } = await kit.assemblyPicture('isometric', controller.signal);
       const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
       URL.revokeObjectURL(url);
       return bytes.length && bytes.length <= INLINE_FILE_LIMIT_BYTES ? bytes : null;

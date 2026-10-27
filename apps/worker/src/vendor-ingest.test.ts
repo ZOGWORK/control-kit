@@ -127,7 +127,7 @@ describe('vendor product page parsing', () => {
 });
 
 describe('vendor catalog crawl and publication', () => {
-  it.each(vendors.filter(vendor => !vendorSources[vendor].feed))('%s publishes its captured product on the run after it was fetched', async vendor => {
+  it.each(vendors.filter(vendor => !vendorSources[vendor].feed && !vendorSources[vendor].officialFeed))('%s publishes its captured product on the run after it was fetched', async vendor => {
     quiet();
     const data = captured(vendor);
     const kv = new MemoryKv();
@@ -164,21 +164,21 @@ describe('vendor catalog crawl and publication', () => {
   it('publishes the first crawl in parts, one run behind, and labels it incomplete until done', async () => {
     quiet();
     const kv = new MemoryKv();
-    const pages = Object.fromEntries(Array.from({ length: 5 }, (_, n) => [`https://www.revrobotics.com/p${n}/`, product(`Part ${n}`, `REV-41-100${n}`)]));
-    const fetcher = site('rev', pages);
-    await run('rev', kv, fetcher, { maxProducts: 2 });
-    expect(kv.values.has(pointerKey('rev'))).toBe(false);
-    expect(json<VendorSnapshot>(kv, snapshotKey('rev'))).toMatchObject({ status: 'ok', version: null, inProgress: true, progress: { pagesDoneInSitemap: 2, pagesInSitemap: 5, recordsCollected: 2 } });
-    await run('rev', kv, fetcher, { maxProducts: 2 });
+    const pages = Object.fromEntries(Array.from({ length: 5 }, (_, n) => [`https://www.servocity.com/p${n}/`, product(`Part ${n}`, `SC-41-100${n}`)]));
+    const fetcher = site('servocity', pages);
+    await run('servocity', kv, fetcher, { maxProducts: 2 });
+    expect(kv.values.has(pointerKey('servocity'))).toBe(false);
+    expect(json<VendorSnapshot>(kv, snapshotKey('servocity'))).toMatchObject({ status: 'ok', version: null, inProgress: true, progress: { pagesDoneInSitemap: 2, pagesInSitemap: 5, recordsCollected: 2 } });
+    await run('servocity', kv, fetcher, { maxProducts: 2 });
     // The second run published the first run's batch; its own batch waits for the third run.
-    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: false, records: 2, batches: 1, completedAt: null });
-    expect(await records(kv, 'rev')).toHaveLength(2);
-    await run('rev', kv, fetcher, { maxProducts: 2 });
-    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: false, records: 4, batches: 2 });
-    expect(await run('rev', kv, fetcher, { maxProducts: 2 })).toMatchObject({ complete: true });
-    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: true, records: 5, batches: 3 });
-    expect((await records(kv, 'rev')).map(record => record.normalizedSku).sort()).toEqual(['411000', '411001', '411002', '411003', '411004']);
-    expect(kv.values.has('cat:rev:crawl')).toBe(false);
+    expect(json<CatalogPointer>(kv, pointerKey('servocity'))).toMatchObject({ complete: false, records: 2, batches: 1, completedAt: null });
+    expect(await records(kv, 'servocity')).toHaveLength(2);
+    await run('servocity', kv, fetcher, { maxProducts: 2 });
+    expect(json<CatalogPointer>(kv, pointerKey('servocity'))).toMatchObject({ complete: false, records: 4, batches: 2 });
+    expect(await run('servocity', kv, fetcher, { maxProducts: 2 })).toMatchObject({ complete: true });
+    expect(json<CatalogPointer>(kv, pointerKey('servocity'))).toMatchObject({ complete: true, records: 5, batches: 3 });
+    expect((await records(kv, 'servocity')).map(record => record.normalizedSku).sort()).toEqual(['411000', '411001', '411002', '411003', '411004']);
+    expect(kv.values.has('cat:servocity:crawl')).toBe(false);
     vi.restoreAllMocks();
   });
   it('keeps a steady-state run within a few KV writes regardless of catalog size', async () => {
@@ -214,16 +214,16 @@ describe('vendor catalog crawl and publication', () => {
     quiet();
     const kv = new MemoryKv();
     let broken = true;
-    const fetcher = site('rev', {
-      'https://www.revrobotics.com/a/': product('Shaft A', 'REV-21-0001'),
-      'https://www.revrobotics.com/b/': () => broken ? new Response('unavailable', { status: 503 }) : new Response(product('Shaft B', 'REV-21-0002')),
-      'https://www.revrobotics.com/c/': product('Shaft C', 'REV-21-0003'),
+    const fetcher = site('servocity', {
+      'https://www.servocity.com/a/': product('Shaft A', 'SC-21-0001'),
+      'https://www.servocity.com/b/': () => broken ? new Response('unavailable', { status: 503 }) : new Response(product('Shaft B', 'SC-21-0002')),
+      'https://www.servocity.com/c/': product('Shaft C', 'SC-21-0003'),
     });
-    await expect(run('rev', kv, fetcher)).rejects.toThrow('HTTP 503');
+    await expect(run('servocity', kv, fetcher)).rejects.toThrow('HTTP 503');
     broken = false;
-    await run('rev', kv, fetcher);
-    await run('rev', kv, fetcher);
-    expect((await records(kv, 'rev')).map(record => record.normalizedSku).sort()).toEqual(['210001', '210002', '210003']);
+    await run('servocity', kv, fetcher);
+    await run('servocity', kv, fetcher);
+    expect((await records(kv, 'servocity')).map(record => record.normalizedSku).sort()).toEqual(['210001', '210002', '210003']);
     vi.restoreAllMocks();
   });
   it('holds position on a failing page, then skips it after three consecutive failed runs', async () => {
@@ -246,58 +246,58 @@ describe('vendor catalog crawl and publication', () => {
     quiet();
     const kv = new MemoryKv();
     let challenge = true;
-    const fetcher = site('rev', { 'https://www.revrobotics.com/a/': () => new Response(challenge ? '<html><body>Checking your browser</body></html>' : product('Shaft A', 'REV-21-0001')) });
-    await expect(run('rev', kv, fetcher)).rejects.toThrow('no usable records');
-    expect(kv.values.has('cat:rev:crawl')).toBe(false);
+    const fetcher = site('servocity', { 'https://www.servocity.com/a/': () => new Response(challenge ? '<html><body>Checking your browser</body></html>' : product('Shaft A', 'SC-21-0001')) });
+    await expect(run('servocity', kv, fetcher)).rejects.toThrow('no usable records');
+    expect(kv.values.has('cat:servocity:crawl')).toBe(false);
     challenge = false;
-    await run('rev', kv, fetcher);
-    await run('rev', kv, fetcher);
-    expect(json<CatalogPointer>(kv, pointerKey('rev'))).toMatchObject({ complete: true, records: 1 });
+    await run('servocity', kv, fetcher);
+    await run('servocity', kv, fetcher);
+    expect(json<CatalogPointer>(kv, pointerKey('servocity'))).toMatchObject({ complete: true, records: 1 });
     vi.restoreAllMocks();
   });
   it('honors robots.txt per product page', async () => {
     quiet();
     const kv = new MemoryKv();
-    const fetcher = site('rev', { 'https://www.revrobotics.com/private/x/': product('Hidden', 'REV-1'), 'https://www.revrobotics.com/ok/': product('Shown', 'REV-2') }, 'User-agent: *\nDisallow: /private/');
-    expect(await run('rev', kv, fetcher)).toMatchObject({ upserted: 1, skipped: 1 });
-    expect(fetcher).not.toHaveBeenCalledWith('https://www.revrobotics.com/private/x/', expect.anything());
+    const fetcher = site('servocity', { 'https://www.servocity.com/private/x/': product('Hidden', 'SC-1'), 'https://www.servocity.com/ok/': product('Shown', 'SC-2') }, 'User-agent: *\nDisallow: /private/');
+    expect(await run('servocity', kv, fetcher)).toMatchObject({ upserted: 1, skipped: 1 });
+    expect(fetcher).not.toHaveBeenCalledWith('https://www.servocity.com/private/x/', expect.anything());
     vi.restoreAllMocks();
   });
   it('builds a refresh beside the live catalog, switches when complete, and retires the old one later', async () => {
     quiet();
     const kv = new MemoryKv();
     let price = '5.00';
-    const pages = Object.fromEntries(Array.from({ length: 3 }, (_, n) => [`https://www.revrobotics.com/p${n}/`, () => new Response(product(`Part ${n}`, `REV-41-200${n}`, price))]));
-    const fetcher = site('rev', pages);
-    await run('rev', kv, fetcher, { maxProducts: 10 });
-    await run('rev', kv, fetcher, { maxProducts: 10 });
-    const first = json<CatalogPointer>(kv, pointerKey('rev'));
+    const pages = Object.fromEntries(Array.from({ length: 3 }, (_, n) => [`https://www.servocity.com/p${n}/`, () => new Response(product(`Part ${n}`, `SC-41-200${n}`, price))]));
+    const fetcher = site('servocity', pages);
+    await run('servocity', kv, fetcher, { maxProducts: 10 });
+    await run('servocity', kv, fetcher, { maxProducts: 10 });
+    const first = json<CatalogPointer>(kv, pointerKey('servocity'));
     expect(first.complete).toBe(true);
     price = '6.00';
-    await run('rev', kv, fetcher, { maxProducts: 2, retireAfterMs: 0 });
-    await run('rev', kv, fetcher, { maxProducts: 2, retireAfterMs: 0 });
-    expect(json<CatalogPointer>(kv, pointerKey('rev')).gen).toBe(first.gen);
-    expect((await records(kv, 'rev')).every(record => record.priceUsd === 5)).toBe(true);
-    await run('rev', kv, fetcher, { maxProducts: 2, retireAfterMs: 0 });
-    const second = json<CatalogPointer>(kv, pointerKey('rev'));
+    await run('servocity', kv, fetcher, { maxProducts: 2, retireAfterMs: 0 });
+    await run('servocity', kv, fetcher, { maxProducts: 2, retireAfterMs: 0 });
+    expect(json<CatalogPointer>(kv, pointerKey('servocity')).gen).toBe(first.gen);
+    expect((await records(kv, 'servocity')).every(record => record.priceUsd === 5)).toBe(true);
+    await run('servocity', kv, fetcher, { maxProducts: 2, retireAfterMs: 0 });
+    const second = json<CatalogPointer>(kv, pointerKey('servocity'));
     expect(second).toMatchObject({ complete: true, records: 3, previous: { gen: first.gen } });
-    expect((await records(kv, 'rev')).every(record => record.priceUsd === 6)).toBe(true);
-    expect(kv.values.has(indexKey('rev', first.gen))).toBe(true);
-    await run('rev', kv, fetcher, { maxProducts: 1, retireAfterMs: 0 });
-    expect(kv.values.has(indexKey('rev', first.gen))).toBe(false);
-    expect([...kv.values.keys()].some(key => key.startsWith(`cat:rev:gen:${first.gen}:`))).toBe(false);
+    expect((await records(kv, 'servocity')).every(record => record.priceUsd === 6)).toBe(true);
+    expect(kv.values.has(indexKey('servocity', first.gen))).toBe(true);
+    await run('servocity', kv, fetcher, { maxProducts: 1, retireAfterMs: 0 });
+    expect(kv.values.has(indexKey('servocity', first.gen))).toBe(false);
+    expect([...kv.values.keys()].some(key => key.startsWith(`cat:servocity:gen:${first.gen}:`))).toBe(false);
     vi.restoreAllMocks();
   });
   it('never deletes the live generation after a manual rollback to the previous one', async () => {
     quiet();
     const kv = new MemoryKv();
-    kv.values.set(pointerKey('rev'), JSON.stringify({ gen: 'old', complete: true, records: 1, batches: 1, publishedAt: '2026-10-24T00:00:00Z', completedAt: '2026-10-24T00:00:00Z', previous: { gen: 'old', batches: 1, deleteAfter: 0, deleted: 0 } }));
-    kv.values.set(batchKey('rev', 'old', 0), JSON.stringify([]));
-    kv.values.set(indexKey('rev', 'old'), JSON.stringify([]));
-    await run('rev', kv, site('rev', { 'https://www.revrobotics.com/a/': product('A', 'REV-21-0001') }));
-    expect(kv.values.has(indexKey('rev', 'old'))).toBe(true);
-    expect(kv.values.has(batchKey('rev', 'old', 0))).toBe(true);
-    expect(json<CatalogPointer>(kv, pointerKey('rev')).previous).toBeNull();
+    kv.values.set(pointerKey('servocity'), JSON.stringify({ gen: 'old', complete: true, records: 1, batches: 1, publishedAt: '2026-10-24T00:00:00Z', completedAt: '2026-10-24T00:00:00Z', previous: { gen: 'old', batches: 1, deleteAfter: 0, deleted: 0 } }));
+    kv.values.set(batchKey('servocity', 'old', 0), JSON.stringify([]));
+    kv.values.set(indexKey('servocity', 'old'), JSON.stringify([]));
+    await run('servocity', kv, site('servocity', { 'https://www.servocity.com/a/': product('A', 'SC-21-0001') }));
+    expect(kv.values.has(indexKey('servocity', 'old'))).toBe(true);
+    expect(kv.values.has(batchKey('servocity', 'old', 0))).toBe(true);
+    expect(json<CatalogPointer>(kv, pointerKey('servocity')).previous).toBeNull();
     vi.restoreAllMocks();
   });
   it('removes the old crawl keys that froze production when the new pipeline first runs', async () => {
@@ -400,15 +400,15 @@ describe('Shopify product feed (AndyMark, Pitsco)', () => {
   it('counts retries against the request limit and saves progress when it runs out', async () => {
     quiet();
     const kv = new MemoryKv();
-    const pages = Object.fromEntries(Array.from({ length: 10 }, (_, n) => [`https://www.revrobotics.com/p${n}/`, product(`Part ${n}`, `REV-21-000${n}`)]));
-    const base = site('rev', pages);
+    const pages = Object.fromEntries(Array.from({ length: 10 }, (_, n) => [`https://www.servocity.com/p${n}/`, product(`Part ${n}`, `SC-21-000${n}`)]));
+    const base = site('servocity', pages);
     const limited = new Set<string>();
     // Each product page answers 429 once, then succeeds.
     const fetcher = vi.fn(async (url: string) => url.includes('/p') && !limited.has(url) ? (limited.add(url), new Response('slow', { status: 429, headers: { 'retry-after': '0' } })) : base(url));
-    await run('rev', kv, fetcher, { maxRequests: 9 }).catch(() => undefined);
+    await run('servocity', kv, fetcher, { maxRequests: 9 }).catch(() => undefined);
     expect(fetcher.mock.calls.length).toBeLessThanOrEqual(9);
     // Pages fetched before the limit were kept and the crawl resumes from there.
-    const crawl = json<{ urlIndex: number; batches: number }>(kv, 'cat:rev:crawl');
+    const crawl = json<{ urlIndex: number; batches: number }>(kv, 'cat:servocity:crawl');
     expect(crawl.urlIndex).toBeGreaterThan(0);
     expect(crawl.batches).toBe(1);
     vi.restoreAllMocks();

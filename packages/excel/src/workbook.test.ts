@@ -31,6 +31,23 @@ const links = (zip: Record<string, Uint8Array>, index: number) => strFromU8(zip[
 /** The text of the row whose column B (or C on Exceptions) holds `name`. */
 const row = (xml: string, name: string) => xml.match(new RegExp(`<row r="\\d+">(?:(?!</row>).)*${name}(?:(?!</row>).)*</row>`))?.[0] ?? '';
 
+describe('REV prices from the official feed', () => {
+  it("shows the feed's update time beside each REV price and stock, in the workbook and the CSV", () => {
+    const result = robot();
+    const hub: VendorRecord = { vendorId: 'rev', sku: 'REV-31-1595', normalizedSku: '311595', name: 'Control Hub', normalizedName: 'control hub', url: 'https://www.revrobotics.com/rev-31-1595/', priceUsd: 375,
+      packSize: 1, packSizeVerified: true, packEvidence: 'sold individually', stock: 'out', stockQty: null, category: 'uncategorized', updatedAt: '2026-10-26T05:00:29.000Z', source: 'feed', parser: 'official-feed' };
+    Object.assign(result.lines.find(line => line.partId === 'motor')!, { vendor: hub, matchStatus: 'exact' });
+    const priced = recalculatePurchasing(result);
+    const buy = strFromU8(unzipSync(buildExcelWorkbook(priced, new Date('2026-10-26T12:00:00Z')).bytes)['xl/worksheets/sheet2.xml']);
+    const line = row(buy, 'Drive Motor');
+    expect(line).toContain('REV feed updated 2026-10-26 05:00 UTC');
+    expect(line).toMatch(/<c r="H\d+" s="\d+"><v>375<\/v><\/c>/);
+    expect(row(buy, 'M4 Screw')).toContain('2026-10-23');
+    const csv = strFromU8(buildBomCsv(priced, new Date('2026-10-26T12:00:00Z')).bytes).split('\r\n');
+    expect(csv.find(text => text.includes('"Drive Motor"'))).toMatch(/,375\.00,375\.00,"Out of stock, 2026-10-26","REV feed updated 2026-10-26 05:00 UTC","Exact SKU","https:\/\/www\.revrobotics\.com\/rev-31-1595\/"/);
+  });
+});
+
 describe('Excel export', () => {
   const result = robot();
   const logo = new Uint8Array(readFileSync('apps/web/public/control-kit-logo.png'));
@@ -81,7 +98,7 @@ describe('Excel export', () => {
     expect(buy).toContain('A blank Line Total is unknown, not zero');
     expect(text(zip, 1)).toMatch(/<c r="J4" s="22"><f>IF\(COUNT\(&apos;Buy list&apos;!I7:I\d+\),SUM\(&apos;Buy list&apos;!I7:I\d+\),&quot;None priced&quot;\)<\/f><v>17.98<\/v><\/c>/);
     expect(buy).toContain('<pane ySplit="6"');
-    expect(buy).toMatch(/<autoFilter ref="A6:M\d+"/);
+    expect(buy).toMatch(/<autoFilter ref="A6:N\d+"/);
   });
 
   it('links every part to its vendor product and to Onshape on the Links sheet', () => {

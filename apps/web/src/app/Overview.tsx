@@ -1,12 +1,13 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowRight, Check, ChevronDown, ExternalLink, FileSpreadsheet, History, Send, ListChecks, PackageX, Search, Store, Tag, Wrench } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { AlertTriangle, ArrowRight, Check, ChevronDown, ExternalLink, FileSpreadsheet, History, Send, ListChecks, PackageX, RefreshCw, Search, Store, Tag, Wrench } from 'lucide-react';
 import { metadataIssueText, type BomLine } from '@control-kit/shared';
 import { Alert } from '../components/arc/alert/alert';
+import SegmentedControl from '../components/arc/segmented-control/segmented-control';
 import { Button, DispositionChip } from './bits';
-import type { ControlKit } from './useControlKit';
+import type { AssemblyPictureResult, AssemblyView, ControlKit } from './useControlKit';
 import type { ControlPoint } from './useControlPoint';
 import { ControlPointCard } from './ControlPoint';
-import { ago, buyList, catalogsComplete, catalogState, catalogStateText, composition, findParts, hasChanges, money, percent, primaryAction, readiness, scanChanges, staleCatalogs, topCosts, unmatchedParts, vendorLabel,
+import { ago, buyList, catalogsComplete, catalogState, catalogStateText, composition, feedDates, findParts, hasChanges, money, percent, primaryAction, readiness, scanChanges, staleCatalogs, topCosts, unmatchedParts, vendorLabel,
   type PrimaryAction, type Readiness, type Summary, type View } from './model';
 
 /** "1 part", "3 parts". */
@@ -196,17 +197,82 @@ function Moves({ kit, moves, done }: { kit: ControlKit; moves: Move[]; done: str
   </section>;
 }
 
-/** The robot itself, so the numbers have something to belong to. Hidden when Onshape cannot draw it. */
+const pictureViews: Array<{ value: AssemblyView; label: string }> = [{ value: 'isometric', label: 'Isometric' }, { value: 'front', label: 'Front' }, { value: 'right', label: 'Side' }, { value: 'top', label: 'Top' }];
+
+/**
+ * The robot itself, so the numbers have something to belong to. Clicking it offers another view angle (remembered per
+ * assembly in this browser) and a redraw of the assembly as it is now. Hidden when Onshape cannot draw it at all.
+ */
 function AssemblyPicture({ kit }: { kit: ControlKit }) {
-  const [url, setUrl] = useState<string | null>(null);
+  const result = kit.result!;
+  const viewKey = `control-kit:picture-view:${result.documentId}:${result.elementId}`;
+  const [view, setView] = useState<AssemblyView>(() => {
+    try { const saved = localStorage.getItem(viewKey); return pictureViews.some(option => option.value === saved) ? saved as AssemblyView : 'isometric'; } catch { return 'isometric'; }
+  });
+  const [picture, setPicture] = useState<AssemblyPictureResult | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const shown = useRef<string | null>(null);
+  // Every load and redraw takes a number; only the latest one may change the picture, and nothing lands after unmount.
+  const latest = useRef(0);
+  const mounted = useRef(true);
+  const figure = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  const remember = (next: AssemblyView) => { try { localStorage.setItem(viewKey, next); } catch { /* the view is a convenience; the default still works */ } };
+  const settle = (request: number, next: AssemblyPictureResult) => {
+    if (!mounted.current || request !== latest.current) { URL.revokeObjectURL(next.url); return; }
+    if (shown.current) URL.revokeObjectURL(shown.current);
+    shown.current = next.url;
+    setPicture(next);
+    setNote('');
+  };
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; if (shown.current) URL.revokeObjectURL(shown.current); shown.current = null; }; }, []);
   useEffect(() => {
+    const request = ++latest.current;
     const controller = new AbortController();
-    let made: string | null = null;
-    setUrl(null);
-    kit.assemblyPicture(controller.signal).then(value => { made = value; setUrl(value); }).catch(() => undefined);
-    return () => { controller.abort(); if (made) URL.revokeObjectURL(made); };
-  }, [kit.result?.scanId]);
-  return url ? <figure className="hero-picture"><img src={url} alt={`${kit.result!.assemblyName}, as modelled in Onshape`} /></figure> : null;
+    kit.assemblyPicture(view, controller.signal).then(next => settle(request, next)).catch(error => {
+      if (controller.signal.aborted || request !== latest.current || !mounted.current) return;
+      // A remembered view Onshape cannot draw falls back to isometric, so the picture and its menu never disappear for good.
+      if (!shown.current && view !== 'isometric') { setView('isometric'); remember('isometric'); return; }
+      setNote(error instanceof Error ? error.message : 'Onshape could not draw this view.');
+    });
+    return () => controller.abort();
+  }, [result.scanId, view]);
+  // The menu closes on Escape or a click outside the picture.
+  useEffect(() => {
+    if (!open) return;
+    const away = (event: PointerEvent) => { if (!figure.current?.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', away); document.removeEventListener('keydown', escape); };
+  }, [open]);
+  if (!picture) return null;
+  const choose = (value: string) => { setView(value as AssemblyView); remember(value as AssemblyView); };
+  const redraw = async () => {
+    const request = ++latest.current;
+    setBusy(true);
+    setNote('');
+    try { settle(request, await kit.redrawAssemblyPicture(view)); }
+    catch (error) { if (mounted.current && request === latest.current) setNote(error instanceof Error ? error.message : 'Onshape could not redraw this picture.'); }
+    finally { if (mounted.current) setBusy(false); }
+  };
+  // The caption and description name the picture on screen, which may still be the previous view while the next one loads.
+  const label = pictureViews.find(option => option.value === picture.view)!.label;
+  return <div ref={figure} className="hero"><figure className="hero-picture">
+    <button type="button" className="hero-picture-button" aria-expanded={open} aria-controls={menuId} onClick={() => setOpen(value => !value)}
+      aria-label={`${result.assemblyName}, as modelled in Onshape (${label.toLowerCase()} view). Change the picture`}>
+      <img src={picture.url} alt="" />
+    </button>
+    <figcaption className="hero-caption"><span>{label}</span><span aria-hidden>·</span><span>{picture.drawnAt ? `drawn ${ago(picture.drawnAt, Date.now())}` : 'as scanned'}</span><ChevronDown aria-hidden size={14} className={open ? 'flip' : undefined} /></figcaption>
+  </figure>
+    {open && <div id={menuId} className="hero-menu" role="group" aria-label="Robot picture">
+      <SegmentedControl label="View" value={view} onValueChange={choose} options={pictureViews} />
+      <Button variant="secondary" size="sm" onClick={redraw} disabled={busy}><RefreshCw aria-hidden size={14} />{busy ? 'Drawing…' : 'Redraw as it is now'}</Button>
+      <p className="muted small" role="status">{note || 'Redraw shows the assembly as it is in Onshape now, not as scanned. Each redraw is one Onshape request.'}</p>
+    </div>}
+  </div>;
 }
 
 /** A small Onshape picture of a part blocking the order. Pictures are cached per revision, so a rescan costs nothing. */
@@ -229,7 +295,7 @@ function MoneyCard({ kit, summary, ready, go }: { kit: ControlKit; summary: Summ
   const missing = summary.buyLines - summary.pricedLines;
   return <section className="panel" aria-labelledby="money">
     <div className="panel-head"><div><h2 id="money">{complete ? 'Purchasing total' : 'Known subtotal'}</h2>
-      <p>List prices{result.vendorDataUpdatedAt ? ` as of ${day(result.vendorDataUpdatedAt)}` : ''}, before shipping and tax.</p></div>
+      <p>List prices{result.vendorDataUpdatedAt ? ` as of ${day(result.vendorDataUpdatedAt)}` : ''}, before shipping and tax.{feedDates(result.lines).map(note => ` ${note}.`).join('')}</p></div>
       <Button variant="ghost" size="sm" onClick={() => go('buy')}>Buy list<ArrowRight aria-hidden size={14} /></Button></div>
     <div className="panel-body money">
       <div className="money-figure"><span className={`money-value num ${summary.subtotal === null ? 'none' : ''}`}>{summary.subtotal === null ? 'None priced' : money(summary.subtotal)}</span>
@@ -254,9 +320,10 @@ function BuyByVendor({ kit, go }: { kit: ControlKit; go: (view: View) => void })
     <div className="panel-head"><div><h2 id="by-vendor">Buy by vendor</h2><p>Matched parts grouped by where they are ordered.</p></div></div>
     <div className="rows">{vendors.map(group => {
       const out = group.lines.filter(line => line.vendor?.stock === 'out').length;
+      const [feed] = feedDates(group.lines);
       return <button key={group.vendorId} type="button" className="row vendor-row" onClick={() => go('buy')}>
         <div className="row-main"><span className="row-title"><span className="dot buy" aria-hidden /><span>{group.label}</span></span>
-          <span className="row-meta"><span>{parts(group.lines.length)}</span>{group.unpriced > 0 && <span>{group.unpriced} unpriced</span>}{out > 0 && <span className="blocked-text">{out} out of stock</span>}</span></div>
+          <span className="row-meta"><span>{parts(group.lines.length)}</span>{group.unpriced > 0 && <span>{group.unpriced} unpriced</span>}{out > 0 && <span className="blocked-text">{out} out of stock</span>}{feed && <span className="muted">{feed}</span>}</span></div>
         <span className="num">{group.subtotal === null ? <span className="muted small">not priced</span> : money(group.subtotal)}</span>
       </button>;
     })}

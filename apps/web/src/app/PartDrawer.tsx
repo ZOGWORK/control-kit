@@ -5,7 +5,7 @@ import { Alert } from '../components/arc/alert/alert';
 import { Button, DispositionChip, LineCost, StockNote, Thumbnail } from './bits';
 import { Drawer, DrawerContent, useDrawerItem } from '../components/arc/drawer/drawer';
 import type { ControlKit } from './useControlKit';
-import { money, vendorLabel, vendorLookup } from './model';
+import { money, priceDate, vendorLabel, vendorLookup } from './model';
 
 /** A `suggestion` that still waits in Review reads "Suggested"; one that decided the part reads as automatic. */
 const sourceLabel: Record<BomLine['dispositionSource'], string> = { manual: 'Chosen by your team', 'exact-sku': 'Exact vendor SKU', 'explicit-metadata': 'From Onshape data', provenance: 'From where the part comes from', suggestion: 'Decided automatically; change it if wrong', none: 'Not decided' };
@@ -69,7 +69,7 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
     <div className="drawer-status">
       <DispositionChip line={line} />
       {vendor && <span className={`match-pill ${line.matchStatus}`}>{matchLabel[line.matchStatus]}</span>}
-      {vendor && <StockNote stock={vendor.stock} />}
+      {vendor && <StockNote stock={vendor.stock} asOf={priceDate(vendor)} />}
       <span className="drawer-cost"><LineCost line={line} /></span>
     </div>
     {line.metadataIssue && <Alert tone="warning" title={line.missingMetadataReason ?? 'Missing data'} />}
@@ -99,7 +99,8 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
           <dt>Match</dt><dd>{matchLabel[line.matchStatus]}{line.libraryMatch && <span className="muted small"> (part mapping from {line.libraryMatch.attribution.credit})</span>}{line.matchReasons.length ? <span className="muted small"><br />{line.matchReasons.join('; ')}</span> : null}</dd>
           <dt>Pack</dt><dd>{vendor.packSizeVerified && vendor.packSize ? `${vendor.packSize} per pack (${vendor.packEvidence ?? 'from the product page'})` : 'Unknown, so no total'}</dd>
           <dt>Price</dt><dd>{vendor.priceUsd === null ? 'Unknown' : `${money(vendor.priceUsd)} per pack (public list price)`}{line.packsToOrder !== null && line.lineTotalUsd !== null ? `; ${line.packsToOrder} pack${line.packsToOrder === 1 ? '' : 's'} = ${money(line.lineTotalUsd)}` : ''}{line.priceCheck && <><br /><span className="warn small">{line.priceCheck}. Not priced.</span></>}{vendor.packEvidence?.startsWith('a bundle') && <><br /><span className="muted small">A bundle of different pieces, so it is not priced per part.</span></>}</dd>
-          <dt>Stock</dt><dd>{vendor.stock === 'unknown' ? 'Unknown' : vendor.stock === 'in' ? 'In stock' : vendor.stock === 'low' ? 'Low stock' : 'Out of stock'}<span className="muted small"> as of {new Date(vendor.updatedAt).toLocaleDateString()}</span></dd>
+          <dt>Stock</dt><dd>{vendor.stock === 'unknown' ? 'Unknown' : vendor.stock === 'in' ? 'In stock' : vendor.stock === 'low' ? 'Low stock' : 'Out of stock'}</dd>
+          <dt>Updated</dt><dd>Price and stock: {priceDate(vendor)}</dd>
         </dl>
         {(line.choices?.length ?? 0) > 1 && ['possible', 'confirmed'].includes(line.matchStatus) && <div className="stack">
           <p className="small">Which product is it?</p>
@@ -108,7 +109,7 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
             return <div key={`${choice.vendorId}:${choice.normalizedSku}`} className="inline-actions">
               <Button size="sm" variant={chosen ? 'primary' : 'secondary'} aria-pressed={chosen} disabled={locked || chosen} onClick={() => void kit.decide(line, 'confirmed', choice)}>{chosen ? 'Chosen' : 'Use this'}</Button>
               <a className="link small" href={choice.url} target="_blank" rel="noopener noreferrer">{vendorLabel[choice.vendorId]} {choice.sku} <ExternalLink aria-hidden size={11} /></a>
-              <span className="muted small">{choice.name}{choice.priceUsd !== null ? `, ${money(choice.priceUsd)}` : ''}</span>
+              <span className="muted small">{choice.name}{choice.priceUsd !== null ? `, ${money(choice.priceUsd)} (${priceDate(choice)})` : ''}</span>
             </div>;
           })}
         </div>}

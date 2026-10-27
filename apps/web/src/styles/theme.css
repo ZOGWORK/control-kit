@@ -14,6 +14,8 @@
   --ck-card: #111113;
   --ck-raised: #141416;
   --ck-muted: #18181b;
+  /* Behind Onshape pictures (transparent PNGs): light enough that black plates and edges still read. */
+  --ck-stage: #26262b;
   --ck-text: #f4f4f5;
   --ck-text-muted: #a1a1aa;
   --ck-line: #ffffff14;
@@ -236,9 +238,18 @@ button.row:hover { background: var(--ck-raised); }
 
 /* Overview status card: one bar of every unique part by how it is handled, then the two readiness meters. */
 .status { padding: 16px; display: grid; gap: 12px; }
-.hero-picture { margin: -16px -16px 0; height: 180px; border-radius: 14px 14px 0 0; overflow: hidden; background: #f4f4f5; display: grid; place-items: center; }
-.hero-picture img { width: 100%; height: 100%; object-fit: contain; }
-@media (max-width: 520px) { .hero-picture { height: 140px; } }
+.hero-picture { margin: -16px -16px 0; height: 220px; padding: 12px; border-radius: 14px 14px 0 0; overflow: hidden; background: var(--ck-stage); border-bottom: 1px solid var(--ck-line); }
+/* Block, not grid: a grid row has no definite height, so the image grew past the frame and was cut off. */
+.hero-picture { position: relative; }
+.hero-picture-button { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 10px; }
+.hero-picture-button:focus-visible { outline: 2px solid var(--ck-volt); outline-offset: 2px; }
+.hero-picture img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.hero-caption { position: absolute; left: 12px; bottom: 10px; display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, var(--ck-bg) 72%, transparent); color: var(--ck-text-muted); font-size: 12px; pointer-events: none; }
+.hero-picture-button:hover + .hero-caption { color: var(--ck-text); }
+.hero { display: grid; gap: 12px; }
+.hero-menu { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-bottom: 12px; border-bottom: 1px solid var(--ck-line); }
+.hero-menu p { flex-basis: 100%; margin: 0; }
+@media (max-width: 520px) { .hero-picture { height: 170px; } }
 .status-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
 .status-head h2 { font-size: 1.25rem; }
 .share-bar { display: flex; gap: 2px; height: 10px; border-radius: 999px; overflow: hidden; background: var(--ck-muted); }
@@ -306,7 +317,7 @@ button.row:hover { background: var(--ck-raised); }
 .move-parts li { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 13px; }
 .move-part-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-thumb { width: 36px; height: 36px; border-radius: 8px; background: var(--ck-muted); overflow: hidden; display: grid; place-items: center; }
-.mini-thumb:has(img) { background: #f4f4f5; }
+.mini-thumb:has(img) { background: var(--ck-stage); }
 .mini-thumb img { width: 100%; height: 100%; object-fit: contain; }
 .done-strip { list-style: none; margin: 0; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 6px 16px; border-top: 1px solid var(--ck-line); font-size: 12.5px; color: var(--ck-done); }
 .done-strip li { display: inline-flex; align-items: center; gap: 6px; }
@@ -460,15 +471,15 @@ button.row:hover { background: var(--ck-raised); }
   .row, .step { padding: 10px 12px; }
 }
 
-.part-picture { margin: 0; display: grid; place-items: center; min-height: 180px; border: 1px solid var(--border); border-radius: 12px; background: #f4f4f5; overflow: hidden; }
+.part-picture { margin: 0; display: grid; place-items: center; min-height: 180px; border: 1px solid var(--border); border-radius: 12px; background: var(--ck-stage); overflow: hidden; }
 .part-picture img { display: block; width: 100%; height: auto; max-height: 260px; object-fit: contain; }
-.part-picture .muted { color: #52525b; padding: 12px; text-align: center; }
+.part-picture .muted { color: var(--ck-text-muted); padding: 12px; text-align: center; }
 
-.thumb { margin: 0; flex: none; display: grid; place-items: center; background: #f4f4f5; border-radius: 8px; overflow: hidden; }
+.thumb { margin: 0; flex: none; display: grid; place-items: center; background: var(--ck-stage); border-radius: 8px; overflow: hidden; }
 .thumb.thumb-row { display: inline-grid; width: 32px; height: 32px; margin-right: 8px; vertical-align: middle; }
 .thumb.thumb-large { width: 100%; max-width: 240px; padding: 8px; gap: 6px; }
 .thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.thumb.thumb-large figcaption { color: #52525b; }
+.thumb.thumb-large figcaption { color: var(--ck-text-muted); }
 
 .row.focused { background: color-mix(in srgb, var(--ck-volt) 8%, transparent); box-shadow: inset 3px 0 0 var(--ck-volt); }
 .keys-hint { padding: 8px 16px 0; }

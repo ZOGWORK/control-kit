@@ -2,7 +2,7 @@
 
 Everything Control Kit's store entry needs, ready to paste into the Onshape Developer Portal (My account → Developer → OAuth applications → Control Kit → Store entry). The owner signs in and submits; nothing here is sent automatically.
 
-Every screenshot is the live app on the HORS assembly (MR. HORS, HORS 25-26), scanned from Onshape and matched against the production vendor catalogs, rendered with the current interface on 2026-10-26: 119 parts, 61 to buy, 55 to make, none waiting for review, $1,768.05 priced from 50 of 61 buy lines. No numbers are made up.
+Every screenshot is the live app on the HORS assembly (MR. HORS, HORS 25-26), scanned from Onshape and matched against the production vendor catalogs, rendered with the current interface on 2026-10-26: 119 parts, 61 to buy, 55 to make, none waiting for review, $1,768.05 priced from 50 of 61 buy lines. No numbers are made up. `5-scan.png` is the owner's own capture of Onshape with the panel scanning HORS beside the 3D model.
 
 ## What Onshape asks for
 
@@ -87,7 +87,7 @@ Onshape publishes no image sizes, so these are large and sharp enough to be scal
 | `2-buy-list.png` | 2560 × 1600 | A buy list matched to vendor SKUs, rounded to whole packs, priced only when verified. |
 | `3-part-details.png` | 2560 × 1600 | Each part's picture from Onshape and the evidence behind its decision. |
 | `4-make-list.png` | 2560 × 1600 | Parts to print and cut, ready to download as STEP files. |
-| `5-scan.png` | 2560 × 1600 | A scan reads the assembly, its bill of materials, and the vendor catalogs in seconds. |
+| `5-scan.png` | 2000 × 1000 | Right beside your model in Onshape, a scan reads the assembly, its bill of materials, and the vendor catalogs in seconds. |
 | `6-onshape-panel.png` | 840 × 1720 | The same view in Onshape's right panel, beside your assembly. |
 
 ## Links

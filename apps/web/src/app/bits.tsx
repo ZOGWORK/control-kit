@@ -58,9 +58,10 @@ export function SectionHead({ icon, tone, title, children, actions }: { icon: Re
   </div>;
 }
 
-/** Stock as a coloured word: red when out, orange when low; nothing when in stock or unknown. */
-export function StockNote({ stock }: { stock: 'in' | 'out' | 'low' | 'unknown' }) {
-  if (stock === 'out') return <span className="stock out">out of stock</span>;
-  if (stock === 'low') return <span className="stock low">low stock</span>;
+/** Stock as a coloured word: red when out, orange when low; nothing when in stock or unknown. `asOf` says when, where no date is beside it. */
+export function StockNote({ stock, asOf }: { stock: 'in' | 'out' | 'low' | 'unknown'; asOf?: string }) {
+  const when = asOf ? ` (${asOf})` : '';
+  if (stock === 'out') return <span className="stock out">out of stock{when}</span>;
+  if (stock === 'low') return <span className="stock low">low stock{when}</span>;
   return null;
 }
