@@ -1,4 +1,5 @@
 import type { AssemblyContext, BomLine, ScanResult } from './index';
+import type { LicensedImage, VendorRecord } from './matching';
 import { classificationIdentity, type Disposition } from './classifier';
 
 /**
@@ -29,6 +30,22 @@ export type ControlPointLine = {
   /** On the line that carries a combined order: the pieces across every line ordering this SKU, and how many lines. */
   order: { qty: number; lines: number } | null; orderedWith: string | null; partNumber: string | null; configuration: string | null;
   documentId: string; elementId: string; partId: string | null; partStudioUrl: string; usedIn: string[]; suppressed: boolean; metadataIssue: string | null;
+  /** v1.1 (contract §2): what Control Point needs to show the whole line and let people choose its type and product there. */
+  description: string | null; material: string | null; matchNormalizedSku: string | null; image: LicensedImage | null; priceCheck: string | null;
+  manualOverrideAt: string | null; manualOverrideBy: string | null; matchDecisionAt: string | null; candidates: ControlPointCandidate[];
+};
+/** A product a person may pick for a line in Control Point; `id` is `{vendor}:{normalizedSku}`, what a product choice names. */
+export type ControlPointCandidate = {
+  id: string; vendor: string; sku: string; normalizedSku: string; name: string; priceUsd: number | null; unitsPerPack: number | null;
+  stock: VendorRecord['stock']; url: string; image: LicensedImage | null; kind: 'match' | 'choice' | 'near';
+};
+/** When and by whom a line's saved choices were made (`/api/choices`), so Control Point can tell whose choice is newer. */
+export type ControlPointChoiceTimes = Record<string, { manualOverrideAt: string | null; manualOverrideBy: string | null; matchDecisionAt: string | null }>;
+/** A choice made in Control Point (contract §5), as `GET …/decisions` returns it. */
+export type ControlPointDecision = {
+  identity: string; elementId: string;
+  type: { value: Disposition | null; by: string; at: string } | null;
+  product: { vendor: VendorRecord['vendorId']; normalizedSku: string; by: string; at: string } | null;
 };
 /** A CAD part's full Control Kit line, plus the other lines of the same part (other source revisions) folded into it. */
 export type ControlPointCadExtra = ControlPointLine & { sameIdentity: ControlPointLine[] };
@@ -83,6 +100,8 @@ export interface ControlPointAdapter {
   workspaces(token: string): Promise<{ account: ControlPointAccount; workspaces: ControlPointWorkspace[] }>;
   sendBom(token: string, workspaceId: number, body: ReadableStream<Uint8Array> | string, length: number): Promise<ControlPointImport>;
   imports(token: string, workspaceId: number, documentId: string, elementId: string): Promise<ControlPointImportSummary[]>;
+  /** Choices people made in Control Point for one document's parts (contract §5). */
+  decisions(token: string, workspaceId: number, documentId: string): Promise<ControlPointDecision[]>;
   revoke(token: string): Promise<void>;
 }
 
@@ -94,8 +113,27 @@ function base64(bytes: Uint8Array) {
   return btoa(text);
 }
 
-function toLine(line: BomLine): ControlPointLine {
+/** At most eight products to pick from: the match, Control Kit's choices, then its near matches, each once. */
+function candidatesOf(line: BomLine): ControlPointCandidate[] {
+  const seen = new Set<string>();
+  const out: ControlPointCandidate[] = [];
+  const add = (record: VendorRecord | null | undefined, kind: ControlPointCandidate['kind']) => {
+    if (!record || out.length >= 8) return;
+    const id = `${record.vendorId}:${record.normalizedSku}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push({ id, vendor: record.vendorId, sku: record.sku, normalizedSku: record.normalizedSku, name: record.name, priceUsd: record.priceUsd,
+      unitsPerPack: record.packSizeVerified ? record.packSize : null, stock: record.stock, url: record.url, image: record.image ?? null, kind });
+  };
+  if (line.matchStatus !== 'unmatched' && line.matchStatus !== 'rejected') add(line.vendor, 'match');
+  for (const record of line.choices ?? []) add(record, 'choice');
+  for (const record of line.nearMatches ?? []) add(record, 'near');
+  return out;
+}
+
+function toLine(line: BomLine, times: ControlPointChoiceTimes = {}): ControlPointLine {
   const vendor = line.vendor;
+  const when = times[line.bomLineKey];
   return {
     key: line.bomLineKey, identity: classificationIdentity(line), name: line.name, qty: line.qty, unitsPerPack: vendor?.packSizeVerified ? vendor.packSize : null, packsToOrder: line.packsToOrder,
     packPriceUsd: vendor?.priceUsd ?? null, lineTotalUsd: line.lineTotalUsd, vendor: vendor?.vendorId ?? null, sku: vendor?.sku ?? null, vendorUrl: vendor?.url ?? null,
@@ -104,6 +142,8 @@ function toLine(line: BomLine): ControlPointLine {
     reviewReason: line.reviewReason, order: line.order ?? null, orderedWith: line.orderedWith ?? null,
     partNumber: line.partNumber, configuration: line.configuration, documentId: line.documentId, elementId: line.elementId, partId: line.partId,
     partStudioUrl: line.partStudioUrl, usedIn: line.instancePaths, suppressed: line.suppressed, metadataIssue: line.missingMetadataReason,
+    description: line.description, material: line.material, matchNormalizedSku: vendor?.normalizedSku ?? null, image: vendor?.image ?? null, priceCheck: line.priceCheck ?? null,
+    manualOverrideAt: when?.manualOverrideAt ?? null, manualOverrideBy: when?.manualOverrideBy ?? null, matchDecisionAt: when?.matchDecisionAt ?? null, candidates: candidatesOf(line),
   };
 }
 const byKey = (a: ControlPointLine, b: ControlPointLine) => a.key.localeCompare(b.key);
@@ -160,7 +200,10 @@ async function file(name: string, mediaType: string, bytes: Uint8Array): Promise
 }
 
 /** A scan's three line lists as the bundle carries them, sorted by line key. */
-const bundleLines = (result: ScanResult) => ({ lines: result.lines.map(toLine).sort(byKey), suppressedLines: result.suppressed.map(toLine).sort(byKey), missingMetadataLines: result.missingMetadata.map(toLine).sort(byKey) });
+const bundleLines = (result: ScanResult, times?: ControlPointChoiceTimes) => {
+  const map = (lines: BomLine[]) => lines.map(line => toLine(line, times)).sort(byKey);
+  return { lines: map(result.lines), suppressedLines: map(result.suppressed), missingMetadataLines: map(result.missingMetadata) };
+};
 async function idempotencyKeyOf(result: ScanResult, listed: ReturnType<typeof bundleLines>, workspaceId: number | null, inlineMediaTypes: string[]) {
   const suppressedCount = result.suppressed.reduce((total, line) => total + line.qty, 0);
   const totals = { uniqueLines: result.stats.uniqueLines, totalInstances: result.stats.totalInstances, totalCostUsd: result.stats.totalCostUsd, outOfStockLines: result.stats.outOfStockLines };
@@ -178,12 +221,12 @@ async function idempotencyKeyOf(result: ScanResult, listed: ReturnType<typeof bu
  * date), and file bytes (the workbook's change on every build) are left out. `workspaceId` is null only for a preview
  * that is never sent. The browser can call this to learn the key a send would carry without building any file.
  */
-export function controlPointIdempotencyKey(result: ScanResult, options: { workspaceId: number | null; inlineMediaTypes: string[] }): Promise<string> {
-  return idempotencyKeyOf(result, bundleLines(result), options.workspaceId, options.inlineMediaTypes);
+export function controlPointIdempotencyKey(result: ScanResult, options: { workspaceId: number | null; inlineMediaTypes: string[]; choiceTimes?: ControlPointChoiceTimes }): Promise<string> {
+  return idempotencyKeyOf(result, bundleLines(result, options.choiceTimes), options.workspaceId, options.inlineMediaTypes);
 }
 /** The bundle for one scan; its `idempotencyKey` is `controlPointIdempotencyKey` over the files it ends up inlining. */
-export async function buildControlPointPayload(result: ScanResult, options: { workspaceId: number | null; context?: AssemblyContext; files?: Array<{ name: string; mediaType: string; bytes: Uint8Array }>; filesNotIncluded?: Array<{ name: string; reason: string }> }): Promise<ControlPointBomPayload> {
-  const listed = bundleLines(result);
+export async function buildControlPointPayload(result: ScanResult, options: { workspaceId: number | null; context?: AssemblyContext; files?: Array<{ name: string; mediaType: string; bytes: Uint8Array }>; filesNotIncluded?: Array<{ name: string; reason: string }>; choiceTimes?: ControlPointChoiceTimes }): Promise<ControlPointBomPayload> {
+  const listed = bundleLines(result, options.choiceTimes);
   const { lines, suppressedLines, missingMetadataLines } = listed;
   const documentUrl = `https://cad.onshape.com/documents/${encodeURIComponent(result.documentId)}`;
   // A workspace or version link opens from outside Onshape; a microversion link does not, so it falls back to the document.
@@ -248,6 +291,13 @@ export class MockControlPointAdapter implements ControlPointAdapter {
     this.check(token);
     return [...this.imported.values()].filter(item => item.workspace.id === workspaceId && item.documentId === documentId && item.elementId === elementId).reverse().slice(0, 10)
       .map(item => ({ importId: item.importId, idempotencyKey: item.idempotencyKey, sentAt: item.sentAt, sentBy: this.account.email, created: item.created, updated: item.updated, markedRemoved: item.markedRemoved, url: item.url }));
+  }
+  /** Choices made in Control Point, per workspace and document, as a test sets them. */
+  readonly choices = new Map<string, ControlPointDecision[]>();
+  async decisions(token: string, workspaceId: number, documentId: string) {
+    this.check(token);
+    if (!this.list.some(item => item.id === workspaceId)) throw new ControlPointError(403, 'not_member');
+    return structuredClone(this.choices.get(`${workspaceId}:${documentId}`) ?? []);
   }
   async revoke(token: string) { this.check(token); this.revoked = true; }
 }

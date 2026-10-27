@@ -9,7 +9,7 @@ import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, 
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 import { assemblyPreview, assemblyPreviewCacheKey, linePreview, previewCacheKey, PreviewUnavailableError } from './preview';
 import { clearCookie, readSignedEnvelope, seal, signedCookie, unseal, type SignedCookie } from './secrets';
-import { controlPointRoute, type ControlPointEnv } from './control-point';
+import { controlPointRoute, type ControlPointEnv, type DecisionStore } from './control-point';
 
 export interface Env extends ControlPointEnv { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string;
   /** Optional AI review keys (Worker secrets). Without either, the review is off and nothing else changes. */
@@ -49,6 +49,52 @@ async function dispositionKey(documentId: string, identity: string) { return `di
 /** The current choice (last write wins). Every change is also kept under its own key, so concurrent saves never erase history. */
 type SavedDisposition = { disposition: ClassificationOverride | null; by: string; byId: string; at: string };
 async function dispositionChangeKey(documentId: string, identity: string, at: string) { return `disposition-change:${documentId}:${await lineKeyDigest(identity)}:${at}:${random()}`; }
+async function readDispositionRecord(env: Env, documentId: string, identity: string): Promise<SavedDisposition | null> {
+  const raw = await env.APP_STATE.get(await dispositionKey(documentId, identity));
+  if (!raw) return null;
+  try { return JSON.parse(raw) as SavedDisposition; } catch { return null; }
+}
+/** Writes a shared type the way a person's save does: the current record, plus a never-overwritten history key. */
+async function saveDisposition(env: Env, userId: string, documentId: string, identity: string, saved: SavedDisposition) {
+  await env.APP_STATE.put(await dispositionChangeKey(documentId, identity, saved.at), JSON.stringify(saved), { expirationTtl: 365 * 86400 });
+  await env.APP_STATE.put(await dispositionKey(documentId, identity), JSON.stringify(saved));
+  await env.APP_STATE.delete(await legacyClassificationKey(userId, documentId, identity));
+}
+const newer = (at: string, than: string | undefined) => !than || Date.parse(at) > Date.parse(than);
+/**
+ * Control Point's choices for a scan's parts saved as Control Kit's own (contract §5). Only parts in the person's scan,
+ * only choices newer than what Control Kit holds, and only real changes are written, so an unchanged pull writes nothing.
+ */
+export function kvDecisionStore(env: Env): DecisionStore {
+  return {
+    async apply(userId, scan, decisions) {
+      const lines = new Map([...scan.lines, ...scan.suppressed].map(line => [classificationIdentity(line), line]));
+      let types = 0, products = 0;
+      for (const decision of decisions) {
+        const line = lines.get(decision.identity);
+        if (!line) continue;
+        if (decision.type) {
+          const current = await readDispositionRecord(env, scan.documentId, decision.identity);
+          const value = decision.type.value === null ? null : parseOverride(decision.type.value);
+          if (newer(decision.type.at, current?.at) && (current?.disposition ?? null) !== value) {
+            await saveDisposition(env, userId, scan.documentId, decision.identity, { disposition: value, by: `${decision.type.by} in Control Point`, byId: 'control-point', at: decision.type.at });
+            types++;
+          }
+        }
+        if (decision.product) {
+          const current = await readMatchDecision(env, userId, scan.documentId, line.bomLineKey);
+          const same = current?.status === 'confirmed' && current.vendorId === decision.product.vendor && current.normalizedSku === decision.product.normalizedSku;
+          if (!same && newer(decision.product.at, current?.at)) {
+            const value: MatchDecision = { status: 'confirmed', vendorId: decision.product.vendor, normalizedSku: decision.product.normalizedSku, at: decision.product.at };
+            await env.APP_STATE.put(await matchDecisionKey(userId, scan.documentId, decisionIdentity(line.bomLineKey)), JSON.stringify(value));
+            products++;
+          }
+        }
+      }
+      return { types, products };
+    },
+  };
+}
 async function readDisposition(env: Env, userId: string, documentId: string, identity: string): Promise<ClassificationOverride | null> {
   const raw = await env.APP_STATE.get(await dispositionKey(documentId, identity));
   if (raw) { try { return parseOverride((JSON.parse(raw) as SavedDisposition).disposition); } catch { return null; } }
@@ -185,7 +231,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const body = await request.json() as { documentId?: string; lineKey?: string; decision?: string; vendorId?: string; normalizedSku?: string };
     if (!body.documentId || !/^[\w-]{1,128}$/.test(body.documentId) || !body.lineKey || body.lineKey.length > 16384 || !['confirmed', 'rejected'].includes(body.decision ?? '') || !['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'].includes(body.vendorId ?? '') || !body.normalizedSku || !/^[A-Z0-9]+$/.test(body.normalizedSku)) return reply({ error: 'Invalid match decision.' }, 400);
     const key = await matchDecisionKey(current.data.user.id, body.documentId, decisionIdentity(body.lineKey));
-    const value: MatchDecision = { status: body.decision as MatchDecision['status'], vendorId: body.vendorId as MatchDecision['vendorId'], normalizedSku: body.normalizedSku };
+    const value: MatchDecision = { status: body.decision as MatchDecision['status'], vendorId: body.vendorId as MatchDecision['vendorId'], normalizedSku: body.normalizedSku, at: new Date().toISOString() };
     await env.APP_STATE.put(key, JSON.stringify(value));
     return reply({ saved: true });
   }
@@ -235,11 +281,14 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!raw) return reply({ error: 'Scan this assembly again.' }, 409);
     const scanned = JSON.parse(raw) as ScanResult;
     if (scanned.documentId !== body.documentId) return reply({ error: 'Scan does not match this document.' }, 409);
-    const choices: Record<string, { disposition: ClassificationOverride | null; decision: MatchDecision | null }> = {};
+    // `dispositionAt`/`dispositionBy` and the decision's `at` travel to Control Point, which shows whichever choice is newer.
+    const choices: Record<string, { disposition: ClassificationOverride | null; decision: MatchDecision | null; dispositionAt: string | null; dispositionBy: string | null }> = {};
     for (let start = 0; start < scanned.lines.length; start += 20) {
       await Promise.all(scanned.lines.slice(start, start + 20).map(async line => {
         const decision = await readMatchDecision(env, current.data.user.id, body.documentId!, line.bomLineKey);
-        choices[line.bomLineKey] = { disposition: await readDisposition(env, current.data.user.id, body.documentId!, classificationIdentity(line)), decision };
+        const record = await readDispositionRecord(env, body.documentId!, classificationIdentity(line));
+        choices[line.bomLineKey] = { disposition: await readDisposition(env, current.data.user.id, body.documentId!, classificationIdentity(line)), decision,
+          dispositionAt: record?.at ?? null, dispositionBy: record?.by ?? null };
       }));
     }
     return reply({ choices });
@@ -289,10 +338,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     const now = new Date().toISOString();
     const saved: SavedDisposition = { disposition: choice, by: current.data.user.name, byId: current.data.user.id, at: now };
     // KV has no atomic read-modify-write, so history is append-only: one never-overwritten key per change (kept a year).
-    await env.APP_STATE.put(await dispositionChangeKey(body.documentId, body.identity, now), JSON.stringify(saved), { expirationTtl: 365 * 86400 });
     // Clearing keeps a current record (disposition null) so "who reset it" survives.
-    await env.APP_STATE.put(await dispositionKey(body.documentId, body.identity), JSON.stringify(saved));
-    await env.APP_STATE.delete(await legacyClassificationKey(current.data.user.id, body.documentId, body.identity));
+    await saveDisposition(env, current.data.user.id, body.documentId, body.identity, saved);
     return reply({ saved: true, disposition: choice, by: saved.by, at: now });
   }
   if (url.pathname === '/api/scan' && request.method === 'GET') {
@@ -340,7 +387,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   if (url.pathname.startsWith('/control-point/') || url.pathname.startsWith('/api/control-point/')) {
     const current = await getSession(request, env);
-    return controlPointRoute(request, url, env, current ? current.data.user : null);
+    return controlPointRoute(request, url, env, current ? current.data.user : null, undefined, kvDecisionStore(env));
   }
   if (url.pathname === '/api/preview/assembly' && request.method === 'GET') {
     // The assembly's own picture for the scan's header, at the revision the scan read.

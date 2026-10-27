@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { aiCandidateRecord, applyAiReview, applyClassificationChoice, applyMatchDecision, buildAiReviewRequest, classificationIdentity, classifyScan, decisionRecord, matchCatalog, type AiProvider, type AiReviewItem, type BomLine, type ClassificationOverride, type ExportPart, type MatchProgress, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
+import { aiCandidateRecord, applyAiReview, applyClassificationChoice, applyMatchDecision, buildAiReviewRequest, classificationIdentity, classifyScan, decisionRecord, matchCatalog, type AiProvider, type AiReviewItem, type BomLine, type ClassificationOverride, type ControlPointChoiceTimes, type ExportPart, type MatchProgress, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
 import { makeListKey } from './model';
 /** Spreadsheet and ZIP builders load on first download, keeping them out of the initial bundle. */
 const exporters = () => import('@control-kit/excel');
@@ -21,6 +21,8 @@ export const contextKeys = ['documentId', 'workspaceOrVersion', 'workspaceOrVers
 export const workerUrl = import.meta.env.VITE_WORKER_URL ?? '';
 export const api = (path: string, init: RequestInit = {}) => fetch(`${workerUrl}${path}`, { credentials: 'include', ...init });
 export const postJson = (path: string, body: unknown) => api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+/** `/api/choices`: each line's current shared type and the person's match decision, with when and by whom they were saved. */
+type SavedChoices = Record<string, { disposition: ClassificationOverride | null; dispositionAt?: string | null; dispositionBy?: string | null; decision: { status: 'confirmed' | 'rejected'; vendorId: string; normalizedSku: string; at?: string } | null }>;
 const overridesOf = (result: ScanResult) => Object.fromEntries(result.lines.filter(line => line.manualClassification).map(line => [line.bomLineKey, line.manualClassification!]));
 function saveFile(bytes: Uint8Array, filename: string, mime: string) {
   const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
@@ -121,6 +123,19 @@ export function useControlKit(context: URLSearchParams) {
       }
     } catch { /* Storage unavailable. */ }
   }
+  /**
+   * When and by whom each line's saved choices were made, for the Control Point bundle (contract §2 v1.1): Control Point
+   * shows whichever of its own choice and Control Kit's is newer. Null when the Worker could not say.
+   */
+  async function choiceTimes(scanned: ScanResult): Promise<ControlPointChoiceTimes | null> {
+    if (!scanned.scanId) return null;
+    const response = await postJson('/api/choices', { documentId: scanned.documentId, scanId: scanned.scanId }).catch(() => null);
+    if (!response?.ok) return null;
+    const { choices } = await response.json() as { choices: SavedChoices };
+    return Object.fromEntries(Object.entries(choices).map(([key, choice]) => [key, {
+      manualOverrideAt: choice.disposition ? choice.dispositionAt ?? null : null, manualOverrideBy: choice.disposition ? choice.dispositionBy ?? null : null,
+      matchDecisionAt: choice.decision?.status === 'confirmed' ? choice.decision.at ?? null : null }]));
+  }
   /** Applies the document's current shared choices and the person's match decisions to a reopened scan. */
   async function refreshChoices(reopened: ScanResult) {
     if (!reopened.scanId) return;
@@ -129,7 +144,7 @@ export function useControlKit(context: URLSearchParams) {
     try {
       const response = await postJson('/api/choices', { documentId: reopened.documentId, scanId: reopened.scanId });
       if (!response.ok) throw Error();
-      const { choices } = await response.json() as { choices: Record<string, { disposition: ClassificationOverride | null; decision: { status: 'confirmed' | 'rejected'; vendorId: string; normalizedSku: string } | null }> };
+      const { choices } = await response.json() as { choices: SavedChoices };
       setResult(current => {
         if (!current || current.scanId !== reopened.scanId) return current;
         const lines = current.lines.map(line => {
@@ -137,7 +152,8 @@ export function useControlKit(context: URLSearchParams) {
           if (!choice) return line;
           const next = { ...line, manualClassification: choice.disposition };
           const decision = choice.decision;
-          const picked = decision && ['possible', 'confirmed', 'rejected'].includes(line.matchStatus) ? decisionRecord(line, decision as Parameters<typeof decisionRecord>[1]) : null;
+          // An unmatched line can take a pick from its near matches too (a choice made in Control Point), as the matcher allows.
+          const picked = decision && ['possible', 'confirmed', 'rejected', 'unmatched'].includes(line.matchStatus) ? decisionRecord(line, decision as Parameters<typeof decisionRecord>[1]) : null;
           if (decision && picked) {
             next.vendor = picked;
             next.matchStatus = decision.status;
@@ -556,7 +572,7 @@ export function useControlKit(context: URLSearchParams) {
     return URL.createObjectURL(await response.blob());
   }
 
-  return { assemblyPicture, context, buildWorkbook, lastStepZip, previous, ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
+  return { assemblyPicture, choiceTimes, refreshChoices, context, buildWorkbook, lastStepZip, previous, ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
     acceptSuggestions, bulk, pending, settings, savingSettings, saveSettings, signOut, excel, downloadExcel, downloadCsv, step, downloadStep };
 }
 export type ControlKit = ReturnType<typeof useControlKit>;
