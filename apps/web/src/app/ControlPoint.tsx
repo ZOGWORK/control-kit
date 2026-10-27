@@ -111,6 +111,13 @@ function Picker({ cp }: { cp: ControlPoint }) {
   </>;
 }
 
+/** "2 part types and 1 product" */
+function pulledText(pulled: { types: number; products: number }) {
+  const types = pulled.types ? `${pulled.types} part type${pulled.types === 1 ? '' : 's'}` : '';
+  const products = pulled.products ? `${pulled.products} product${pulled.products === 1 ? '' : 's'}` : '';
+  return [types, products].filter(Boolean).join(' and ');
+}
+
 function Linked({ kit, cp, now }: { kit: ControlKit; cp: ControlPoint; now: number | null }) {
   const workspace = cp.workspace!;
   const sent = cp.sent && cp.sent.workspaceId === workspace.id ? cp.sent : null;
@@ -119,10 +126,11 @@ function Linked({ kit, cp, now }: { kit: ControlKit; cp: ControlPoint; now: numb
     <div className="workspace-line"><WorkspaceMark workspace={workspace} size={28} /><div><strong>{workspace.name}</strong><span className="muted small">{workspace.ftcNumber ? `FTC ${workspace.ftcNumber}` : 'No FTC number'}</span></div></div>
     {!workspace.canEditCad && <Alert tone="warning" title="You can't edit CAD parts in this workspace">Ask a workspace admin for CAD access, or switch workspace in Settings.</Alert>}
     {sent && <p className="small cp-sent"><Check aria-hidden size={13} />{current ? 'This scan was sent' : 'An earlier scan was sent'}{now ? ` ${ago(sent.sentAt, now)}` : ''}{sent.created !== undefined ? `: ${sent.created} new, ${sent.updated ?? 0} updated` : ''}. <a className="link" href={sent.url} {...external}>View in Control Point <ExternalLink aria-hidden size={11} /></a></p>}
+    {cp.pulled && cp.pulled.types + cp.pulled.products > 0 && <p className="small cp-sent"><Check aria-hidden size={13} />Picked up {pulledText(cp.pulled)} made in Control Point.</p>}
     <div className="inline-actions">
       <Button variant="secondary" disabled={!workspace.canEditCad || !kit.result!.scanId} loading={cp.busy === 'send'} onClick={() => void cp.send()}><Send aria-hidden size={14} />{current ? `Send again to ${workspace.name}` : `Send full BOM to ${workspace.name}`}</Button>
     </div>
-    <p className="muted small">Sends every part with its quantity, vendor, price, and status, plus the Excel BOM and this session's STEP files. Sending the same scan again changes nothing; a new scan updates the same parts and keeps your team's statuses.</p>
+    <p className="muted small">Sends every part with its quantity, vendor, price, and status, plus the Excel BOM, the assembly picture, and this session's STEP files. Sending the same scan again changes nothing; a new scan updates the same parts and keeps your team's statuses. Part types and products chosen in Control Point arrive with your next scan.</p>
   </>;
 }
 

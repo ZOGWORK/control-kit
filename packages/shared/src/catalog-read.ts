@@ -237,6 +237,9 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
       // A saved decision may name the shown match or any of the line's choices.
       const picked = decisionRecord(line, choice);
       if (choice && picked) {
+        // The match it replaces stays a near match, so a later decision can name it again.
+        const shownMatch = match.vendor;
+        if (shownMatch && picked !== shownMatch && !line.nearMatches.some(record => record.vendorId === shownMatch.vendorId && record.normalizedSku === shownMatch.normalizedSku)) line.nearMatches = [shownMatch, ...line.nearMatches];
         line.vendor = picked;
         line.matchStatus = choice.status;
         if (choice.status === 'rejected') line.vendor = null;

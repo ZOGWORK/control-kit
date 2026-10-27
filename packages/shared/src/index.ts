@@ -13,7 +13,7 @@ import { recalculatePurchasing } from './purchasing';
 export { batchKey, catalogReadKey, catalogVendors, clearCatalogMemoryCache, indexKey, matchCatalog, pointerKey } from './catalog-read';
 export type { MatchProgress } from './catalog-read';
 export type { CatalogReader, IndexEntry } from './catalog-read';
-export type { ControlPointAccount, ControlPointAdapter, ControlPointBomPayload, ControlPointCadExtra, ControlPointCadPart, ControlPointFile, ControlPointImport, ControlPointImportSummary, ControlPointLine, ControlPointWorkspace } from './control-point';
+export type { ControlPointAccount, ControlPointAdapter, ControlPointBomPayload, ControlPointCadExtra, ControlPointCadPart, ControlPointCandidate, ControlPointChoiceTimes, ControlPointDecision, ControlPointFile, ControlPointImport, ControlPointImportSummary, ControlPointLine, ControlPointWorkspace } from './control-point';
 export { checkStep, exportManifest, stepDispositions, stepFileName, wantsStep } from './step';
 export type { ExportPart, StepCheck } from './step';
 export { bomColumns, bomIdentity, bomProperties, bomText, flagMissingSources, mergeBom } from './bom';
@@ -101,7 +101,8 @@ export const catalogUsable = (health: CatalogHealth | undefined, vendorId: Vendo
  * matching a large assembly against every catalog exceeds the Worker's CPU limit); `'done'` once matched.
  */
 export type ScanResult = { vendorMatching?: 'pending' | 'done'; scanId?: string; diagnostics?: ScanDiagnostics; catalogHealth?: CatalogHealth; documentName?: string; assemblyName: string; documentId: string; elementId: string; scannedAt: string; vendorDataUpdatedAt: string | null; lines: BomLine[]; suppressed: BomLine[]; missingMetadata: BomLine[]; stats: { uniqueLines: number; totalInstances: number; totalCostUsd: number | null; outOfStockLines: number; printedLines: number; staleVendorData: boolean } };
-export type MatchDecision = { status: 'confirmed' | 'rejected'; vendorId: VendorRecord['vendorId']; normalizedSku: string };
+/** `at`: when it was saved (absent on decisions saved before Control Point choices, which count as older than any). */
+export type MatchDecision = { status: 'confirmed' | 'rejected'; vendorId: VendorRecord['vendorId']; normalizedSku: string; at?: string };
 
 /** The record a saved decision names on this line: its current match or one of the products it is choosing between. */
 export function decisionRecord(line: BomLine, decision: Pick<MatchDecision, 'vendorId' | 'normalizedSku'> | null): VendorRecord | null {

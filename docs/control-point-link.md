@@ -1,6 +1,8 @@
-# Control Kit ↔ Control Point link contract (v1)
+# Control Kit ↔ Control Point link contract (v1.1)
 
 Written 2026-10-26 at the owner's request ("build both sides now"). Both repositories build to this document, so it is the confirmed contract that `control-point.ts` waited for. Change it only in both places at once.
+
+v1.1 (2026-10-26, the owner's CAD rebuild: robots by season, the whole BOM in Control Point, and choices made there): §2 gains the bundle's additive line fields and where an import lands, and §5 describes how choices made in Control Point reach Control Kit. Nothing in v1 changes meaning; `bundleVersion` stays 2 and every new field is optional for a reader.
 
 Hosts: Control Point `https://tryctrlpoint.org` (Express on Render, SQLite). Control Kit Worker `https://control-kit.control-kit-worker.workers.dev`, Pages `https://control-kit.pages.dev`.
 
@@ -76,6 +78,26 @@ Latest 10 imports of that assembly: `[{importId, idempotencyKey, sentAt, sentBy,
 
 Revokes the bearer token. `204`. Control Point's own Settings also lists "Connected apps → Control Kit (linked {date})" with **Disconnect**, which revokes every Control Kit token of that account.
 
+### Where an import lands (v1.1)
+
+Control Point groups CAD by FTC season and robot (a season is named by its starting year, `2025` = 2025–26 DECODE; a season may hold several robots, one of them the main robot). An import goes to the robot already linked to its assembly (`document_id`, `element_id`). An assembly no robot has yet goes to the main robot of the latest season that has robots, when that robot has no assembly yet; otherwise Control Point creates a robot in the current season named after the assembly. People can move a robot to another season or relink its assembly in Control Point. The response gains `robot: {id, name, season}` and `url` opens that robot's BOM (`/cad/robots/{id}?import={importId}`); `/cad-parts?import={id}` keeps working and redirects there.
+
+### Bundle line fields added in v1.1 (all optional for a reader)
+
+Each `ControlPointLine` (so each `cadParts[i].extra`) also carries:
+
+| Field | Meaning |
+|---|---|
+| `description`, `material` | From the Onshape BOM, or null. |
+| `matchNormalizedSku` | The current match's normalized SKU (the `normalizedSku` a product choice names), or null. |
+| `image` | The matched product's licensed picture `{url, attribution}` (`LicensedImage`) from an official feed, or null. Control Point shows nothing without one. |
+| `priceCheck` | Control Kit's sanity-check note when it refused to price an order, or null. |
+| `manualOverrideAt`, `manualOverrideBy` | When and by whom the part's current shared type was set (Control Kit's `disposition:{documentId}:{sha256(identity)}` record), or null. |
+| `matchDecisionAt` | When the product choice in force on this line was saved, or null. |
+| `candidates` | The products a person may pick between: `{ id, vendor, sku, normalizedSku, name, priceUsd, unitsPerPack, stock, url, image, kind }`, where `id` = `{vendor}:{normalizedSku}` and `kind` is `match` (the current match), `choice` (Control Kit's `choices`), or `near` (`nearMatches`). At most 8. `unitsPerPack` is null unless the pack size is verified. |
+
+Control Point stores the whole line (`ck_extra`), so the rest of Control Kit's fields (disposition, match status, packs, price, stock, links, review reason) need no new columns.
+
 Rate limit: 30 calls per token per minute (existing `rateLimit.ts`), `429` with `Retry-After`.
 
 ## 3. Control Kit Worker routes (browser-facing, cookie session)
@@ -98,3 +120,44 @@ Idempotency: `buildControlPointPayload` gains `workspaceId` and folds it into th
 - Not linked: preview of this scan in Control Point's sections and statuses, labelled as a preview, with **Link Control Point** and **Create a free workspace**.
 - Linked, no workspace or several: picker. One workspace: shown selected, with a confirm.
 - Linked with workspace: "Send to {name} · FTC {n}" and the last-sent line. Workspace `accentColor` replaces the brand accent (primary buttons, active tab, header mark) when it passes contrast; status colours never change.
+
+## 5. Choices made in Control Point (v1.1)
+
+People decide in Control Point what Control Kit asks for, and those choices reach Control Kit's next scan. Control Point never writes to Control Kit: Control Kit reads the choices with the link's bearer token and saves them as its own.
+
+### What a choice is
+
+Per part identity (`ck_part_key`, document:element:part:configuration) in a workspace, two independent choices, each with who and when:
+
+- **Type**: `buy`, `print`, `cnc`, `cut-2d`, `fabricate`, `hardware` (fastener), or `ignore` (not needed); or `null`, meaning "let Control Kit decide" (clears a manual type).
+- **Product**: one of the line's `candidates` (`vendor` + `normalizedSku`). Picking a product also means the part is bought; Control Point sets the type to `buy` in the same choice unless it already is.
+
+Who may choose: an active member of the workspace whose role carries Control Point's **Manage CAD** permission (`manage_cad`; admins have it, and the default Member and Verified Member roles are given it so nobody loses CAD editing). Every change is kept in Control Point's history with who and when.
+
+### `GET /api/integrations/control-kit/workspaces/{id}/decisions?document={documentId}`
+
+Bearer, same checks as `/imports` (active member; CAD module on). Returns every choice made in Control Point for parts of that document:
+
+```json
+{ "decisions": [
+  { "identity": "d1:e1:JHD:default", "elementId": "e1",
+    "type": { "value": "print", "by": "Sam Lee", "at": "2026-10-26T18:00:00.000Z" } | null,
+    "product": { "vendor": "gobilda", "normalizedSku": "1611001408", "by": "Sam Lee", "at": "2026-10-26T18:01:00.000Z" } | null } ] }
+```
+
+`type.value` may be `null` (cleared in Control Point). At most 2,000 decisions, newest first. Errors as §2.
+
+### Control Kit: `POST /api/control-point/decisions {documentId, scanId}`
+
+Browser-facing Worker route (Origin-checked, cookie session). The app calls it after a scan and when a saved scan reopens, while linked with a workspace; a failure is shown quietly and never blocks the scan. The Worker:
+
+1. Checks `scan:{userId}:{scanId}` is the caller's scan of `documentId`, reads the decisions above for the link's workspace, and ignores any identity not in that scan.
+2. **Type**: when the Control Point choice is newer than Control Kit's `disposition:{documentId}:{sha256(identity)}` record (`at`), or there is none, and the value differs, it saves it there exactly as a person in Control Kit would (current record plus a never-overwritten history key) with `by: "{name} in Control Point"`, `byId: "control-point"`, and `at` = Control Point's time.
+3. **Product**: when the choice is newer than the caller's saved match decision (`match-decision:{userId}:{documentId}:{sha256(identity)}`; a decision saved before v1.1 has no time and counts as older), it saves `{status: "confirmed", vendorId, normalizedSku, at}`. Match decisions stay per person in Control Kit, so each linked person picks up Control Point's product choices on their own next scan.
+4. Answers `{ types: n, products: m }` (how many it saved). The app then reloads choices (`/api/choices`) and rematches, so the open scan shows them at once.
+
+Writes happen only for real changes, so an unchanged pull writes nothing to KV.
+
+### Which choice wins
+
+The newest. A person's later choice in Control Kit is newer than Control Point's, so the pull skips it, and the next send carries it (`manualOverrideAt`, `matchDecisionAt`). Control Point shows, per part, the newer of its own choice and the line's; its own choice reads "Chosen in Control Point · reaches Control Kit at its next scan" until a send carries the same value. A re-send never erases a Control Point choice: imports update `ck_extra` and the Control Kit columns only, and choices live in their own columns.

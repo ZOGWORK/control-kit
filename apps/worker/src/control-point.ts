@@ -1,4 +1,4 @@
-import { ControlPointError, type ControlPointAccount, type ControlPointAdapter, type ControlPointImport, type ControlPointImportSummary, type ControlPointWorkspace, type ScanResult } from '@control-kit/shared';
+import { ControlPointError, dispositions, type ControlPointAccount, type ControlPointAdapter, type ControlPointDecision, type ControlPointImport, type ControlPointImportSummary, type ControlPointWorkspace, type ScanResult } from '@control-kit/shared';
 import type { Kv } from './index';
 import { clearCookie, readSignedCookie, seal, signedCookie, unseal, type SignedCookie } from './secrets';
 
@@ -14,6 +14,11 @@ type User = { id: string; name: string };
  */
 type Link = { token: string; account: ControlPointAccount; workspaceId: number | null; linkedAt: string; workspaces?: ControlPointWorkspace[]; workspacesAt?: number; refreshTriedAt?: number };
 export type SentRecord = { importId: number; workspaceId: number; sentAt: string; idempotencyKey: string; url: string };
+/**
+ * Saves choices made in Control Point as Control Kit's own (contract §5): a part's shared type, and the person's product
+ * pick, each only when Control Point's is newer. Implemented over the Worker's KV keys in index.ts.
+ */
+export type DecisionStore = { apply(userId: string, scan: ScanResult, decisions: ControlPointDecision[]): Promise<{ types: number; products: number }> };
 
 export const sendLimitBytes = 12 * 1024 * 1024;
 /** How much of a send's body is read before streaming the rest: the payload's key and assembly ids are at its start. */
@@ -107,7 +112,42 @@ export class HttpControlPointAdapter implements ControlPointAdapter {
         created: count(item.created), updated: count(item.updated), markedRemoved: count(item.markedRemoved), url: ownUrl(item.url, this.origin) }];
     });
   }
+  async decisions(token: string, workspaceId: number, documentId: string): Promise<ControlPointDecision[]> {
+    const query = new URLSearchParams({ document: documentId });
+    const body = await this.json(await this.call(`/workspaces/${workspaceId}/decisions?${query}`, { headers: this.bearer(token) }, 10_000));
+    return (Array.isArray(body.decisions) ? body.decisions : []).slice(0, 2000).flatMap(value => {
+      const decision = readDecision(value);
+      return decision ? [decision] : [];
+    });
+  }
   async revoke(token: string) { await this.call('/revoke', { method: 'POST', headers: this.bearer(token) }, 5_000); }
+}
+
+const vendorIds = ['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'];
+const isoTime = (value: unknown) => typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+/** One decision as Control Point sent it, or null when any part of it is not what the contract allows. */
+export function readDecision(value: unknown): ControlPointDecision | null {
+  type Choice = { value?: unknown; vendor?: unknown; normalizedSku?: unknown; by?: unknown; at?: unknown } | null | undefined;
+  const item = value as { identity?: unknown; elementId?: unknown; type?: Choice; product?: Choice } | null;
+  const identity = text(item?.identity, 2000);
+  const elementId = text(item?.elementId, 128);
+  if (!identity || !elementId) return null;
+  let type: ControlPointDecision['type'] = null;
+  if (item!.type) {
+    const at = isoTime(item!.type.at);
+    const choice = item!.type.value;
+    if (!at || (choice !== null && (!dispositions.includes(choice as never) || choice === 'review'))) return null;
+    type = { value: choice as NonNullable<ControlPointDecision['type']>['value'], by: text(item!.type.by, 120) ?? 'A teammate', at };
+  }
+  let product: ControlPointDecision['product'] = null;
+  if (item!.product) {
+    const at = isoTime(item!.product.at);
+    const vendor = item!.product.vendor;
+    const sku = item!.product.normalizedSku;
+    if (!at || typeof vendor !== 'string' || !vendorIds.includes(vendor) || typeof sku !== 'string' || !/^[A-Z0-9]{1,80}$/.test(sku)) return null;
+    product = { vendor: vendor as NonNullable<ControlPointDecision['product']>['vendor'], normalizedSku: sku, by: text(item!.product.by, 120) ?? 'A teammate', at };
+  }
+  return type || product ? { identity, elementId, type, product } : null;
 }
 
 /** The popup's last page: tells the Control Kit panel how linking ended, then closes itself when it worked. */
@@ -231,7 +271,7 @@ async function splitBody(body: ReadableStream<Uint8Array>, length: number) {
   return { stream, idempotencyKey: match?.[1] ?? null, documentId: match?.[2] ?? null, elementId: match?.[3] ?? null, oversized: size > length };
 }
 
-export async function controlPointRoute(request: Request, url: URL, env: ControlPointEnv, user: User | null, adapter: ControlPointAdapter = new HttpControlPointAdapter(controlPointOrigin(env), env.CONTROL_KIT_CLIENT_SECRET?.trim() ?? '')): Promise<Response> {
+export async function controlPointRoute(request: Request, url: URL, env: ControlPointEnv, user: User | null, adapter: ControlPointAdapter = new HttpControlPointAdapter(controlPointOrigin(env), env.CONTROL_KIT_CLIENT_SECRET?.trim() ?? ''), store?: DecisionStore): Promise<Response> {
   const available = controlPointAvailable(env);
   const callbackUri = `${url.origin}/control-point/callback`;
   if (url.pathname === '/control-point/start' && request.method === 'GET') {
@@ -341,6 +381,31 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     const record: SentRecord = { importId: result.importId, workspaceId: link.workspaceId, sentAt: result.sentAt, idempotencyKey: body.idempotencyKey, url: result.url };
     await env.APP_STATE.put(sentKey(user.id, scanned.documentId, scanned.elementId), JSON.stringify(record), { expirationTtl: 365 * 86400 });
     return reply(result);
+  }
+  if (url.pathname === '/api/control-point/decisions' && request.method === 'POST') {
+    // Choices made in Control Point for this scan's parts, saved as Control Kit's own when they are newer (contract §5).
+    if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    if (!available || !store) return failure(501, 'unavailable', 'Control Point linking is not set up on this server.');
+    if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const body = await request.json().catch(() => null) as { documentId?: unknown; scanId?: unknown } | null;
+    const documentId = typeof body?.documentId === 'string' && /^[\w-]{1,128}$/.test(body.documentId) ? body.documentId : null;
+    const scanId = typeof body?.scanId === 'string' && /^[a-f0-9-]{36}$/.test(body.scanId) ? body.scanId : null;
+    if (!documentId || !scanId) return failure(400, 'bad_request', 'Invalid scan.');
+    // Only the person's own scan of this document, which proves their Onshape access read it.
+    const raw = await env.APP_STATE.get(`scan:${user.id}:${scanId}`);
+    const scanned = raw ? JSON.parse(raw) as ScanResult : null;
+    if (!scanned || scanned.documentId !== documentId) return failure(409, 'scan_missing', 'Scan this assembly again.');
+    const link = await readLink(env, user.id);
+    if (!link) return failure(409, 'not_linked', 'Link Control Point first.', { linked: false });
+    if (link.workspaceId === null) return failure(409, 'no_workspace', 'Pick a Control Point workspace first.');
+    let decisions: ControlPointDecision[];
+    try { decisions = await adapter.decisions(link.token, link.workspaceId, documentId); }
+    catch (error) {
+      if (error instanceof ControlPointError && error.status === 401) { await forgetLink(env, user.id, link.token); return revoked(); }
+      if (error instanceof ControlPointError && error.status === 403) return failure(403, error.code, 'You are no longer a member of this Control Point workspace. Pick another one.');
+      return failure(502, 'unavailable', 'Control Point did not answer. Your choices from there arrive with the next scan.');
+    }
+    return reply(await store.apply(user.id, scanned, decisions));
   }
   if (url.pathname === '/api/control-point/sent' && request.method === 'GET') {
     if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);

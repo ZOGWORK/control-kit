@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import type { ControlPointBomPayload, ControlPointWorkspace } from '@control-kit/shared';
+import type { ControlPointBomPayload, ControlPointDecision, ControlPointWorkspace } from '@control-kit/shared';
 
 /**
  * Control Point's integration API as docs/control-point-link.md describes it, in memory. Tests call `handle` directly
@@ -22,6 +22,8 @@ export function createMockControlPoint(options: { origin?: string; secret?: stri
   const received: Array<{ workspaceId: number; payload: ControlPointBomPayload }> = [];
   const requests: string[] = [];
   let deny = false;
+  /** Choices made in Control Point, per `{workspaceId}:{documentId}` (contract §5). */
+  const decisions = new Map<string, ControlPointDecision[]>();
   let failure: number | null = null;
   let issued = 0;
   const json = (status: number, value: unknown) => Response.json(value, { status });
@@ -88,6 +90,13 @@ export function createMockControlPoint(options: { origin?: string; secret?: stri
       return json(200, imports.filter(item => item.workspaceId === Number(list[1]) && item.documentId === url.searchParams.get('document') && item.elementId === url.searchParams.get('element')).reverse().slice(0, 10)
         .map(item => ({ importId: item.importId, idempotencyKey: item.idempotencyKey, sentAt: item.sentAt, sentBy: account.email, created: item.created, updated: 0, markedRemoved: 0, url: `${origin}/cad-parts?import=${item.importId}` })));
     }
+    const chosen = url.pathname.match(new RegExp(`^${base}/workspaces/(\\d+)/decisions$`));
+    if (chosen && request.method === 'GET') {
+      if (!workspaces.some(item => item.id === Number(chosen[1]))) return json(403, { error: 'not_member' });
+      const document = url.searchParams.get('document');
+      if (!document) return json(400, { error: 'bad_request' });
+      return json(200, { decisions: decisions.get(`${chosen[1]}:${document}`) ?? [] });
+    }
     return json(404, { error: 'not_found' });
   }
   const server = createServer(async (request, response) => {
@@ -105,6 +114,8 @@ export function createMockControlPoint(options: { origin?: string; secret?: stri
     setDeny(value: boolean) { deny = value; },
     /** Every bearer call answers this status (an outage) until set back to null. */
     setFailure(status: number | null) { failure = status; },
+    /** What people chose in Control Point for one document's parts. */
+    setDecisions(workspaceId: number, documentId: string, list: ControlPointDecision[]) { decisions.set(`${workspaceId}:${documentId}`, list); },
   };
 }
 

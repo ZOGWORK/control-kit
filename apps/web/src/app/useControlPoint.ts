@@ -13,6 +13,10 @@ export type LinkState =
 export type SentRecord = { importId: number; workspaceId: number; sentAt: string; idempotencyKey: string; url: string; created?: number; updated?: number; duplicate?: boolean };
 
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+/** The assembly picture (already drawn for the Overview) goes with a send, so Control Point can show the robot whole. */
+const PICTURE_TYPE = 'image/png';
+/** Choices made in Control Point that this scan picked up (`POST /api/control-point/decisions`, contract §5). */
+export type Pulled = { scanId: string; types: number; products: number };
 const workerOrigin = () => new URL(workerUrl || location.origin, location.href).origin;
 /** The Worker's own wording for a failure when it gave one. */
 const message = async (response: Response, fallback: string) => (await response.json().catch(() => null) as { error?: string } | null)?.error ?? fallback;
@@ -27,6 +31,7 @@ export function useControlPoint(kit: ControlKit) {
   const [sent, setSent] = useState<SentRecord | null>(null);
   const [busy, setBusy] = useState<'link' | 'workspace' | 'send' | 'unlink' | null>(null);
   const [error, setError] = useState('');
+  const [pulled, setPulled] = useState<Pulled | null>(null);
   const popup = useRef<Window | null>(null);
   const connected = Boolean(kit.session?.connected);
   const result = kit.result;
@@ -79,10 +84,31 @@ export function useControlPoint(kit: ControlKit) {
     setCurrentKey(null);
     if (!result || !workspace) return;
     let live = true;
-    void controlPointIdempotencyKey(result, { workspaceId: workspace.id, inlineMediaTypes: [XLSX_TYPE, ...(zipReady ? ['application/zip'] : [])] })
+    // The same choice times and files a send carries, so a choice saved since the last send shows as a change, and a
+    // send without a picture (Onshape would not draw one) still reads as current.
+    void Promise.all([kit.choiceTimes(result), assemblyPictureBytes()]).then(([choiceTimes, picture]) => controlPointIdempotencyKey(result, { workspaceId: workspace.id,
+      inlineMediaTypes: [XLSX_TYPE, ...(picture ? [PICTURE_TYPE] : []), ...(zipReady ? ['application/zip'] : [])], choiceTimes: choiceTimes ?? undefined }))
       .then(key => { if (live) setCurrentKey(key); }).catch(() => undefined);
     return () => { live = false; };
   }, [result, workspace?.id, zipReady]);
+
+  // Choices made in Control Point reach a scan here: once per scan, after matching, while a workspace is linked. The
+  // Worker saves the newer ones as Control Kit's own, then the scan reloads its choices. A failure is quiet: the next
+  // scan tries again, and nothing about the scan itself depends on it.
+  const pulledFor = useRef<string | null>(null);
+  useEffect(() => {
+    const scanId = result?.scanId;
+    if (!scanId || result!.vendorMatching === 'pending' || !workspace || pulledFor.current === scanId) return;
+    pulledFor.current = scanId;
+    const scanned = result!;
+    void postJson('/api/control-point/decisions', { documentId: scanned.documentId, scanId })
+      .then(async response => {
+        if (!response.ok) { if ((await response.json().catch(() => null) as { code?: string } | null)?.code === 'revoked') void refresh(); return; }
+        const counts = await response.json() as { types: number; products: number };
+        setPulled({ scanId, types: counts.types, products: counts.products });
+        if (counts.types || counts.products) await kit.refreshChoices(scanned);
+      }).catch(() => undefined);
+  }, [result?.scanId, result?.vendorMatching, workspace?.id]);
 
   const sentCurrent = Boolean(sent && workspace && currentKey && sent.workspaceId === workspace.id && sent.idempotencyKey === currentKey);
   const accent: Accent | null = workspaceAccent(workspace?.accentColor);
@@ -112,7 +138,33 @@ export function useControlPoint(kit: ControlKit) {
     finally { setBusy(null); }
   }
 
-  /** Sends this reviewed scan, as it is, with the workbook and (when exported this session) the STEP ZIP. */
+  /** The scan's assembly picture as PNG bytes (cached by the Worker per revision, and here per scan), or null. */
+  const picture = useRef<{ scanId: string; bytes: Promise<Uint8Array | null> } | null>(null);
+  function assemblyPictureBytes() {
+    const scanId = result?.scanId;
+    if (!scanId) return Promise.resolve(null);
+    if (picture.current?.scanId !== scanId) {
+      const entry = { scanId, bytes: drawPicture() };
+      picture.current = entry;
+      // Only a picture is kept: a failure (Onshape busy, a timeout) is asked again by the next send.
+      void entry.bytes.then(bytes => { if (!bytes && picture.current === entry) picture.current = null; });
+    }
+    return picture.current.bytes;
+  }
+  async function drawPicture() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      // The isometric view shows the whole robot; Control Point shows it uncropped.
+      const { url } = await kit.assemblyPicture('isometric', controller.signal);
+      const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+      URL.revokeObjectURL(url);
+      return bytes.length && bytes.length <= INLINE_FILE_LIMIT_BYTES ? bytes : null;
+    } catch { return null; }
+    finally { clearTimeout(timer); }
+  }
+
+  /** Sends this reviewed scan, as it is, with the workbook, the assembly picture and (when exported this session) the STEP ZIP. */
   async function send() {
     if (!result?.scanId || !workspace) return;
     setBusy('send'); setError('');
@@ -127,7 +179,11 @@ export function useControlPoint(kit: ControlKit) {
       else filesNotIncluded.push({ name: 'STEP files', reason: exported && exported.scanId === result.scanId
         ? 'The make list changed after the STEP files were exported. Download them again from Make, then send again to attach them.'
         : 'Not exported in this session. Download STEP files from Make, then send again to attach them.' });
-      const payload = await buildControlPointPayload(result, { context, workspaceId: workspace.id, files, filesNotIncluded });
+      const picture = await assemblyPictureBytes();
+      if (picture) files.push({ name: `${result.assemblyName || 'Assembly'} assembly.png`, mediaType: PICTURE_TYPE, bytes: picture });
+      else filesNotIncluded.push({ name: 'Assembly picture', reason: 'Onshape did not draw the assembly for this scan.' });
+      const choiceTimes = await kit.choiceTimes(result);
+      const payload = await buildControlPointPayload(result, { context, workspaceId: workspace.id, files, filesNotIncluded, choiceTimes: choiceTimes ?? undefined });
       // The workspace named on the button travels with the send; the Worker refuses it if the saved one changed meanwhile.
       const response = await api(`/api/control-point/send?${new URLSearchParams({ scanId: result.scanId, workspaceId: String(workspace.id) })}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       if (response.status === 409 && (await response.clone().json().catch(() => null) as { code?: string } | null)?.code === 'revoked') { await refresh(); throw new Error('Control Point ended the link. Link it again to send.'); }
@@ -135,6 +191,8 @@ export function useControlPoint(kit: ControlKit) {
       if (response.status === 413) throw new Error('This BOM with its files is over 12 MB. Send it without the STEP files, or ask for a larger limit.');
       if (!response.ok) throw new Error(await message(response, 'The send failed. Your scan, Excel, and STEP files are untouched; try again.'));
       const body = await response.json() as { importId: number; url: string; sentAt: string; created: number; updated: number; duplicate: boolean };
+      // What was just sent is current, whichever files it carried (a picture can arrive only at send time).
+      setCurrentKey(payload.idempotencyKey);
       setSent({ importId: body.importId, workspaceId: workspace.id, sentAt: body.sentAt, idempotencyKey: payload.idempotencyKey, url: body.url, created: body.created, updated: body.updated, duplicate: body.duplicate });
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'The send failed. Try again.'); }
     finally { setBusy(null); }
@@ -150,6 +208,6 @@ export function useControlPoint(kit: ControlKit) {
     finally { setBusy(null); }
   }
 
-  return { refresh, link, workspace, accent, sent, sentCurrent, busy, error, clearError: () => setError(''), startLink, chooseWorkspace, send, unlink };
+  return { refresh, link, workspace, accent, sent, sentCurrent, pulled: pulled && pulled.scanId === result?.scanId ? pulled : null, busy, error, clearError: () => setError(''), startLink, chooseWorkspace, send, unlink };
 }
 export type ControlPoint = ReturnType<typeof useControlPoint>;

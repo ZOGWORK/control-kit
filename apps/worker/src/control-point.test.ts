@@ -354,6 +354,82 @@ describe('sending a BOM to Control Point', () => {
   });
 });
 
+describe('choices made in Control Point', () => {
+  async function ready() {
+    const cookie = await session();
+    await link(cookie);
+    await post(cookie, '/api/control-point/workspace', { workspaceId: 12 });
+    return { cookie, result: await scan(cookie) };
+  }
+  const identity = (line: ScanResult['lines'][number]) => `${line.documentId}:${line.elementId}:${line.partId ?? ''}:${line.configuration ?? ''}`;
+  const choices = async (cookie: string, result: ScanResult) => (await (await post(cookie, '/api/choices', { documentId: result.documentId, scanId: result.scanId })).json()).choices;
+
+  it("saves a newer type and product as Control Kit's own, once, and skips parts outside the scan", async () => {
+    const { cookie, result } = await ready();
+    const [first, second] = result.lines;
+    cp.setDecisions(12, result.documentId, [
+      { identity: identity(first), elementId: first.elementId, type: { value: 'print', by: 'Lee', at: '2026-10-26T18:00:00.000Z' }, product: null },
+      { identity: identity(second), elementId: second.elementId, type: null, product: { vendor: 'gobilda', normalizedSku: '1611001408', by: 'Lee', at: '2026-10-26T18:01:00.000Z' } },
+      { identity: 'other:doc:part:', elementId: 'x', type: { value: 'cnc', by: 'Lee', at: '2026-10-26T18:02:00.000Z' }, product: null },
+    ]);
+    const pull = () => post(cookie, '/api/control-point/decisions', { documentId: result.documentId, scanId: result.scanId });
+    const answer = await pull();
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({ types: 1, products: 1 });
+    const saved = await choices(cookie, result);
+    expect(saved[first.bomLineKey]).toMatchObject({ disposition: 'print', dispositionBy: 'Lee in Control Point', dispositionAt: '2026-10-26T18:00:00.000Z' });
+    expect(saved[second.bomLineKey].decision).toEqual({ status: 'confirmed', vendorId: 'gobilda', normalizedSku: '1611001408', at: '2026-10-26T18:01:00.000Z' });
+    // History keeps the change, like a person's save.
+    expect([...env.APP_STATE.values.keys()].some(key => key.startsWith(`disposition-change:${result.documentId}:`))).toBe(true);
+    // Unchanged: nothing written again.
+    const writes = env.APP_STATE.values.size;
+    expect(await (await pull()).json()).toEqual({ types: 0, products: 0 });
+    expect(env.APP_STATE.values.size).toBe(writes);
+  });
+
+  it('keeps a later choice made in Control Kit', async () => {
+    const { cookie, result } = await ready();
+    const line = result.lines[0];
+    const later = await post(cookie, '/api/classification/override', { documentId: result.documentId, scanId: result.scanId, identity: identity(line), classification: 'cnc' });
+    expect(later.status).toBe(200);
+    cp.setDecisions(12, result.documentId, [{ identity: identity(line), elementId: line.elementId, type: { value: 'print', by: 'Lee', at: '2020-01-01T00:00:00.000Z' }, product: null }]);
+    expect(await (await post(cookie, '/api/control-point/decisions', { documentId: result.documentId, scanId: result.scanId })).json()).toEqual({ types: 0, products: 0 });
+    expect((await choices(cookie, result))[line.bomLineKey].disposition).toBe('cnc');
+  });
+
+  it('clears an older per-person type when Control Point resets the part', async () => {
+    const { cookie, result } = await ready();
+    const line = result.lines[1];
+    const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity(line)))), byte => byte.toString(16).padStart(2, '0')).join('');
+    env.APP_STATE.values.set(`override:mock-user:${result.documentId}:${digest}`, 'printed');
+    expect((await choices(cookie, result))[line.bomLineKey].disposition).toBe('print');
+    cp.setDecisions(12, result.documentId, [{ identity: identity(line), elementId: line.elementId, type: { value: null, by: 'Lee', at: '2026-10-26T19:00:00.000Z' }, product: null }]);
+    expect(await (await post(cookie, '/api/control-point/decisions', { documentId: result.documentId, scanId: result.scanId })).json()).toEqual({ types: 1, products: 0 });
+    expect((await choices(cookie, result))[line.bomLineKey]).toMatchObject({ disposition: null, dispositionBy: 'Lee in Control Point' });
+    expect(env.APP_STATE.values.has(`override:mock-user:${result.documentId}:${digest}`)).toBe(false);
+  });
+
+  it("needs the person's own scan and a chosen workspace, and ends the link when Control Point revokes it", async () => {
+    const cookie = await session();
+    const result = await scan(cookie);
+    expect((await post(cookie, '/api/control-point/decisions', { documentId: result.documentId, scanId: result.scanId })).status).toBe(409);
+    await link(cookie);
+    expect(await (await post(cookie, '/api/control-point/decisions', { documentId: result.documentId, scanId: result.scanId })).json()).toMatchObject({ code: 'no_workspace' });
+    await post(cookie, '/api/control-point/workspace', { workspaceId: 12 });
+    expect((await post(cookie, '/api/control-point/decisions', { documentId: 'elsewhere', scanId: result.scanId })).status).toBe(409);
+    cp.revokeAll();
+    expect(await (await post(cookie, '/api/control-point/decisions', { documentId: result.documentId, scanId: result.scanId })).json()).toMatchObject({ code: 'revoked', linked: false });
+    expect(await storedLink()).toBeNull();
+  });
+
+  it('drops decisions that are not what the contract allows', async () => {
+    const { readDecision } = await import('./control-point');
+    expect(readDecision({ identity: 'a:b:c:', elementId: 'b', type: { value: 'review', by: 'x', at: '2026-10-26T00:00:00Z' } })).toBeNull();
+    expect(readDecision({ identity: 'a:b:c:', elementId: 'b', product: { vendor: 'mcmaster', normalizedSku: 'X1', at: '2026-10-26T00:00:00Z' } })).toBeNull();
+    expect(readDecision({ identity: 'a:b:c:', elementId: 'b', type: { value: null, by: 'Lee', at: '2026-10-26T00:00:00Z' } })).toMatchObject({ type: { value: null } });
+  });
+});
+
 describe('assembly picture', () => {
   it('draws the scanned revision once per user and revision, counted as a preview', async () => {
     const cookie = await session();

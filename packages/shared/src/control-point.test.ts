@@ -167,4 +167,28 @@ describe('Control Point attach bundle', () => {
     otherRevision.diagnostics = { onshapeRequests: null, metadataIssues: [], revision: { type: 'm', id: 'micro2' } };
     expect((await buildControlPointPayload(otherRevision, { workspaceId: 12, context })).idempotencyKey).not.toBe(bundle.idempotencyKey);
   });
+  it('sends every active line as a CAD part, whatever its type, with its products to pick from and when its choices were made', async () => {
+    const result = scan();
+    const record = (sku: string, name: string): VendorRecord => ({ vendorId: 'gobilda', sku, normalizedSku: sku.replace(/\W/g, ''), name, normalizedName: name.toLowerCase(), url: `https://www.gobilda.com/${sku}`,
+      priceUsd: 5.99, packSize: 2, packSizeVerified: true, stock: 'low', stockQty: null, category: 'bearing', updatedAt: '2026-10-24T00:00:00Z', source: 'sitemap' });
+    const bracket = result.lines.find(line => line.name === 'Linked bracket')!;
+    bracket.disposition = 'review';
+    bracket.matchStatus = 'possible';
+    bracket.vendor = record('1611-0014-0008', 'Bearing A');
+    bracket.choices = [record('1611-0014-0010', 'Bearing B')];
+    bracket.nearMatches = [record('1611-0014-0008', 'Bearing A'), record('1611-0014-0012', 'Bearing C')];
+    const mount = result.lines.find(line => line.name === 'Motor mount')!;
+    const bundle = await buildControlPointPayload(result, { workspaceId: 12, context, choiceTimes: {
+      [mount.bomLineKey]: { manualOverrideAt: '2026-10-26T18:00:00.000Z', manualOverrideBy: 'Sam', matchDecisionAt: null } } });
+    // A part needing review, a make part, a bought part: all of them, not only the priced ones.
+    expect(bundle.cadParts).toHaveLength(result.lines.length);
+    const line = bundle.cadParts.find(part => part.name === 'Linked bracket')!.extra;
+    expect(line.candidates.map(item => [item.id, item.kind])).toEqual([['gobilda:161100140008', 'match'], ['gobilda:161100140010', 'choice'], ['gobilda:161100140012', 'near']]);
+    expect(line.candidates[0]).toMatchObject({ unitsPerPack: 2, stock: 'low', priceUsd: 5.99 });
+    expect(line.matchNormalizedSku).toBe('161100140008');
+    expect(bundle.cadParts.find(part => part.name === 'Motor mount')!.extra).toMatchObject({ manualOverrideAt: '2026-10-26T18:00:00.000Z', manualOverrideBy: 'Sam' });
+    // A choice saved since the last send is a new import.
+    const before = await buildControlPointPayload(result, { workspaceId: 12, context });
+    expect(before.idempotencyKey).not.toBe(bundle.idempotencyKey);
+  });
 });
