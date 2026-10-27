@@ -1,6 +1,7 @@
 export interface Kv { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl: number }): Promise<void>; delete(k: string): Promise<void> }
 import { loadClassificationOverrides, scanAssembly, SessionExpiredError } from './scan';
 import { applyMatchDecision, catalogReadKey, decisionRecord, classificationIdentity, classifyScan, parseOverride, type AssemblyContext, type BomLine, type ClassificationOverride, type MatchDecision, type ScanResult, type UserSettings, type VendorId } from '@control-kit/shared';
+import { runRevFeed } from './rev-feed';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
 import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, reviewWithAi, trustedAiRequest, validAiRequest, type AiEnv } from './ai-review';
@@ -488,8 +489,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   return reply({ error: 'Not found' }, 404);
 }
 /**
- * Each vendor crawls hourly, 12 minutes apart, when its cron is scheduled in wrangler.toml. The crons are paused (an
- * empty list) at the owner's request; every cron that is scheduled must be one of these (a test checks).
+ * Each vendor crawls hourly, 12 minutes apart, when its cron is scheduled in wrangler.toml; REV's cron reads REV's official
+ * feed instead and never crawls. The crons are paused (an empty list) at the owner's request; every cron that is
+ * scheduled must be one of these (a test checks).
  */
 export const cronVendors: Record<string, VendorId> = { '0 * * * *': 'gobilda', '12 * * * *': 'servocity', '24 * * * *': 'andymark', '36 * * * *': 'rev', '48 * * * *': 'pitsco' };
 
@@ -512,6 +514,8 @@ export default {
   },
   scheduled(event: { cron: string }, env: Env, context: { waitUntil(promise: Promise<unknown>): void }) {
     const vendor = cronVendors[event.cron];
-    if (vendor) context.waitUntil(runVendor(vendor, env.VENDOR_CATALOG, fetch, { feedFreshHours: Number(env.VENDOR_STALE_HOURS ?? 336) }));
+    // REV is never crawled: its cron reads REV's official feed (at most every six hours) and publishes it once staged.
+    if (vendor === 'rev') context.waitUntil(runRevFeed(env.VENDOR_CATALOG, fetch));
+    else if (vendor) context.waitUntil(runVendor(vendor, env.VENDOR_CATALOG, fetch, { feedFreshHours: Number(env.VENDOR_STALE_HOURS ?? 336) }));
   },
 };

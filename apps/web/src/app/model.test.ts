@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateAssembly, classifyScan, recalculatePurchasing, type AssemblyInstance, type BomLine, type ScanResult, type VendorRecord } from '@control-kit/shared';
-import { buyList, catalogState, catalogStateText, catalogsComplete, composition, filterParts, findParts, hasChanges, money, primaryAction, readiness, reviewQueue, makeListKey, scanChanges, staleCatalogs, summarize, topCosts, workspaceAccent } from './model';
+import { buyList, catalogState, catalogStateText, catalogsComplete, composition, feedDates, filterParts, findParts, hasChanges, money, priceDate, primaryAction, readiness, reviewQueue, makeListKey, scanChanges, staleCatalogs, summarize, topCosts, workspaceAccent } from './model';
 
 const vendor = (sku: string, packSize: number | null, priceUsd: number | null): VendorRecord => ({ vendorId: 'gobilda', sku, normalizedSku: sku.replace(/\D/g, ''), name: 'Screw', normalizedName: 'screw', url: 'https://www.gobilda.com/x/',
   priceUsd, packSize, packSizeVerified: packSize !== null, stock: 'in', stockQty: null, category: 'hardware', updatedAt: '2026-10-24T00:00:00Z', source: 'sitemap' });
@@ -10,6 +10,20 @@ function scan(instances: AssemblyInstance[], edit: (lines: BomLine[]) => void = 
   return recalculatePurchasing(classifyScan(result, { teamNumber: null }, {}));
 }
 const parts = (name: string, count: number, partId = name): AssemblyInstance[] => Array.from({ length: count }, (_, n) => ({ id: `${partId}${n}`, name, type: 'Part', documentId: 'doc', elementId: 'studio', partId }));
+
+describe('price and stock dates', () => {
+  it("gives an official feed's update date and time, as REV's terms require, and a crawled page its date", () => {
+    const feed: VendorRecord = { ...vendor('REV-31-1595', 1, 375), vendorId: 'rev', updatedAt: '2026-10-26T05:00:29.000Z', source: 'feed', parser: 'official-feed' };
+    const at = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(feed.updatedAt));
+    expect(priceDate(feed)).toBe(`REV feed updated ${at}`);
+    expect(priceDate(vendor('2802-0004-0010', 10, 8.99))).toBe(`as of ${new Date('2026-10-24T00:00:00Z').toLocaleDateString()}`);
+    const result = scan([...parts('Control Hub', 1, 'hub'), ...parts('M4 screw', 2, 'screw')], lines => {
+      Object.assign(lines.find(line => line.partId === 'hub')!, { vendor: feed, matchStatus: 'exact' });
+      Object.assign(lines.find(line => line.partId === 'screw')!, { vendor: vendor('2802-0004-0010', 10, 8.99), matchStatus: 'exact' });
+    });
+    expect(feedDates(result.lines)).toEqual([`REV feed updated ${at}`]);
+  });
+});
 
 describe('Control Kit view model', () => {
   it('prices 12 screws in a verified 10-pack at $8.99 as 2 packs, $17.98, and labels the subtotal incomplete', () => {
