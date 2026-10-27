@@ -16,6 +16,7 @@ const savedChoices = (result: ScanResult) => Object.fromEntries(result.lines.fla
  * pictures saved as `{sha256(bomLineKey)}.png`.
  */
 export function fixtureApi(fixturePath?: string, catalogOrigin?: string, previewDir?: string): Plugin {
+  const redrawnAt = new Map<string, number>();
   const load = (): ScanResult => {
     if (fixturePath) return JSON.parse(readFileSync(fixturePath, 'utf8')) as ScanResult;
     const definition = JSON.parse(readFileSync(new URL('../../fixtures/assembly-ftc-robot.json', import.meta.url), 'utf8')) as AssemblyDefinition;
@@ -59,9 +60,19 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
           response.statusCode = upstream.status;
           return response.end(await upstream.text());
         }
-        if (url.pathname === '/api/preview/assembly') {
-          const file = previewDir && `${previewDir}/assembly.png`;
+        if (url.pathname === '/api/preview/assembly' || url.pathname === '/api/preview/assembly/redraw') {
+          // Saved pictures per view (`assembly-front.png`, …), falling back to `assembly.png`. A redraw is allowed once a minute per view, as in the Worker.
+          const view = url.searchParams.get('view') ?? 'isometric';
+          const named = previewDir && `${previewDir}/assembly-${view}.png`;
+          const file = named && existsSync(named) ? named : previewDir && `${previewDir}/assembly.png`;
           if (!file || !existsSync(file)) return json({ error: 'No saved assembly picture.' }, 404);
+          if (url.pathname.endsWith('/redraw')) {
+            const last = redrawnAt.get(view);
+            if (last && Date.now() - last < 60_000) return json({ error: 'This picture was just redrawn. Try again in a minute.', retryAfter: 60 }, 429);
+            redrawnAt.set(view, Date.now());
+          }
+          const drawn = redrawnAt.get(view);
+          if (drawn) response.setHeader('x-picture-drawn', new Date(drawn).toISOString());
           response.setHeader('content-type', 'image/png');
           return response.end(readFileSync(file));
         }

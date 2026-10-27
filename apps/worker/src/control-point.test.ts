@@ -370,4 +370,47 @@ describe('assembly picture', () => {
     expect(day.byPurpose.preview).toBeGreaterThanOrEqual(1);
     expect((await call('/api/preview/assembly?scanId=11111111-1111-4111-8111-111111111111', { cookie })).status).toBe(409);
   });
+  it('draws each view once per revision, and treats an unknown view as isometric', async () => {
+    const cookie = await session();
+    const result = await scan(cookie);
+    const before = onshape.apiRequests;
+    const top = await call(`/api/preview/assembly?scanId=${result.scanId}&view=top`, { cookie });
+    expect(new TextDecoder().decode(await top.arrayBuffer())).toBe('PNG assemblies m/mv-1 top');
+    expect(top.headers.get('x-picture-drawn')).toBeNull();
+    expect(env.APP_STATE.values.has('mock-user:preview-assembly:simple:elem1:m:mv-1:top')).toBe(true);
+    await call(`/api/preview/assembly?scanId=${result.scanId}&view=top`, { cookie });
+    expect(onshape.apiRequests - before).toBe(1);
+    expect(new TextDecoder().decode(await (await call(`/api/preview/assembly?scanId=${result.scanId}&view=sideways`, { cookie })).arrayBuffer())).toBe('PNG assemblies m/mv-1');
+  });
+  it('redraws the assembly as it is now, at most once a minute, until a newer scan', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const cookie = await session();
+      const result = await scan(cookie);
+      const redraw = (view = 'isometric', wvm = 'w', wvmId = 'work1') => call(`/api/preview/assembly/redraw?scanId=${result.scanId}&view=${view}&wvm=${wvm}&wvmId=${wvmId}`, { cookie, method: 'POST' });
+      vi.setSystemTime(Date.now() + 1000);
+      const before = onshape.apiRequests;
+      const first = await redraw();
+      expect(new TextDecoder().decode(await first.arrayBuffer())).toBe('PNG assemblies w/work1');
+      expect(first.headers.get('x-picture-drawn')).toBeTruthy();
+      // The scan's picture is now the redrawn one, served without another request.
+      const shown = await call(`/api/preview/assembly?scanId=${result.scanId}`, { cookie });
+      expect(new TextDecoder().decode(await shown.arrayBuffer())).toBe('PNG assemblies w/work1');
+      expect(shown.headers.get('x-picture-drawn')).toBe(first.headers.get('x-picture-drawn'));
+      const again = await redraw();
+      expect(again.status).toBe(429);
+      expect((await again.json() as { retryAfter: number }).retryAfter).toBeGreaterThan(0);
+      // Each view has its own minute, and a version context draws that version.
+      expect(new TextDecoder().decode(await (await redraw('front', 'v', 'ver1')).arrayBuffer())).toBe('PNG assemblies v/ver1 front');
+      vi.setSystemTime(Date.now() + 61_000);
+      expect((await redraw()).status).toBe(200);
+      expect(onshape.apiRequests - before).toBe(3);
+      // A later scan reads a newer revision, so its own picture wins again.
+      vi.setSystemTime(Date.now() + 1000);
+      const newer = await scan(cookie);
+      expect(new TextDecoder().decode(await (await call(`/api/preview/assembly?scanId=${newer.scanId}`, { cookie })).arrayBuffer())).toBe('PNG assemblies m/mv-1');
+      expect((await redraw('isometric', 'x')).status).toBe(400);
+      expect((await call(`/api/preview/assembly/redraw?scanId=${result.scanId}&wvm=w&wvmId=work1`, { cookie, method: 'POST', headers: { origin: 'https://evil.example' } })).status).toBe(403);
+    } finally { vi.useRealTimers(); }
+  });
 });
