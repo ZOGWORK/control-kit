@@ -2,7 +2,7 @@
 //
 //   npx tsx scripts/catalog-load.ts stage    --vendor gobilda --feed goBILDA.csv [--map sku="Product Code" --map packQty="Qty/Pack"]
 //   npx tsx scripts/catalog-load.ts stage    --vendor gobilda --crawl work/backfill/gobilda.json
-//   npx tsx scripts/catalog-load.ts stage    --vendor rev [--feed products.json]
+//   npx tsx scripts/catalog-load.ts stage    --vendor rev [--feed products.json --updated "<Last-Modified>"]
 //   npx tsx scripts/catalog-load.ts validate --vendor gobilda --gen <gen> [--expect 1121-0010-0264,1309-0016-4008] [--spot 20]
 //   npx tsx scripts/catalog-load.ts publish  --vendor gobilda --gen <gen> [--expect ...] [--spot 20]
 //   npx tsx scripts/catalog-load.ts retire   --vendor gobilda [--limit 200]
@@ -14,9 +14,9 @@
 // from vendor sites. Uses wrangler's credentials; never prints records.
 //
 // REV is loaded only from its official feed (apps/worker/src/rev-feed.ts): `stage --vendor rev` makes one GET of the
-// feed (or reads a saved copy with --feed), and REV refuses crawl dumps and --spot, which would fetch its product pages.
+// feed (or reads a saved copy with --feed and the Last-Modified REV sent with it as --updated), and REV refuses crawl dumps and --spot, which would fetch its product pages.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,7 +91,12 @@ if (mode === 'stage') {
   if (vendor === 'rev') {
     if (flag('crawl')) throw new Error('REV is never crawled; stage it from its official feed');
     let body: string; let updatedAt: string;
-    if (flag('feed')) { body = readFileSync(flag('feed')!, 'utf8'); updatedAt = statSync(flag('feed')!).mtime.toISOString(); }
+    if (flag('feed')) {
+      // A saved copy carries no time of its own; the time shown beside REV prices must be REV's Last-Modified, never the file's.
+      const updated = Date.parse(flag('updated') ?? '');
+      if (!Number.isFinite(updated)) throw new Error('A saved REV feed needs --updated "<the Last-Modified header REV sent with it>"');
+      body = readFileSync(flag('feed')!, 'utf8'); updatedAt = new Date(updated).toISOString();
+    }
     else {
       const response = await fetchRevFeed();
       if (response.status !== 'ok') throw new Error('REV feed answered 304 without a validator');

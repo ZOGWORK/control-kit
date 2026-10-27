@@ -1,7 +1,7 @@
 import { isBundle, normalizeName, normalizeSku, type VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
 import { manifestKey, propagationMs, publishStaged, stageCatalog, validateStaged } from './catalog-publish';
-import { allowedUrl, batchKey, indexKey, pointerKey, snapshotKey, vendorSources, type CatalogPointer, type VendorSnapshot } from './vendor-ingest';
+import { allowedUrl, batchKey, indexKey, pointerKey, retireReplaced, snapshotKey, vendorSources, type CatalogPointer, type VendorSnapshot } from './vendor-ingest';
 
 /*
  * REV Robotics' official product feed, used with REV's permission since 2026-10-26; REV is never crawled. The feed is
@@ -16,7 +16,10 @@ import { allowedUrl, batchKey, indexKey, pointerKey, snapshotKey, vendorSources,
  * REV lists it. `image_url` is not used: REV's permission covers listings, prices, and stock, not its photos.
  */
 export const revFeedUrl = vendorSources.rev.officialFeed!;
-/** Cron state: the last response's validators, when it was checked, and a staged generation waiting to be published. */
+/**
+ * Cron state: the last response's validators, when it was checked, and a staged generation waiting to be published with
+ * the live generation it was staged against (`over`), so a catalog published meanwhile by hand is never replaced by it.
+ */
 export const revFeedStateKey = 'cat:rev:feed';
 /** The feed listed 976 products on 2026-10-26; one with under half of that is truncated, not a smaller catalog. */
 export const revMinRecords = 500;
@@ -25,8 +28,8 @@ const maxRejectedShare = 0.1;
 const userAgent = 'Control Kit vendor catalog (+https://github.com/ZOGWORK/control-kit)';
 
 export type RevFeedRejection = { row: number; sku: string | null; reason: string };
-type FeedState = { etag: string | null; lastModified: string | null; checkedAt: string; staged: { gen: string; stagedAt: string; updatedAt: string; records: number } | null };
-export type RevFeedRun = { vendor: 'rev'; source: 'official-feed'; action: 'skipped' | 'unchanged' | 'staged' | 'waiting' | 'published' | 'rejected'; records: number; problems: string[] };
+type FeedState = { etag: string | null; lastModified: string | null; checkedAt: string; staged: { gen: string; stagedAt: string; updatedAt: string; records: number; over: string | null } | null };
+export type RevFeedRun = { vendor: 'rev'; source: 'official-feed'; action: 'skipped' | 'unchanged' | 'staged' | 'waiting' | 'published' | 'rejected' | 'abandoned'; records: number; problems: string[] };
 
 /**
  * Pack size from REV's own SKU: REV sells every multi-unit product under a "-PKn" SKU (387 of the 976 feed rows). A
@@ -116,11 +119,13 @@ async function discardStaged(kv: Kv, gen: string) {
  * One scheduled step of the REV catalog, through the same staged publish as `scripts/catalog-load.ts`, so a bad feed never
  * replaces a good catalog. A run does one thing: publish a staged generation once KV has propagated it (after
  * validating it again), or, at most every `checkEveryHours`, fetch the feed and stage it if it changed. A feed that is
- * unreachable, malformed, truncated, or mostly unusable fails the run and leaves the live catalog as it was.
+ * unreachable, malformed, truncated, or mostly unusable fails the run and leaves the live catalog as it was. Every run
+ * first deletes replaced generations whose day of rollback is over (at most 20 keys), as a crawl run would.
  */
 export async function runRevFeed(kv: Kv, fetcher: Fetcher = fetch, options: { now?: () => Date; checkEveryHours?: number } = {}): Promise<RevFeedRun> {
   const now = options.now ?? (() => new Date());
   const state = await json<FeedState>(kv, revFeedStateKey);
+  await retireReplaced('rev', kv, 20);
   const pointer = await json<CatalogPointer>(kv, pointerKey('rev'));
   const summary = (action: RevFeedRun['action'], records = 0, problems: string[] = []): RevFeedRun => {
     const run: RevFeedRun = { vendor: 'rev', source: 'official-feed', action, records, problems };
@@ -134,6 +139,12 @@ export async function runRevFeed(kv: Kv, fetcher: Fetcher = fetch, options: { no
   };
   try {
     if (state?.staged) {
+      // A catalog published since this one was staged (a manual load of a newer feed) wins: the staged one is dropped.
+      if ((pointer?.gen ?? null) !== state.staged.over) {
+        await discardStaged(kv, state.staged.gen);
+        await kv.put(revFeedStateKey, JSON.stringify({ ...state, etag: null, lastModified: null, staged: null } satisfies FeedState));
+        return summary('abandoned', state.staged.records);
+      }
       if (now().getTime() - Date.parse(state.staged.stagedAt) < propagationMs) return summary('waiting', state.staged.records);
       const validation = await validateStaged('rev', kv, state.staged.gen, { minRecords: revMinRecords });
       if (!validation.ok) {
@@ -163,7 +174,7 @@ export async function runRevFeed(kv: Kv, fetcher: Fetcher = fetch, options: { no
     if (problems.length) throw new Error(`REV feed not staged: ${problems.join('; ')}`);
     const manifest = await stageCatalog('rev', parsed.records, kv, { source: 'official-feed', rejected: parsed.rejected.length, note: `REV official feed, updated ${response.updatedAt}`, now: now() });
     await kv.put(revFeedStateKey, JSON.stringify({ etag: response.etag, lastModified: response.lastModified, checkedAt: now().toISOString(),
-      staged: { gen: manifest.gen, stagedAt: manifest.stagedAt, updatedAt: response.updatedAt, records: manifest.records } } satisfies FeedState));
+      staged: { gen: manifest.gen, stagedAt: manifest.stagedAt, updatedAt: response.updatedAt, records: manifest.records, over: pointer?.gen ?? null } } satisfies FeedState));
     return summary('staged', manifest.records);
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'REV feed import failed';

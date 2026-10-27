@@ -135,6 +135,37 @@ describe('REV catalog from the official feed', () => {
       expect(json<VendorSnapshot>(kv, snapshotKey('rev'))).toMatchObject({ status: 'failed', version: 'crawl1' });
     }
   });
+  it('drops a staged feed when a newer catalog was published by hand meanwhile', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    crawledCatalog(kv);
+    let clock = Date.parse('2026-10-26T12:00:00Z');
+    const now = () => new Date(clock);
+    await runRevFeed(kv, feedServer(() => fullFeed()), { now });
+    const { staged } = json<{ staged: { gen: string } }>(kv, revFeedStateKey);
+    // An operator publishes another generation (catalog-load) before the cron's next run.
+    kv.values.set(pointerKey('rev'), JSON.stringify({ ...json<CatalogPointer>(kv, pointerKey('rev')), gen: 'manual' }));
+    clock += propagationMs;
+    expect(await runRevFeed(kv, feedServer(() => fullFeed()), { now })).toMatchObject({ action: 'abandoned' });
+    expect(json<CatalogPointer>(kv, pointerKey('rev')).gen).toBe('manual');
+    expect([...kv.values.keys()].some(key => key.includes(staged.gen))).toBe(false);
+  });
+  it('deletes the replaced catalog once its day of rollback is over', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    crawledCatalog(kv);
+    let clock = Date.parse('2026-10-26T12:00:00Z');
+    const now = () => new Date(clock);
+    const fetcher = feedServer(() => fullFeed());
+    await runRevFeed(kv, fetcher, { now });
+    clock += propagationMs;
+    await runRevFeed(kv, fetcher, { now });
+    const pointer = json<CatalogPointer>(kv, pointerKey('rev'));
+    kv.values.set(pointerKey('rev'), JSON.stringify({ ...pointer, previous: { ...pointer.previous!, deleteAfter: 0 } }));
+    await runRevFeed(kv, fetcher, { now });
+    expect(json<CatalogPointer>(kv, pointerKey('rev')).previous).toBeNull();
+    expect([...kv.values.keys()].some(key => key.startsWith('cat:rev:gen:crawl1:'))).toBe(false);
+  });
   it('discards a staged feed that no longer validates instead of publishing it', async () => {
     quiet();
     const kv = new MemoryKv();
