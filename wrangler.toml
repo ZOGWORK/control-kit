@@ -36,7 +36,10 @@ new_sqlite_classes = ["AiAllowance"]
 
 [triggers]
 # Vendor crawls are paused at the owner's request (2026-10-25): they used most of the free plan's daily KV writes,
-# and the published catalogs stay as they are. To resume, restore the hourly schedule that `cronVendors` maps:
-# ["0 * * * *", "12 * * * *", "24 * * * *", "36 * * * *", "48 * * * *"]
-# REV is never crawled: "36 * * * *" reads REV's official feed (apps/worker/src/rev-feed.ts) at most every six hours.
-crons = []
+# and the published catalogs stay as they are; they are refreshed by hand with scripts/catalog-load.ts. To resume a
+# crawl, add its hourly cron from `cronVendors`: "0 * * * *" goBILDA, "12 * * * *" ServoCity, "24 * * * *" AndyMark,
+# "48 * * * *" Pitsco.
+# REV is never crawled. "*/10 * * * *" reads REV's official feed (apps/worker/src/rev-feed.ts): a download at most every
+# six hours, then one small step per run to stage and publish it within the free plan's 10 ms of CPU. A run with nothing
+# to do writes nothing to KV.
+crons = ["*/10 * * * *"]
