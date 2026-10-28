@@ -279,6 +279,36 @@ describe('REV catalog from the official feed', () => {
     clock += 3 * 3600000;
     expect(await runRevFeed(kv, fetcher, { now })).toMatchObject({ action: 'building' });
   });
+  it('retries a step that stopped before saving its progress without counting its own rows as duplicates', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    const now = () => new Date('2026-10-26T12:00:00Z');
+    const fetcher = feedServer(() => fullFeed());
+    await runRevFeed(kv, fetcher, { now });
+    await runRevFeed(kv, fetcher, { now });
+    const saved = kv.values.get(revFeedStateKey)!;
+    // The second batch and the index are written, then the run stops before its state is saved.
+    await runRevFeed(kv, fetcher, { now });
+    kv.values.set(revFeedStateKey, saved);
+    expect(await stageFeed(kv, fetcher, now)).toMatchObject({ action: 'staged', records: 607 });
+    const { staged } = json<{ staged: { gen: string } }>(kv, revFeedStateKey);
+    expect(json<{ rejected: number }>(kv, `cat:rev:gen:${staged.gen}:manifest`).rejected).toBe(0);
+    expect(json<unknown[]>(kv, indexKey('rev', staged.gen))).toHaveLength(607);
+  });
+  it('removes a batch written by a step whose index write failed', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    crawledCatalog(kv);
+    const now = () => new Date('2026-10-26T12:00:00Z');
+    const fetcher = feedServer(() => fullFeed());
+    await runRevFeed(kv, fetcher, { now });
+    const gen = json<{ building: { gen: string } }>(kv, revFeedStateKey).building.gen;
+    const put = kv.put.bind(kv);
+    vi.spyOn(kv, 'put').mockImplementation(async (key, value) => { if (key === indexKey('rev', gen)) throw new Error('KV write failed'); return put(key, value); });
+    await expect(runRevFeed(kv, fetcher, { now })).rejects.toThrow('KV write failed');
+    expect([...kv.values.keys()].some(key => key.includes(gen))).toBe(false);
+    expect(kv.values.has(revFeedBodyKey)).toBe(false);
+  });
   it('drops a half-staged feed when a catalog is published by hand meanwhile', async () => {
     quiet();
     const kv = new MemoryKv();

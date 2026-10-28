@@ -144,7 +144,8 @@ async function discardStaged(kv: Kv, gen: string, batches = 0) {
 }
 /** Ends an unfinished build: its batches and the saved body go, and its validators are never kept. */
 async function dropBuilding(kv: Kv, state: FeedState) {
-  if (state.building) await discardStaged(kv, state.building.gen, state.building.batches);
+  // One more than the saved count: a run may have written its batch and then failed before saving its progress.
+  if (state.building) await discardStaged(kv, state.building.gen, state.building.batches + 1);
   await kv.delete(revFeedBodyKey);
   await kv.put(revFeedStateKey, JSON.stringify({ ...state, etag: null, lastModified: null, building: null } satisfies FeedState));
 }
@@ -214,7 +215,8 @@ export async function runRevFeed(kv: Kv, fetcher: Fetcher = fetch, options: { no
       // The next `revRowsPerRun` rows become one batch. A SKU listed twice keeps its first row; the later one is rejected.
       const rows = feedRows(await kv.get(revFeedBodyKey) ?? '');
       if (rows.length !== building.rows) throw new Error(`REV feed body changed while staging (${rows.length} rows, expected ${building.rows})`);
-      const index = building.batches ? await json<IndexEntry[]>(kv, indexKey('rev', building.gen)) ?? [] : [];
+      // Entries for this batch can only be left by a run that stopped before saving its progress; this run rewrites them.
+      const index = building.batches ? (await json<IndexEntry[]>(kv, indexKey('rev', building.gen)) ?? []).filter(entry => entry[2] < building.batches) : [];
       const part = parseRevRows(rows.slice(building.next, building.next + revRowsPerRun), building.updatedAt, building.next, new Set(index.map(entry => entry[0])));
       const records = part.records.map(record => ({ ...record, catalogVersion: building.gen }));
       if (records.length) {
