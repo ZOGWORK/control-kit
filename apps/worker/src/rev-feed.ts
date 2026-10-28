@@ -1,7 +1,7 @@
 import { isBundle, normalizeName, normalizeSku, type VendorRecord } from '@control-kit/shared';
 import type { Kv } from './index';
-import { manifestKey, propagationMs, publishStaged, stageCatalog, validateStaged } from './catalog-publish';
-import { allowedUrl, batchKey, indexKey, pointerKey, retireReplaced, snapshotKey, vendorSources, type CatalogPointer, type VendorSnapshot } from './vendor-ingest';
+import { manifestKey, propagationMs, publishStaged, validateStaged, type StagedCatalog } from './catalog-publish';
+import { allowedUrl, batchKey, indexKey, pointerKey, retireReplaced, snapshotKey, vendorSources, type CatalogPointer, type IndexEntry, type VendorSnapshot } from './vendor-ingest';
 
 /*
  * REV Robotics' official product feed, used with REV's permission since 2026-10-26; REV is never crawled. The feed is
@@ -17,19 +17,30 @@ import { allowedUrl, batchKey, indexKey, pointerKey, retireReplaced, snapshotKey
  */
 export const revFeedUrl = vendorSources.rev.officialFeed!;
 /**
- * Cron state: the last response's validators, when it was checked, and a staged generation waiting to be published with
- * the live generation it was staged against (`over`), so a catalog published meanwhile by hand is never replaced by it.
+ * Cron state: the last staged response's validators, when the feed was last checked, a generation being built from a
+ * downloaded feed (`building`), and a staged generation waiting to be published. Both carry the live generation they
+ * were started against (`over`), so a catalog published meanwhile by hand is never replaced by them.
  */
 export const revFeedStateKey = 'cat:rev:feed';
+/** The downloaded feed body while its rows are being staged, deleted once staging ends. */
+export const revFeedBodyKey = 'cat:rev:feed:body';
 /** The feed listed 976 products on 2026-10-26; one with under half of that is truncated, not a smaller catalog. */
 export const revMinRecords = 500;
+/**
+ * Rows staged per cron run. The free plan allows 10 ms of CPU per run. Mapping and staging all 976 rows in one run took
+ * about 17 ms in a fresh Node process (2026-10-28); a run of 125 rows, including parsing the 322 KB body, took 3.4–7.4 ms.
+ */
+export const revRowsPerRun = 125;
+/** A build still unfinished this long after its download (runs are ten minutes apart) is dropped rather than retried. */
+const revMaxBuildHours = 3;
 /** More rejected rows than this means the feed's format changed; staging what is left would drop most of the catalog. */
 const maxRejectedShare = 0.1;
 const userAgent = 'Control Kit vendor catalog (+https://github.com/ZOGWORK/control-kit)';
 
 export type RevFeedRejection = { row: number; sku: string | null; reason: string };
-type FeedState = { etag: string | null; lastModified: string | null; checkedAt: string; staged: { gen: string; stagedAt: string; updatedAt: string; records: number; over: string | null } | null };
-export type RevFeedRun = { vendor: 'rev'; source: 'official-feed'; action: 'skipped' | 'unchanged' | 'staged' | 'waiting' | 'published' | 'rejected' | 'abandoned'; records: number; problems: string[] };
+type Building = { gen: string; etag: string | null; lastModified: string | null; updatedAt: string; rows: number; next: number; batches: number; records: number; rejected: number; firstRejection: RevFeedRejection | null; over: string | null };
+type FeedState = { etag: string | null; lastModified: string | null; checkedAt: string; staged: { gen: string; stagedAt: string; updatedAt: string; records: number; over: string | null } | null; building?: Building | null };
+export type RevFeedRun = { vendor: 'rev'; source: 'official-feed'; action: 'skipped' | 'unchanged' | 'building' | 'staged' | 'waiting' | 'published' | 'rejected' | 'abandoned'; records: number; problems: string[] };
 
 /**
  * Pack size from REV's own SKU: REV sells every multi-unit product under a "-PKn" SKU (387 of the 976 feed rows). A
@@ -52,12 +63,24 @@ function revStock(status: unknown): VendorRecord['stock'] {
 
 /** Feed body → records, with each unusable row and why. Throws when the body is not a list of products. */
 export function parseRevFeed(body: string, updatedAt: string): { records: VendorRecord[]; rejected: RevFeedRejection[]; rows: number } {
+  const rows = feedRows(body);
+  return { ...parseRevRows(rows, updatedAt), rows: rows.length };
+}
+function feedRows(body: string): unknown[] {
   let rows: unknown;
   try { rows = JSON.parse(body); } catch { throw new Error('REV feed was not JSON'); }
   if (!Array.isArray(rows)) throw new Error('REV feed was not a list of products');
+  return rows;
+}
+/**
+ * Rows → records; `first` is the position of `rows[0]` in the feed, so rejections name the feed's own row. With `seen`
+ * (SKUs already staged), a SKU listed again is rejected and its first row kept.
+ */
+function parseRevRows(rows: unknown[], updatedAt: string, first = 0, seen?: Set<string>): { records: VendorRecord[]; rejected: RevFeedRejection[] } {
   const records: VendorRecord[] = [];
   const rejected: RevFeedRejection[] = [];
-  rows.forEach((raw: unknown, row) => {
+  rows.forEach((raw: unknown, at) => {
+    const row = first + at;
     const item = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
     const sku = typeof item.sku === 'string' ? item.sku.trim() : '';
     const name = typeof item.name === 'string' ? item.name.trim() : '';
@@ -65,23 +88,25 @@ export function parseRevFeed(body: string, updatedAt: string): { records: Vendor
     const normalizedSku = normalizeSku(sku, 'rev');
     if (!sku || !/^[A-Z0-9]+$/.test(normalizedSku)) return rejected.push({ row, sku: sku || null, reason: 'no usable SKU' });
     if (!name) return rejected.push({ row, sku, reason: 'no name' });
+    if (seen?.has(normalizedSku)) return rejected.push({ row, sku, reason: 'SKU listed twice' });
     // REV's first condition: the link is REV's own product page, so a row without one is not listed at all.
     if (!allowedUrl('rev', url) || new URL(url).pathname === '/') return rejected.push({ row, sku, reason: 'no product page on www.revrobotics.com' });
     const price = typeof item.price === 'number' ? item.price : typeof item.price === 'string' && /^\d+(?:\.\d+)?$/.test(item.price.trim()) ? Number(item.price) : NaN;
+    seen?.add(normalizedSku);
     records.push({ vendorId: 'rev', sku, normalizedSku, name, normalizedName: normalizeName(name), url, priceUsd: Number.isFinite(price) && price > 0 ? Math.round(price * 100) / 100 : null,
       ...revPack(sku, name), stock: revStock(item.availability_status), stockQty: null, category: 'uncategorized', updatedAt, source: 'feed', parser: 'official-feed' });
   });
-  return { records, rejected, rows: rows.length };
+  return { records, rejected };
 }
 
 /** Records the cron or the load script may stage, or why the feed must not replace the live catalog. */
 export function checkRevFeed(parsed: ReturnType<typeof parseRevFeed>): string[] {
+  return feedProblems(parsed.records.length, parsed.rejected.length, parsed.rows, parsed.rejected[0] ?? null);
+}
+function feedProblems(records: number, rejected: number, rows: number, first: RevFeedRejection | null) {
   const problems: string[] = [];
-  if (parsed.records.length < revMinRecords) problems.push(`Only ${parsed.records.length} usable products; expected at least ${revMinRecords}`);
-  if (parsed.rows && parsed.rejected.length / parsed.rows > maxRejectedShare) {
-    const first = parsed.rejected[0];
-    problems.push(`${parsed.rejected.length} of ${parsed.rows} rows rejected (row ${first.row}${first.sku ? ` ${first.sku}` : ''}: ${first.reason})`);
-  }
+  if (records < revMinRecords) problems.push(`Only ${records} usable products; expected at least ${revMinRecords}`);
+  if (rows && rejected / rows > maxRejectedShare && first) problems.push(`${rejected} of ${rows} rows rejected (row ${first.row}${first.sku ? ` ${first.sku}` : ''}: ${first.reason})`);
   return problems;
 }
 
@@ -108,20 +133,30 @@ export async function fetchRevFeed(fetcher: Fetcher = fetch, options: { etag?: s
 
 const json = async <T>(kv: Kv, key: string): Promise<T | null> => { const raw = await kv.get(key); if (!raw) return null; try { return JSON.parse(raw) as T; } catch { return null; } };
 /** A staged generation no reader was ever pointed at, so its keys can go at once. One the pointer names is never touched. */
-async function discardStaged(kv: Kv, gen: string) {
+async function discardStaged(kv: Kv, gen: string, batches = 0) {
   const live = await json<CatalogPointer>(kv, pointerKey('rev'));
   if (live && [live.gen, live.previous?.gen, ...(live.retiring ?? []).map(entry => entry.gen)].includes(gen)) return;
+  // A generation still being built has no manifest yet; the cron state counts its batches instead.
   const manifest = await json<{ batches: number }>(kv, manifestKey('rev', gen));
-  for (let batch = 0; batch < (manifest?.batches ?? 0); batch++) await kv.delete(batchKey('rev', gen, batch));
+  for (let batch = 0; batch < Math.max(manifest?.batches ?? 0, batches); batch++) await kv.delete(batchKey('rev', gen, batch));
   await kv.delete(indexKey('rev', gen));
   await kv.delete(manifestKey('rev', gen));
+}
+/** Ends an unfinished build: its batches and the saved body go, and its validators are never kept. */
+async function dropBuilding(kv: Kv, state: FeedState) {
+  // One more than the saved count: a run may have written its batch and then failed before saving its progress.
+  if (state.building) await discardStaged(kv, state.building.gen, state.building.batches + 1);
+  await kv.delete(revFeedBodyKey);
+  await kv.put(revFeedStateKey, JSON.stringify({ ...state, etag: null, lastModified: null, building: null } satisfies FeedState));
 }
 
 /**
  * One scheduled step of the REV catalog, through the same staged publish as `scripts/catalog-load.ts`, so a bad feed never
  * replaces a good catalog. A run does one thing: publish a staged generation once KV has propagated it (after
- * validating it again), or, at most every `checkEveryHours`, fetch the feed and stage it if it changed. A feed that is
- * unreachable, malformed, truncated, or mostly unusable fails the run and leaves the live catalog as it was. Every run
+ * validating it again), stage the next `revRowsPerRun` rows of a downloaded feed, or, at most every `checkEveryHours`,
+ * fetch the feed and keep it for staging if it changed. A changed feed of 976 rows therefore goes live over ten runs (one
+ * download, eight of rows, one to publish). A feed that is unreachable, malformed, truncated, or mostly
+ * unusable fails the run, discards what was staged of it, and leaves the live catalog as it was. Every run
  * first deletes replaced generations whose day of rollback is over (at most 20 keys), as a crawl run would.
  */
 export async function runRevFeed(kv: Kv, fetcher: Fetcher = fetch, options: { now?: () => Date; checkEveryHours?: number } = {}): Promise<RevFeedRun> {
@@ -169,6 +204,47 @@ export async function runRevFeed(kv: Kv, fetcher: Fetcher = fetch, options: { no
       await kv.put(revFeedStateKey, JSON.stringify({ ...state, staged: null } satisfies FeedState));
       return summary('published', published.records);
     }
+    if (state?.building) {
+      const building = state.building;
+      if ((pointer?.gen ?? null) !== building.over) {
+        await dropBuilding(kv, state);
+        return summary('abandoned', building.records);
+      }
+      // A step that keeps failing (stopped at the CPU limit, say) would retry the same rows every run; the build ends instead.
+      if (now().getTime() - Date.parse(state.checkedAt) > revMaxBuildHours * 3600000) throw new Error(`REV feed staging did not finish within ${revMaxBuildHours} hours`);
+      // The next `revRowsPerRun` rows become one batch. A SKU listed twice keeps its first row; the later one is rejected.
+      const rows = feedRows(await kv.get(revFeedBodyKey) ?? '');
+      if (rows.length !== building.rows) throw new Error(`REV feed body changed while staging (${rows.length} rows, expected ${building.rows})`);
+      // Entries for this batch can only be left by a run that stopped before saving its progress; this run rewrites them.
+      const index = building.batches ? (await json<IndexEntry[]>(kv, indexKey('rev', building.gen)) ?? []).filter(entry => entry[2] < building.batches) : [];
+      const part = parseRevRows(rows.slice(building.next, building.next + revRowsPerRun), building.updatedAt, building.next, new Set(index.map(entry => entry[0])));
+      const records = part.records.map(record => ({ ...record, catalogVersion: building.gen }));
+      if (records.length) {
+        await kv.put(batchKey('rev', building.gen, building.batches), JSON.stringify(records));
+        for (const record of records) index.push([record.normalizedSku, record.normalizedName, building.batches]);
+        await kv.put(indexKey('rev', building.gen), JSON.stringify(index));
+        building.batches++;
+      }
+      building.records += records.length;
+      building.rejected += part.rejected.length;
+      building.firstRejection ??= part.rejected[0] ?? null;
+      building.next += revRowsPerRun;
+      if (building.next < building.rows) {
+        await kv.put(revFeedStateKey, JSON.stringify(state satisfies FeedState));
+        return summary('building', building.records);
+      }
+      const problems = feedProblems(building.records, building.rejected, building.rows, building.firstRejection);
+      if (problems.length) throw new Error(`REV feed not staged: ${problems.join('; ')}`);
+      const stagedAt = now().toISOString();
+      const manifest: StagedCatalog = { vendor: 'rev', gen: building.gen, source: 'official-feed', records: building.records, batches: building.batches, stagedAt, skipped: {}, rejected: building.rejected,
+        note: `REV official feed, updated ${building.updatedAt}` };
+      await kv.put(manifestKey('rev', building.gen), JSON.stringify(manifest));
+      // Only now do the validators describe the staged catalog, so a 304 can be trusted for it.
+      await kv.put(revFeedStateKey, JSON.stringify({ etag: building.etag, lastModified: building.lastModified, checkedAt: state.checkedAt,
+        staged: { gen: building.gen, stagedAt, updatedAt: building.updatedAt, records: building.records, over: building.over }, building: null } satisfies FeedState));
+      await kv.delete(revFeedBodyKey);
+      return summary('staged', building.records);
+    }
     if (state && now().getTime() - Date.parse(state.checkedAt) < (options.checkEveryHours ?? 6) * 3600000) return summary('skipped');
     // Validators only count while the live catalog came from this feed; otherwise the feed is read in full.
     const fromFeed = pointer?.source === 'official-feed';
@@ -180,15 +256,19 @@ export async function runRevFeed(kv: Kv, fetcher: Fetcher = fetch, options: { no
       if (snapshot?.status === 'failed' && pointer) await kv.put(snapshotKey('rev'), JSON.stringify({ ...snapshot, status: 'ok', lastRunAt: now().toISOString(), error: undefined } satisfies VendorSnapshot));
       return summary('unchanged', pointer?.records ?? 0);
     }
-    const parsed = parseRevFeed(response.body, response.updatedAt);
-    const problems = checkRevFeed(parsed);
-    if (problems.length) throw new Error(`REV feed not staged: ${problems.join('; ')}`);
-    const manifest = await stageCatalog('rev', parsed.records, kv, { source: 'official-feed', rejected: parsed.rejected.length, note: `REV official feed, updated ${response.updatedAt}`, now: now() });
-    await kv.put(revFeedStateKey, JSON.stringify({ etag: response.etag, lastModified: response.lastModified, checkedAt: now().toISOString(),
-      staged: { gen: manifest.gen, stagedAt: manifest.stagedAt, updatedAt: response.updatedAt, records: manifest.records, over: pointer?.gen ?? null } } satisfies FeedState));
-    return summary('staged', manifest.records);
+    // Staging is spread over the next runs to stay within the free plan's CPU limit. This run only checks that the body
+    // is a list long enough to be the whole feed and keeps it; the rows are mapped and checked as they are staged.
+    const rows = feedRows(response.body);
+    if (rows.length < revMinRecords) throw new Error(`REV feed not staged: Only ${rows.length} rows; expected at least ${revMinRecords}`);
+    await kv.put(revFeedBodyKey, response.body);
+    await kv.put(revFeedStateKey, JSON.stringify({ etag: state?.etag ?? null, lastModified: state?.lastModified ?? null, checkedAt: now().toISOString(), staged: null,
+      building: { gen: crypto.randomUUID().slice(0, 8), etag: response.etag, lastModified: response.lastModified, updatedAt: response.updatedAt, rows: rows.length, next: 0, batches: 0, records: 0,
+        rejected: 0, firstRejection: null, over: pointer?.gen ?? null } } satisfies FeedState));
+    return summary('building', 0);
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'REV feed import failed';
+    // A generation that cannot be finished is removed with its body, and the next check downloads the feed again.
+    if (state?.building) await dropBuilding(kv, state).catch(() => {});
     await failed(message);
     console.error(JSON.stringify({ vendor: 'rev', source: 'official-feed', error: message.slice(0, 200) }));
     throw cause;

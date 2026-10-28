@@ -4,7 +4,7 @@ import { aggregateAssembly, classifyScan, type AssemblyDefinition, type VendorRe
 import { clearCatalogMemoryCache, enrichScan } from './catalog';
 import worker, { type Env, type Kv } from './index';
 import { propagationMs } from './catalog-publish';
-import { parseRevFeed, revFeedStateKey, revFeedUrl, runRevFeed } from './rev-feed';
+import { parseRevFeed, revFeedBodyKey, revFeedStateKey, revFeedUrl, revRowsPerRun, runRevFeed, type RevFeedRun } from './rev-feed';
 import { batchKey, indexKey, pointerKey, runVendor, snapshotKey, type CatalogPointer, type VendorSnapshot } from './vendor-ingest';
 
 class MemoryKv implements Kv {
@@ -41,6 +41,12 @@ function crawledCatalog(kv: MemoryKv) {
 async function liveRecords(kv: MemoryKv) {
   const pointer = json<CatalogPointer>(kv, pointerKey('rev'));
   return Array.from({ length: pointer.batches ?? 0 }, (_, batch) => json<VendorRecord[]>(kv, batchKey('rev', pointer.gen, batch))).flat();
+}
+/** Runs the cron until the downloaded feed is staged: one run downloads it, then each run stages `revRowsPerRun` rows. */
+async function stageFeed(kv: MemoryKv, fetcher: Parameters<typeof runRevFeed>[1], now: () => Date) {
+  const runs: RevFeedRun[] = [];
+  do runs.push(await runRevFeed(kv, fetcher, { now })); while (runs.at(-1)!.action === 'building' && runs.length < 20);
+  return { ...runs.at(-1)!, runs: runs.length };
 }
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -89,7 +95,7 @@ describe('REV catalog from the official feed', () => {
     vi.stubGlobal('fetch', fetcher);
     const kv = new MemoryKv();
     const pending: Promise<unknown>[] = [];
-    worker.scheduled({ cron: '36 * * * *' }, { VENDOR_CATALOG: kv } as unknown as Env, { waitUntil: promise => pending.push(promise) });
+    worker.scheduled({ cron: '*/10 * * * *' }, { VENDOR_CATALOG: kv } as unknown as Env, { waitUntil: promise => pending.push(promise) });
     await Promise.all(pending);
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([revFeedUrl]);
     expect(new URL(revFeedUrl).hostname).toBe('dashboard.revrobotics.com');
@@ -101,7 +107,9 @@ describe('REV catalog from the official feed', () => {
     const fetcher = feedServer(() => fullFeed());
     let clock = Date.parse('2026-10-26T12:00:00Z');
     const now = () => new Date(clock);
-    expect(await runRevFeed(kv, fetcher, { now })).toMatchObject({ action: 'staged', records: 607 });
+    // One run downloads the feed; five more stage its 607 rows, 125 at a time.
+    expect(await stageFeed(kv, fetcher, now)).toMatchObject({ action: 'staged', records: 607, runs: 6 });
+    expect(kv.values.has(revFeedBodyKey)).toBe(false);
     // Staged, not live: scans still read the crawled catalog until KV has propagated the new one.
     expect(json<CatalogPointer>(kv, pointerKey('rev')).gen).toBe('crawl1');
     expect(await runRevFeed(kv, fetcher, { now })).toMatchObject({ action: 'waiting' });
@@ -141,7 +149,7 @@ describe('REV catalog from the official feed', () => {
     crawledCatalog(kv);
     let clock = Date.parse('2026-10-26T12:00:00Z');
     const now = () => new Date(clock);
-    await runRevFeed(kv, feedServer(() => fullFeed()), { now });
+    await stageFeed(kv, feedServer(() => fullFeed()), now);
     const { staged } = json<{ staged: { gen: string } }>(kv, revFeedStateKey);
     // An operator publishes another generation (catalog-load) before the cron's next run.
     kv.values.set(pointerKey('rev'), JSON.stringify({ ...json<CatalogPointer>(kv, pointerKey('rev')), gen: 'manual' }));
@@ -157,7 +165,7 @@ describe('REV catalog from the official feed', () => {
     let clock = Date.parse('2026-10-26T12:00:00Z');
     const now = () => new Date(clock);
     const fetcher = feedServer(() => fullFeed());
-    await runRevFeed(kv, fetcher, { now });
+    await stageFeed(kv, fetcher, now);
     const state = kv.values.get(revFeedStateKey)!;
     clock += propagationMs;
     await runRevFeed(kv, fetcher, { now });
@@ -179,7 +187,7 @@ describe('REV catalog from the official feed', () => {
     let clock = Date.parse('2026-10-26T12:00:00Z');
     const now = () => new Date(clock);
     const fetcher = feedServer(() => fullFeed());
-    await runRevFeed(kv, fetcher, { now });
+    await stageFeed(kv, fetcher, now);
     clock += propagationMs;
     await runRevFeed(kv, fetcher, { now });
     const pointer = json<CatalogPointer>(kv, pointerKey('rev'));
@@ -194,13 +202,127 @@ describe('REV catalog from the official feed', () => {
     crawledCatalog(kv);
     let clock = Date.parse('2026-10-26T12:00:00Z');
     const now = () => new Date(clock);
-    await runRevFeed(kv, feedServer(() => fullFeed()), { now });
+    await stageFeed(kv, feedServer(() => fullFeed()), now);
     const { staged } = json<{ staged: { gen: string } }>(kv, revFeedStateKey);
     kv.values.delete(batchKey('rev', staged.gen, 0));
     clock += propagationMs;
     expect(await runRevFeed(kv, feedServer(() => fullFeed()), { now })).toMatchObject({ action: 'rejected' });
     expect(json<CatalogPointer>(kv, pointerKey('rev')).gen).toBe('crawl1');
     expect([...kv.values.keys()].some(key => key.includes(staged.gen))).toBe(false);
+  });
+  it('stages a downloaded feed a few rows per run, so each run stays within the free plan\'s CPU limit', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    crawledCatalog(kv);
+    const now = () => new Date('2026-10-26T12:00:00Z');
+    const fetcher = feedServer(() => fullFeed());
+    // The download run keeps the body and maps no rows.
+    expect(await runRevFeed(kv, fetcher, { now })).toMatchObject({ action: 'building', records: 0 });
+    expect(kv.values.has(revFeedBodyKey)).toBe(true);
+    const gen = json<{ building: { gen: string } }>(kv, revFeedStateKey).building.gen;
+    expect(await runRevFeed(kv, fetcher, { now })).toMatchObject({ action: 'building', records: revRowsPerRun });
+    expect(json<VendorRecord[]>(kv, batchKey('rev', gen, 0))).toHaveLength(revRowsPerRun);
+    // Nothing being built is visible: the crawled catalog stays live and no manifest exists until the last rows.
+    expect(json<CatalogPointer>(kv, pointerKey('rev')).gen).toBe('crawl1');
+    expect([...kv.values.keys()].some(key => key.includes(`${gen}:manifest`))).toBe(false);
+    expect(await stageFeed(kv, fetcher, now)).toMatchObject({ action: 'staged', records: 607 });
+    expect(json<unknown[]>(kv, indexKey('rev', gen))).toHaveLength(607);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('keeps the first row of a SKU the feed lists twice', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    const rows = JSON.parse(fullFeed()) as Array<Record<string, unknown>>;
+    // The repeat is in a later run's rows, so it is caught against what earlier runs staged.
+    rows.splice(450, 0, { ...rows[0], price: 1 });
+    await stageFeed(kv, feedServer(() => JSON.stringify(rows)), () => new Date('2026-10-26T12:00:00Z'));
+    const { staged } = json<{ staged: { gen: string; records: number } }>(kv, revFeedStateKey);
+    expect(staged.records).toBe(607);
+    const all = Array.from({ length: 5 }, (_, batch) => json<VendorRecord[] | null>(kv, batchKey('rev', staged.gen, batch)) ?? []).flat();
+    expect(all.filter(record => record.sku === rows[0].sku)).toMatchObject([{ priceUsd: rows[0].price }]);
+  });
+  it('discards a half-staged feed whose rows turn out mostly unusable, with its saved body', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    crawledCatalog(kv);
+    const now = () => new Date('2026-10-26T12:00:00Z');
+    const rows = JSON.parse(fullFeed()) as Array<Record<string, unknown>>;
+    for (const row of rows.slice(500)) row.url = 'https://example.com/';
+    const fetcher = feedServer(() => JSON.stringify(rows));
+    await expect(stageFeed(kv, fetcher, now)).rejects.toThrow(/rows rejected/);
+    expect(json<CatalogPointer>(kv, pointerKey('rev')).gen).toBe('crawl1');
+    expect([...kv.values.keys()].filter(key => key.startsWith('cat:rev:gen:') && !key.includes('crawl1'))).toEqual([]);
+    expect(kv.values.has(revFeedBodyKey)).toBe(false);
+    expect(json<{ building: unknown; etag: unknown }>(kv, revFeedStateKey)).toMatchObject({ building: null, etag: null });
+    expect(json<VendorSnapshot>(kv, snapshotKey('rev'))).toMatchObject({ status: 'failed', version: 'crawl1' });
+    // Within six hours of the download nothing is fetched again.
+    expect(await runRevFeed(kv, fetcher, { now })).toMatchObject({ action: 'skipped' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('ends a build that has not finished three hours after its download instead of retrying it every run', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    crawledCatalog(kv);
+    let clock = Date.parse('2026-10-26T12:00:00Z');
+    const now = () => new Date(clock);
+    const fetcher = feedServer(() => fullFeed());
+    await runRevFeed(kv, fetcher, { now });
+    await runRevFeed(kv, fetcher, { now });
+    const gen = json<{ building: { gen: string } }>(kv, revFeedStateKey).building.gen;
+    clock += 3 * 3600000 + 1;
+    await expect(runRevFeed(kv, fetcher, { now })).rejects.toThrow(/did not finish/);
+    expect([...kv.values.keys()].some(key => key.includes(gen))).toBe(false);
+    expect(kv.values.has(revFeedBodyKey)).toBe(false);
+    expect(json<VendorSnapshot>(kv, snapshotKey('rev'))).toMatchObject({ status: 'failed', version: 'crawl1' });
+    // The next download waits for the six-hour check.
+    expect(await runRevFeed(kv, fetcher, { now })).toMatchObject({ action: 'skipped' });
+    clock += 3 * 3600000;
+    expect(await runRevFeed(kv, fetcher, { now })).toMatchObject({ action: 'building' });
+  });
+  it('retries a step that stopped before saving its progress without counting its own rows as duplicates', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    const now = () => new Date('2026-10-26T12:00:00Z');
+    const fetcher = feedServer(() => fullFeed());
+    await runRevFeed(kv, fetcher, { now });
+    await runRevFeed(kv, fetcher, { now });
+    const saved = kv.values.get(revFeedStateKey)!;
+    // The second batch and the index are written, then the run stops before its state is saved.
+    await runRevFeed(kv, fetcher, { now });
+    kv.values.set(revFeedStateKey, saved);
+    expect(await stageFeed(kv, fetcher, now)).toMatchObject({ action: 'staged', records: 607 });
+    const { staged } = json<{ staged: { gen: string } }>(kv, revFeedStateKey);
+    expect(json<{ rejected: number }>(kv, `cat:rev:gen:${staged.gen}:manifest`).rejected).toBe(0);
+    expect(json<unknown[]>(kv, indexKey('rev', staged.gen))).toHaveLength(607);
+  });
+  it('removes a batch written by a step whose index write failed', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    crawledCatalog(kv);
+    const now = () => new Date('2026-10-26T12:00:00Z');
+    const fetcher = feedServer(() => fullFeed());
+    await runRevFeed(kv, fetcher, { now });
+    const gen = json<{ building: { gen: string } }>(kv, revFeedStateKey).building.gen;
+    const put = kv.put.bind(kv);
+    vi.spyOn(kv, 'put').mockImplementation(async (key, value) => { if (key === indexKey('rev', gen)) throw new Error('KV write failed'); return put(key, value); });
+    await expect(runRevFeed(kv, fetcher, { now })).rejects.toThrow('KV write failed');
+    expect([...kv.values.keys()].some(key => key.includes(gen))).toBe(false);
+    expect(kv.values.has(revFeedBodyKey)).toBe(false);
+  });
+  it('drops a half-staged feed when a catalog is published by hand meanwhile', async () => {
+    quiet();
+    const kv = new MemoryKv();
+    crawledCatalog(kv);
+    const now = () => new Date('2026-10-26T12:00:00Z');
+    const fetcher = feedServer(() => fullFeed());
+    await runRevFeed(kv, fetcher, { now });
+    await runRevFeed(kv, fetcher, { now });
+    const gen = json<{ building: { gen: string } }>(kv, revFeedStateKey).building.gen;
+    kv.values.set(pointerKey('rev'), JSON.stringify({ ...json<CatalogPointer>(kv, pointerKey('rev')), gen: 'manual' }));
+    expect(await runRevFeed(kv, fetcher, { now })).toMatchObject({ action: 'abandoned' });
+    expect([...kv.values.keys()].some(key => key.includes(gen))).toBe(false);
+    expect(kv.values.has(revFeedBodyKey)).toBe(false);
+    expect(json<CatalogPointer>(kv, pointerKey('rev')).gen).toBe('manual');
   });
 });
 
@@ -212,7 +334,7 @@ describe('a REV buy line from the feed', () => {
     crawledCatalog(kv);
     let clock = Date.parse('2026-10-26T12:00:00Z');
     const fetcher = feedServer(() => fullFeed());
-    await runRevFeed(kv, fetcher, { now: () => new Date(clock) });
+    await stageFeed(kv, fetcher, () => new Date(clock));
     clock += propagationMs;
     await runRevFeed(kv, fetcher, { now: () => new Date(clock) });
     const fixture = JSON.parse(readFileSync(new URL('../../../fixtures/assembly-simple.json', import.meta.url), 'utf8')) as AssemblyDefinition;

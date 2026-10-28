@@ -541,11 +541,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   return reply({ error: 'Not found' }, 404);
 }
 /**
- * Each vendor crawls hourly, 12 minutes apart, when its cron is scheduled in wrangler.toml; REV's cron reads REV's official
- * feed instead and never crawls. The crons are paused (an empty list) at the owner's request; every cron that is
- * scheduled must be one of these (a test checks).
+ * Each vendor crawls hourly, 12 minutes apart, when its cron is scheduled in wrangler.toml. The crawls are paused at the
+ * owner's request; only REV's cron is scheduled. It never crawls: every ten minutes it takes one small step of reading
+ * REV's official feed (a download at most every six hours, then a few runs to stage and publish it), and a run with
+ * nothing to do writes nothing. Every cron that is scheduled must be one of these (a test checks).
  */
-export const cronVendors: Record<string, VendorId> = { '0 * * * *': 'gobilda', '12 * * * *': 'servocity', '24 * * * *': 'andymark', '36 * * * *': 'rev', '48 * * * *': 'pitsco' };
+export const cronVendors: Record<string, VendorId> = { '0 * * * *': 'gobilda', '12 * * * *': 'servocity', '24 * * * *': 'andymark', '*/10 * * * *': 'rev', '48 * * * *': 'pitsco' };
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -566,7 +567,7 @@ export default {
   },
   scheduled(event: { cron: string }, env: Env, context: { waitUntil(promise: Promise<unknown>): void }) {
     const vendor = cronVendors[event.cron];
-    // REV is never crawled: its cron reads REV's official feed (at most every six hours) and publishes it once staged.
+    // REV is never crawled: its cron reads REV's official feed (at most every six hours) and stages and publishes it in steps.
     if (vendor === 'rev') context.waitUntil(runRevFeed(env.VENDOR_CATALOG, fetch));
     else if (vendor) context.waitUntil(runVendor(vendor, env.VENDOR_CATALOG, fetch, { feedFreshHours: Number(env.VENDOR_STALE_HOURS ?? 336) }));
   },

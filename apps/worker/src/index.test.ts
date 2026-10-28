@@ -61,9 +61,10 @@ describe('match decisions', () => {
 describe('vendor crons', () => {
   it('runs every vendor from a cron that wrangler.toml schedules', () => {
     const crons = JSON.parse(readFileSync(new URL('../../../wrangler.toml', import.meta.url), 'utf8').match(/^crons = (\[.*\])$/m)![1]) as string[];
-    // Paused at the owner's request: nothing is scheduled, and anything scheduled later must map to a vendor.
-    expect(crons).toEqual([]);
+    // Crawls are paused at the owner's request: only REV's official feed runs, and anything scheduled later must map to a vendor.
+    expect(crons).toEqual(['*/10 * * * *']);
     expect(crons.every(cron => cron in cronVendors)).toBe(true);
+    expect(crons.map(cron => cronVendors[cron])).toEqual(['rev']);
     expect(new Set(Object.values(cronVendors)).size).toBe(5);
   });
 });
