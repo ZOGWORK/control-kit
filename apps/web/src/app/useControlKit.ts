@@ -448,6 +448,37 @@ export function useControlKit(context: URLSearchParams) {
     } finally { setBulk(null); setPending(null); }
   }
 
+  /**
+   * One type for several parts (Review's selection). Each part saves on its own, four at a time, with its own saving
+   * state, so the rest of the list stays usable; rows of one part (two revisions) save once. A rescan or sign-out stops
+   * starting new saves. Returns the parts that saved and those that did not, so the caller can keep the failures.
+   */
+  async function setDispositions(lines: BomLine[], choice: ClassificationOverride | null): Promise<{ saved: BomLine[]; failed: BomLine[] }> {
+    const saved: BomLine[] = []; const failed: BomLine[] = [];
+    if (!result || pending) return { saved, failed: lines };
+    const generation = scanGeneration.current;
+    const identities = new Set<string>();
+    const todo = lines.filter(line => {
+      const identity = classificationIdentity(line);
+      if (identities.has(identity)) return false;
+      identities.add(identity);
+      if (saving.has(line.bomLineKey)) { failed.push(line); return false; }
+      return true;
+    });
+    let next = 0;
+    const worker = async () => {
+      while (next < todo.length) {
+        const line = todo[next++];
+        if (generation !== scanGeneration.current) { failed.push(line); continue; }
+        markSaving(line.bomLineKey, true, 'type');
+        try { (await saveChoice(line, choice) ? saved : failed).push(line); }
+        finally { markSaving(line.bomLineKey, false, 'type'); }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, todo.length) }, worker));
+    return { saved, failed };
+  }
+
   async function saveSettings(teamNumber: string) {
     if (savingSettings) return false;
     if (teamNumber && !/^\d{1,6}$/.test(teamNumber)) { setError('Team number must be 1 to 6 digits.'); return false; }
@@ -616,6 +647,6 @@ export function useControlKit(context: URLSearchParams) {
   }
 
   return { assemblyPicture, redrawAssemblyPicture, choiceTimes, refreshChoices, context, buildWorkbook, lastStepZip, previous, ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
-    acceptSuggestions, bulk, pending, settings, savingSettings, saveSettings, signOut, excel, downloadExcel, downloadCsv, step, downloadStep };
+    acceptSuggestions, setDispositions, bulk, pending, settings, savingSettings, saveSettings, signOut, excel, downloadExcel, downloadCsv, step, downloadStep };
 }
 export type ControlKit = ReturnType<typeof useControlKit>;

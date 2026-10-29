@@ -2,20 +2,24 @@ import { ExternalLink, FileSpreadsheet, ShoppingCart } from 'lucide-react';
 import { Alert } from '../components/arc/alert/alert';
 import { EmptyState } from '../components/arc/empty-state/empty-state';
 import type { ControlKit } from './useControlKit';
-import { buyList, catalogsComplete, fasteners, feedDates, money, priceDate, summarize, type View } from './model';
+import type { BomLine } from '@control-kit/shared';
+import { buyList, catalogsComplete, needsProduct, fasteners, feedDates, money, priceDate, summarize, type View } from './model';
 import { Button, LineCost, SectionHead, StockNote } from './bits';
+import type { Open, ReviewFilter } from './App';
 
 /**
  * What to order, by vendor. Only exact or confirmed matches sit under a vendor, and only priced lines count toward a
  * total; parts to buy without a match are listed below with what they still need.
  */
-export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string) => void; go: (view: View) => void }) {
+export function BuyList({ kit, open, go, goReview }: { kit: ControlKit; open: Open; go: (view: View) => void; goReview: (filter: ReviewFilter) => void }) {
   const result = kit.result!;
   const { vendors, needsSku } = buyList(result);
   const stock = fasteners(result);
   const summary = summarize(result);
   const complete = summary.buyLines > 0 && summary.pricedLines === summary.buyLines;
   const outOfStock = vendors.flatMap(group => group.lines).filter(line => line.vendor?.stock === 'out').length;
+  // The drawer steps through the group it was opened from while its parts are still in that group.
+  const inGroup = (lines: BomLine[], listed: (line: BomLine) => boolean) => (key: string) => open(key, { keys: lines.map(line => line.bomLineKey), listed });
 
   return <>
     <SectionHead icon={<ShoppingCart />} tone="buy" title="Buy list" actions={<>
@@ -45,7 +49,7 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
         const vendor = line.vendor!;
         return <div key={line.bomLineKey} className="row">
           <div className="row-main">
-            <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><span>{line.name}</span></button>
+            <button type="button" className="row-title link-button" onClick={() => inGroup(group.lines, item => item.disposition === 'buy' && !needsProduct(item))(line.bomLineKey)}><span>{line.name}</span></button>
             <span className="row-meta">
               <a className="link num" href={vendor.url} target="_blank" rel="noopener noreferrer">{vendor.sku} <ExternalLink aria-hidden size={11} /></a>
               <span><span className="num">{line.qty}</span> needed</span>
@@ -64,8 +68,9 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
     </section>)}
 
     {needsSku.length > 0 && <section className="panel tone-attention" aria-labelledby="needs-sku">
-      <div className="panel-head"><div><h2 id="needs-sku"><span className="dot attention" aria-hidden /> No vendor match yet</h2><p>{catalogsComplete(result.catalogHealth) ? 'These parts are marked Buy but no catalog product matched. Add the vendor SKU to the part number in Onshape and rescan.' : 'Some vendor catalogs are still loading. Rescan later, or add the vendor SKU to the part number in Onshape.'}</p></div></div>
-      <div className="rows">{needsSku.map(line => <button key={line.bomLineKey} type="button" className="row" onClick={() => open(line.bomLineKey)}>
+      <div className="panel-head"><div><h2 id="needs-sku"><span className="dot attention" aria-hidden /> No vendor match yet</h2><p>{catalogsComplete(result.catalogHealth) ? 'These parts are marked Buy but no catalog product matched, so they are also in Review. Pick a product there, or add the vendor SKU to the part number in Onshape and rescan.' : 'Some vendor catalogs are still loading. These parts are also in Review; rescan later, or add the vendor SKU to the part number in Onshape.'}</p></div>
+        <Button size="sm" variant="secondary" onClick={() => goReview('product')}>Resolve in Review</Button></div>
+      <div className="rows">{needsSku.map(line => <button key={line.bomLineKey} type="button" className="row" onClick={() => inGroup(needsSku, needsProduct)(line.bomLineKey)}>
         <span className="row-main"><span className="row-title"><span>{line.name}</span></span>
           <span className="row-meta"><span><span className="num">{line.qty}</span> needed</span>{line.partNumber ? <span className="num">{line.partNumber}</span> : <span>no part number</span>}{line.matchStatus === 'possible' && <span>possible match to confirm</span>}</span></span>
         <span className="row-aside muted small">Details</span>
@@ -73,10 +78,10 @@ export function BuyList({ kit, open, go }: { kit: ControlKit; open: (key: string
     </section>}
 
     {stock.length > 0 && <section className="panel" aria-labelledby="fasteners">
-      <div className="panel-head"><div><h2 id="fasteners">Fasteners</h2><p>Screws, nuts, washers, and clips usually come from your hardware stock, so they need no decision. Counts come from the CAD and can be low when fasteners were placed with Replicate or patterns.</p></div></div>
-      <div className="rows">{stock.map(line => <button key={line.bomLineKey} type="button" className="row" onClick={() => open(line.bomLineKey)}>
+      <div className="panel-head"><div><h2 id="fasteners">Fasteners</h2><p>Screws, nuts, washers, and clips usually come from your hardware stock, so they need no decision. Counts are every placement in the CAD, including copies placed by patterns and Replicate; fasteners that were never modelled are not counted.</p></div></div>
+      <div className="rows">{stock.map(line => <button key={line.bomLineKey} type="button" className="row" onClick={() => inGroup(stock, item => item.disposition === 'hardware')(line.bomLineKey)}>
         <span className="row-main"><span className="row-title"><span>{line.name}</span></span>
-          <span className="row-meta"><span>about <span className="num">{line.qty}</span> in the CAD</span>{line.partNumber && <span className="num">{line.partNumber}</span>}</span></span>
+          <span className="row-meta"><span><span className="num">{line.qty}</span> in the CAD</span>{line.partNumber && <span className="num">{line.partNumber}</span>}</span></span>
         <span className="row-aside muted small">Details</span>
       </button>)}</div>
     </section>}

@@ -117,7 +117,8 @@ export function applyMatchDecision(result: ScanResult, key: string, decision: 'c
   const picked = line && pick ? decisionRecord(line, pick) : null;
   // A pick that is none of the line's records must not confirm the record that happens to be shown.
   if (pick && !picked) return next;
-  if (!line || (line.matchStatus !== 'possible' && !(picked && ['confirmed', 'unmatched'].includes(line.matchStatus)))) return next;
+  // A pick can follow an earlier pick, no match at all, or a rejection (Review offers a rejected part's near matches).
+  if (!line || (line.matchStatus !== 'possible' && !(picked && ['confirmed', 'unmatched', 'rejected'].includes(line.matchStatus)))) return next;
   if (picked) line.vendor = picked;
   line.matchStatus = decision;
   if (decision === 'rejected') { line.vendor = null; line.alternatives = []; }

@@ -16,6 +16,19 @@ describe('assembly traversal and aggregation', () => {
     expect(hub).toMatchObject({ qty: 1, metadataIssue: { code: 'unresolved-reference' }, partStudioUrl: '' });
     expect(result.lines).toHaveLength(2);
   });
+  it('counts every copy placed by a pattern or Replicate, which the definition lists as instances', () => {
+    // Shape from Onshape's OpenAPI (BTRootAssemblyInfo/BTSubAssemblyInfo): `instances` includes "those created by patterns
+    // and replicates"; `patterns` only maps each seed to its copies and `features` holds the Replicate feature itself.
+    const result = aggregateAssembly(fixture('patterns'), { ...context, documentId: 'pat' }, 'Pattern Robot');
+    const qty = (name: string) => result.lines.find(line => line.name === name)?.qty;
+    // A seed plus three circular copies, plus six Replicate copies: ten screws.
+    expect(qty('M4 x 12mm Socket Head Screw')).toBe(10);
+    // A linear pattern of three standoffs in a pod placed twice: six.
+    expect(qty('Standoff')).toBe(6);
+    // A suppressed pattern's copy is suppressed on the instance, so it leaves the active count.
+    expect(qty('M4 Nylock Nut')).toBe(2);
+    expect(result.suppressed.find(line => line.name === 'M4 Nylock Nut')?.qty).toBe(1);
+  });
   it('recurses through two module occurrences and excludes suppressed parts from active totals', () => {
     const result = aggregateAssembly(fixture('simple'), context, 'Simple FTC Assembly');
     expect(result.stats.totalInstances).toBe(11);

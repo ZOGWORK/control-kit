@@ -5,7 +5,8 @@ import { recalculatePurchasing } from './purchasing';
  * How the team will get the physical part. `review` means nothing reliable decided it yet.
  * Suppression is an assembly state, not a disposition, and lives on `BomLine.suppressed`.
  * `hardware` is a fastener (screw, nut, washer, clip) that teams take from their hardware stock: it needs no decision,
- * and its CAD count is a guide only, since Replicate and patterns can place fasteners the count may not see.
+ * and its CAD count is every placement, including pattern and Replicate copies (the assembly definition lists them as
+ * instances); fasteners that were never modelled are not counted.
  * `ignore` ("Not needed") is set only by a person, for a body that is not a real part to buy or make (a shaft that is
  * part of an imported motor, a reference body); it leaves Review, Buy, and Make but stays listed.
  */

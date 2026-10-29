@@ -47,9 +47,12 @@ test('embedded connection opens outside the panel and can be rechecked', async (
 test('overview totals, next steps, and Excel and CSV downloads', async ({ page }) => {
   await connected(page);
   const review = result.lines.filter(line => line.disposition === 'review').length;
+  // Review also holds parts to buy without a vendor product (none match here: no catalog is served).
+  const toReview = review + result.lines.filter(line => line.disposition === 'buy').length;
   // One primary action, led by the parts still waiting for a decision; the money card never shows a $0 total.
-  await expect(page.locator('.primary-bar button')).toHaveText(review ? new RegExp(`^Review ${review} parts?$`) : /./);
-  await expect(page.locator('.share-legend')).toContainText(`Needs review ${review}`);
+  await expect(page.locator('.primary-bar button')).toHaveText(new RegExp(`^Review ${toReview} parts?$`));
+  await expect(page.locator('.sidebar').getByRole('button', { name: /^Review/ })).toContainText(String(toReview));
+  await expect(page.locator('.share-legend')).toContainText(`Undecided ${review}`);
   await expect(page.locator('.money-value')).toHaveText('None priced');
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Excel BOM' }).click();
@@ -121,12 +124,15 @@ test('review explains each part, saves a one-click choice, and accepts all sugge
   await section(page, /^Review/).click();
   // Fasteners never wait for a decision.
   await expect(page.locator('.row').filter({ hasText: 'M3 Screw' })).toHaveCount(0);
-  // Standard hardware is decided automatically now; only how team-made parts are produced waits for a person.
-  await expect(page.locator('.row').filter({ hasText: 'Bearing' })).toHaveCount(0);
+  // Standard hardware is decided Buy automatically, but with no vendor product it waits here for one.
+  await expect(page.locator('.row').filter({ hasText: 'Bearing' })).toContainText('Buy, but no vendor product matched');
+  await expect(page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'No product 2' })).toBeVisible();
   const first = page.locator('.row').filter({ has: page.getByRole('button', { name: 'Buy' }) }).first();
   const firstName = (await first.locator('.row-title').innerText()).trim();
   await first.getByRole('button', { name: 'Buy', exact: true }).click();
-  await expect(page.locator('.row').filter({ hasText: firstName })).toHaveCount(0);
+  // Marked Buy, it still needs its product, so it stays in Review as one.
+  await expect(page.locator('.row').filter({ hasText: firstName })).toContainText('Buy, but no vendor product matched');
+  await expect(page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'No product 3' })).toBeVisible();
   expect(saved.at(-1)).toMatchObject({ classification: 'buy' });
   const remaining = withPrints.lines.filter(line => line.disposition === 'review' && line.suggestedDisposition && line.name !== firstName).length;
   expect(remaining).toBeGreaterThan(1);
@@ -192,14 +198,76 @@ test('reopening the panel shows the last scan, and Not needed dismisses a part',
   await row.getByRole('button', { name: 'Not needed' }).click();
   await expect(page.locator('.row').filter({ hasText: name })).toHaveCount(0);
   expect(saved.at(-1)).toMatchObject({ classification: 'ignore' });
-  // Keyboard: B decides the highlighted part, which leaves the list; the highlight stays on the next one.
+  // Keyboard: P decides the highlighted part, which leaves the list; the highlight stays on the next one.
   const next = (await page.locator('.row.focused .row-title').innerText()).trim();
-  await page.keyboard.press('b');
+  await page.keyboard.press('p');
   await expect(page.locator('.row').filter({ hasText: next })).toHaveCount(0);
-  expect(saved.at(-1)).toMatchObject({ classification: 'buy' });
+  expect(saved.at(-1)).toMatchObject({ classification: 'print' });
   // Parts remain, and the highlight stays on the next one.
   await expect(page.locator('.rows [role="listitem"]')).not.toHaveCount(0);
   await expect(page.locator('.row.focused')).toHaveCount(1);
+});
+
+test('the part drawer moves to the next part after a choice, and closes with a note when none is left', async ({ page }) => {
+  const saved: Array<{ classification: string | null }> = [];
+  await page.route('**/api/classification/override', async route => { saved.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"saved":true}' }); });
+  await connected(page, withPrints);
+  await section(page, /^Review/).click();
+  await page.locator('.review-row').filter({ hasText: 'Printed guide A' }).locator('.row-title').click();
+  const drawer = page.getByRole('dialog');
+  await expect(drawer.getByRole('heading', { name: 'Printed guide A' })).toBeVisible();
+  await drawer.getByRole('button', { name: 'CNC machine' }).click();
+  // The drawer says where the part went and shows the next part in Review's order.
+  await expect(drawer.getByRole('status').filter({ hasText: 'Printed guide A moved to CNC' })).toBeVisible();
+  await expect(drawer.getByRole('heading', { name: 'Printed guide B' })).toBeVisible();
+  expect(saved.at(-1)).toMatchObject({ classification: 'cnc' });
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.review-row').filter({ hasText: 'Printed guide A' })).toHaveCount(0);
+  // A part opened on its own (Overview search) has no list to move through, so the drawer closes and the page says where it went.
+  await section(page, /^Overview/).click();
+  await page.getByPlaceholder(/Find a part/i).fill('Wheel');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog').getByRole('heading', { name: 'Wheel' })).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Not needed' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.toast')).toHaveText('Wheel moved to Not needed');
+  // A failed save keeps the drawer on the part with its error.
+  await page.unroute('**/api/classification/override');
+  await page.route('**/api/classification/override', route => route.fulfill({ status: 500 }));
+  await section(page, /^Review/).click();
+  await page.locator('.review-row').filter({ hasText: 'Printed guide B' }).locator('.row-title').click();
+  await page.getByRole('dialog').getByRole('button', { name: 'CNC machine' }).click();
+  await expect(page.getByRole('dialog').getByText('Could not save the choice for Printed guide B')).toBeVisible();
+  await expect(page.getByRole('dialog').getByRole('heading', { name: 'Printed guide B' })).toBeVisible();
+});
+
+test('Review sets one type for several parts: a shift-click range or a whole subassembly, with failures kept selected', async ({ page }) => {
+  const saved: string[] = [];
+  await page.route('**/api/classification/override', async route => {
+    const body = route.request().postDataJSON() as { identity: string; classification: string };
+    // One part fails, so the others still save and it stays selected to retry.
+    if (body.identity.includes(':pb:')) return route.fulfill({ status: 500 });
+    saved.push(`${body.identity}=${body.classification}`);
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"saved":true}' });
+  });
+  await connected(page, withPrints);
+  await section(page, /^Review/).click();
+  const checks = page.locator('.review-row .row-check');
+  await checks.nth(0).click();
+  await checks.nth(2).click({ modifiers: ['Shift'] });
+  await expect(page.locator('.bulk-bar')).toContainText('3 selected');
+  await page.locator('.bulk-bar').getByRole('button', { name: 'Fastener', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '1 of 3 could not be saved: Printed guide B' })).toBeVisible();
+  expect(saved).toHaveLength(2);
+  await expect(page.locator('.bulk-bar')).toContainText('1 selected');
+  await expect(page.locator('.review-row.selected')).toContainText('Printed guide B');
+  await page.locator('.bulk-bar').getByRole('button', { name: 'Clear' }).click();
+  // Every part in the Left Module subassembly at once: the wheel, and the motor and bearing that still need products.
+  await page.locator('.review-row').filter({ hasText: 'Wheel' }).getByRole('button', { name: /Select all 3 in Left Module/ }).click();
+  await expect(page.locator('.bulk-bar')).toContainText('3 selected');
+  await page.locator('.bulk-bar').getByRole('button', { name: 'Not needed', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: '3 parts moved to Not needed' })).toBeVisible();
+  await expect(page.locator('.review-row').filter({ hasText: /Wheel|Motor|Bearing/ })).toHaveCount(0);
 });
 
 test('privacy, terms, and support pages open from the site footer', async ({ page }) => {

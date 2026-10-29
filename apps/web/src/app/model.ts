@@ -37,10 +37,14 @@ export function feedDates(lines: BomLine[]) {
 export const priced = (line: BomLine) => line.lineTotalUsd !== null;
 /** Priced, or ordered under another line that carries the price for the same SKU. */
 export const covered = (line: BomLine) => priced(line) || Boolean(line.orderedWith);
+/** A part to buy that no order can include yet: it has no exact or confirmed vendor product. It waits in Review. */
+export const needsProduct = (line: BomLine) => line.disposition === 'buy' && !(line.vendor && (line.matchStatus === 'exact' || line.matchStatus === 'confirmed'));
 
 export type Summary = {
   uniqueLines: number; instances: number; suppressedInstances: number;
-  buy: number; make: Record<'print' | 'cnc' | 'cut-2d' | 'fabricate', number> & { total: number }; review: number;
+  buy: number; make: Record<'print' | 'cnc' | 'cut-2d' | 'fabricate', number> & { total: number };
+  /** Parts whose type is undecided; `unmatched` Buy parts have no vendor product. Review holds both, `toReview` in all. */
+  review: number; unmatched: number; toReview: number;
   /** Stock fasteners and parts a person set aside; with buy, make, and review they add up to `uniqueLines`. */
   hardware: number; ignored: number;
   /** Known subtotal over priced Buy lines only; `pricedLines` of `buyLines` carry a price. */
@@ -57,7 +61,7 @@ export function summarize(result: ScanResult): Summary {
   make.total = make.print + make.cnc + make['cut-2d'] + make.fabricate;
   return {
     uniqueLines: lines.length, instances: result.stats.totalInstances, suppressedInstances: result.suppressed.reduce((sum, line) => sum + line.qty, 0),
-    buy: buy.length, make, review: count('review'), hardware: count('hardware'), ignored: count('ignore'),
+    buy: buy.length, make, review: count('review'), unmatched: buy.filter(needsProduct).length, toReview: count('review') + buy.filter(needsProduct).length, hardware: count('hardware'), ignored: count('ignore'),
     subtotal: pricedBuy.length ? Math.round(pricedBuy.reduce((sum, line) => sum + line.lineTotalUsd!, 0) * 100) / 100 : null,
     pricedLines: coveredBuy.length, buyLines: buy.length,
     dataIssues: result.missingMetadata.filter(line => !line.suppressed).length,
@@ -66,29 +70,82 @@ export function summarize(result: ScanResult): Summary {
   };
 }
 
-/** Why a line is in the review queue, which decides the actions it offers. */
-export type QueueKind = 'match' | 'suggested' | 'undecided';
+/**
+ * Why a line is in the review queue, which decides the actions it offers: a possible match, a suggested or open type,
+ * or (`product`) a part to buy with no vendor product yet.
+ */
+export type QueueKind = 'match' | 'suggested' | 'undecided' | 'product';
 export type QueueItem = { line: BomLine; kind: QueueKind };
-/** Possible vendor matches first (one click settles both identity and Buy), then suggestions, then open questions. */
+/** Whether a line waits in Review: its type is undecided, or it is to be bought but no product matched. */
+export const inReview = (line: BomLine) => line.disposition === 'review' || needsProduct(line);
+/**
+ * Possible vendor matches first (one click settles both identity and Buy), then suggestions, then open questions, then
+ * parts to buy that still need their product.
+ */
 export function reviewQueue(result: ScanResult): QueueItem[] {
-  const items = result.lines.filter(line => line.disposition === 'review').map((line): QueueItem => ({
-    line, kind: line.matchStatus === 'possible' && line.vendor ? 'match' : line.suggestedDisposition ? 'suggested' : 'undecided',
+  const items = result.lines.filter(inReview).map((line): QueueItem => ({
+    line, kind: line.disposition === 'buy' ? 'product' : line.matchStatus === 'possible' && line.vendor ? 'match' : line.suggestedDisposition ? 'suggested' : 'undecided',
   }));
-  const order: Record<QueueKind, number> = { match: 0, suggested: 1, undecided: 2 };
+  const order: Record<QueueKind, number> = { match: 0, suggested: 1, undecided: 2, product: 3 };
   return items.sort((a, b) => order[a.kind] - order[b.kind] || b.line.qty - a.line.qty || a.line.name.localeCompare(b.line.name));
 }
 
-export type VendorGroup = { vendorId: VendorId; label: string; lines: BomLine[]; subtotal: number | null; unpriced: number };
 /**
- * The Buy list: lines a team can order, grouped by vendor. Only exact or confirmed matches appear under a vendor;
- * Buy lines without one are listed separately, since they need a SKU before they can be ordered.
+ * Products a person can pick for a part to buy: its possible match, then its choices, then its closest unchosen
+ * records, each once. Picking one saves a confirmed match, the same as "Use this" in the part drawer.
  */
+export function productOptions(line: BomLine, count = 3): VendorRecord[] {
+  const seen = new Set<string>();
+  const options: VendorRecord[] = [];
+  for (const record of [line.matchStatus === 'possible' ? line.vendor : null, ...(line.choices ?? []), ...(line.nearMatches ?? [])]) {
+    if (!record || seen.has(`${record.vendorId}:${record.normalizedSku}`)) continue;
+    seen.add(`${record.vendorId}:${record.normalizedSku}`);
+    options.push(record);
+  }
+  return options.slice(0, count);
+}
+
+/** Where a choice sent a part, for the confirmation after it saves: "Bracket moved to 3D print". */
+const destination: Record<Disposition, string> = { buy: 'Buy', print: '3D print', cnc: 'CNC', 'cut-2d': '2D cut', fabricate: 'Other fabrication', hardware: 'Fasteners', ignore: 'Not needed', review: 'Review' };
+export function movedText(name: string, choice: Disposition | null) {
+  return choice === null ? `${name} is back on the automatic choice` : `${name} moved to ${destination[choice]}`;
+}
+export const matchedText = (name: string, record: VendorRecord) => `${name} matched to ${vendorLabel[record.vendorId]} ${record.sku}`;
+
+/** A path segment without Onshape's instance number: "Right Pod <2>" is "Right Pod". */
+const segment = (name: string) => name.replace(/\s*<\d+>$/, '').trim();
+/**
+ * The subassembly a part sits directly in, by its first placement ("Robot > Right Pod <1> > Intake <1> > Roller" is
+ * "Intake"), or null for a part placed at the top level of the assembly.
+ */
+export function subassemblyOf(line: BomLine): string | null {
+  const parts = line.instancePaths[0]?.split(' > ') ?? [];
+  return parts.length > 2 ? segment(parts[parts.length - 2]) : null;
+}
+/** Whether any placement of the part sits inside a subassembly of that name, at any depth. */
+export const inSubassembly = (line: BomLine, name: string) => line.instancePaths.some(path => path.split(' > ').slice(1, -1).some(part => segment(part) === name));
+
+/**
+ * The part a drawer moves to after a choice: the next one after `current` in the list it was opened from that is still
+ * listed there, wrapping round to earlier ones the person skipped; null when none is left.
+ */
+export function nextInList(keys: string[], current: string, listed: (key: string) => boolean): string | null {
+  const at = keys.indexOf(current);
+  const order = at < 0 ? keys : [...keys.slice(at + 1), ...keys.slice(0, at)];
+  return order.find(key => key !== current && listed(key)) ?? null;
+}
+
+export type VendorGroup = { vendorId: VendorId; label: string; lines: BomLine[]; subtotal: number | null; unpriced: number };
 /** Fasteners taken from stock: listed with their CAD counts, never priced unless an exact SKU makes them Buy. */
 export const fasteners = (result: ScanResult) => result.lines.filter(line => line.disposition === 'hardware').sort((a, b) => a.name.localeCompare(b.name));
 
+/**
+ * The Buy list: lines a team can order, grouped by vendor. Only exact or confirmed matches appear under a vendor;
+ * Buy lines without one (`needsSku`, the same parts Review lists as needing a product) are listed separately.
+ */
 export function buyList(result: ScanResult) {
   const buy = result.lines.filter(line => line.disposition === 'buy');
-  const matched = buy.filter(line => line.vendor && (line.matchStatus === 'exact' || line.matchStatus === 'confirmed'));
+  const matched = buy.filter(line => !needsProduct(line));
   const groups = new Map<VendorId, BomLine[]>();
   for (const line of matched) groups.set(line.vendor!.vendorId, [...(groups.get(line.vendor!.vendorId) ?? []), line]);
   const vendors: VendorGroup[] = [...groups.entries()].map(([vendorId, lines]) => {
@@ -168,11 +225,11 @@ export function readiness(result: ScanResult, summary: Summary = summarize(resul
 export const percent = (part: number, whole: number) => whole ? Math.round((part / whole) * 100) : 0;
 
 /** The one thing to do next. Only one action is ever primary; it follows the first open problem in the order a team works. */
-export type PrimaryAction = { kind: 'review' | 'unmatched' | 'unpriced' | 'stock' | 'build-pack'; label: string; count: number };
+// Parts to buy without a product are in Review, so "Review N parts" counts them and no separate unmatched step exists.
+export type PrimaryAction = { kind: 'review' | 'unpriced' | 'stock' | 'build-pack'; label: string; count: number };
 export function primaryAction(summary: Summary, ready: Readiness): PrimaryAction {
   const n = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
-  if (summary.review) return { kind: 'review', label: `Review ${n(summary.review, 'part', 'parts')}`, count: summary.review };
-  if (ready.order.unmatched) return { kind: 'unmatched', label: `Fix ${n(ready.order.unmatched, 'unmatched part', 'unmatched parts')}`, count: ready.order.unmatched };
+  if (summary.toReview) return { kind: 'review', label: `Review ${n(summary.toReview, 'part', 'parts')}`, count: summary.toReview };
   if (ready.order.unpriced) return { kind: 'unpriced', label: `Check ${n(ready.order.unpriced, 'unpriced part', 'unpriced parts')}`, count: ready.order.unpriced };
   if (ready.order.outOfStock) return { kind: 'stock', label: `Replace ${n(ready.order.outOfStock, 'out-of-stock part', 'out-of-stock parts')}`, count: ready.order.outOfStock };
   return { kind: 'build-pack', label: 'Download build pack', count: 0 };
@@ -190,7 +247,8 @@ export type Share = { key: 'buy' | 'make' | 'hardware' | 'review' | 'ignored'; l
 export function composition(summary: Summary): Share[] {
   const shares: Share[] = [
     { key: 'buy', label: 'Buy', count: summary.buy }, { key: 'make', label: 'Make', count: summary.make.total },
-    { key: 'hardware', label: 'Fasteners', count: summary.hardware }, { key: 'review', label: 'Needs review', count: summary.review },
+    // Type still undecided. Review also lists parts to buy without a product, which this bar counts under Buy.
+    { key: 'hardware', label: 'Fasteners', count: summary.hardware }, { key: 'review', label: 'Undecided', count: summary.review },
     { key: 'ignored', label: 'Not needed', count: summary.ignored },
   ];
   return shares.filter(share => share.count);

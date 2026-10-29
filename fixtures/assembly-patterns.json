@@ -1,0 +1,225 @@
+{
+  "rootAssembly": {
+    "name": "Pattern Robot",
+    "instances": [
+      {
+        "id": "plate",
+        "name": "Side Plate <1>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "plates",
+        "partId": "plate"
+      },
+      {
+        "id": "s0",
+        "name": "M4 x 12mm Socket Head Screw <1>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "screw"
+      },
+      {
+        "id": "s1",
+        "name": "M4 x 12mm Socket Head Screw <2>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "screw"
+      },
+      {
+        "id": "s2",
+        "name": "M4 x 12mm Socket Head Screw <3>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "screw"
+      },
+      {
+        "id": "s3",
+        "name": "M4 x 12mm Socket Head Screw <4>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "screw"
+      },
+      {
+        "id": "r4",
+        "name": "M4 x 12mm Socket Head Screw <5>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "screw"
+      },
+      {
+        "id": "r5",
+        "name": "M4 x 12mm Socket Head Screw <6>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "screw"
+      },
+      {
+        "id": "r6",
+        "name": "M4 x 12mm Socket Head Screw <7>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "screw"
+      },
+      {
+        "id": "r7",
+        "name": "M4 x 12mm Socket Head Screw <8>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "screw"
+      },
+      {
+        "id": "r8",
+        "name": "M4 x 12mm Socket Head Screw <9>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "screw"
+      },
+      {
+        "id": "r9",
+        "name": "M4 x 12mm Socket Head Screw <10>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "screw"
+      },
+      {
+        "id": "n0",
+        "name": "M4 Nylock Nut <1>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "nut"
+      },
+      {
+        "id": "n1",
+        "name": "M4 Nylock Nut <2>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "nut"
+      },
+      {
+        "id": "n2",
+        "name": "M4 Nylock Nut <3>",
+        "type": "Part",
+        "documentId": "pat",
+        "elementId": "hardware",
+        "partId": "nut",
+        "suppressed": true
+      },
+      {
+        "id": "pod1",
+        "name": "Pod <1>",
+        "type": "Assembly",
+        "documentId": "pat",
+        "elementId": "pod"
+      },
+      {
+        "id": "pod2",
+        "name": "Pod <2>",
+        "type": "Assembly",
+        "documentId": "pat",
+        "elementId": "pod"
+      }
+    ],
+    "patterns": [
+      {
+        "id": "circ",
+        "name": "Circular pattern 1",
+        "type": "CIRCULAR",
+        "suppressed": false,
+        "seedToPatternInstances": {
+          "s0": [
+            "s1",
+            "s2",
+            "s3"
+          ]
+        }
+      },
+      {
+        "id": "lin",
+        "name": "Linear pattern 1",
+        "type": "LINEAR",
+        "suppressed": true,
+        "seedToPatternInstances": {
+          "n1": [
+            "n2"
+          ]
+        }
+      }
+    ],
+    "features": [
+      {
+        "id": "rep1",
+        "featureType": "replicate",
+        "suppressed": false,
+        "featureData": {
+          "name": "Replicate 1",
+          "instanceIds": [
+            "r4",
+            "r5",
+            "r6",
+            "r7",
+            "r8",
+            "r9"
+          ]
+        }
+      }
+    ]
+  },
+  "subAssemblies": [
+    {
+      "documentId": "pat",
+      "elementId": "pod",
+      "instances": [
+        {
+          "id": "sp0",
+          "name": "Standoff <1>",
+          "type": "Part",
+          "documentId": "pat",
+          "elementId": "hardware",
+          "partId": "standoff"
+        },
+        {
+          "id": "sp1",
+          "name": "Standoff <2>",
+          "type": "Part",
+          "documentId": "pat",
+          "elementId": "hardware",
+          "partId": "standoff"
+        },
+        {
+          "id": "sp2",
+          "name": "Standoff <3>",
+          "type": "Part",
+          "documentId": "pat",
+          "elementId": "hardware",
+          "partId": "standoff"
+        }
+      ],
+      "patterns": [
+        {
+          "id": "lin2",
+          "name": "Linear pattern 2",
+          "type": "LINEAR",
+          "suppressed": false,
+          "seedToPatternInstances": {
+            "sp0": [
+              "sp1",
+              "sp2"
+            ]
+          }
+        }
+      ],
+      "features": []
+    }
+  ]
+}

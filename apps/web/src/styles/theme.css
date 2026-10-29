@@ -523,3 +523,29 @@ a.brand { color: inherit; text-decoration: none; }
 }
 a.nav-item { text-decoration: none; }
 .control-point .panel-head > .link { white-space: nowrap; flex: none; }
+
+/* Review selection: a checkbox column, a bar that sets one type for every selected part, and a selected tint. */
+.rows .row.selectable { grid-template-columns: auto minmax(0, 1fr) auto; }
+.row-check, .bulk-bar input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--ck-volt); cursor: pointer; align-self: start; margin-top: 3px; }
+.row.selected { background: color-mix(in srgb, var(--ck-volt) 5%, transparent); }
+.row.selected.focused { background: color-mix(in srgb, var(--ck-volt) 11%, transparent); }
+.row[aria-busy="true"] { opacity: 0.7; }
+@container (max-width: 1000px) {
+  .rows .row.review-row.selectable { grid-template-columns: auto minmax(0, 1fr); }
+  .rows .review-row.selectable .row-aside { grid-column: 2; }
+}
+@media (max-width: 520px) {
+  .rows .row.selectable { grid-template-columns: auto minmax(0, 1fr); }
+  .rows .row.selectable .row-aside { grid-column: 2; }
+}
+.sub-select { justify-self: start; color: var(--ck-text-muted); }
+.bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--ck-line); }
+.bulk-bar.on { position: sticky; top: 57px; z-index: 2; background: color-mix(in srgb, var(--ck-volt) 6%, var(--ck-card)); box-shadow: inset 3px 0 0 var(--ck-volt); }
+.bulk-bar .check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; cursor: pointer; }
+.bulk-bar .check input { margin-top: 0; }
+@media (max-width: 899px) { .bulk-bar.on { top: 104px; } }
+
+/* Where a choice sent a part: green, in the drawer when it moves on and at the page's foot when it closes. */
+.drawer-notice { margin-bottom: 12px; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ck-done); padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--ck-done) 10%, transparent); }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 60; max-width: calc(100vw - 32px); padding: 10px 14px; border-radius: 10px; font-size: 13px;
+  color: var(--ck-done); background: var(--ck-raised); border: 1px solid color-mix(in srgb, var(--ck-done) 40%, transparent); box-shadow: 0 8px 24px rgb(0 0 0 / 0.4); }

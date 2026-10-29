@@ -5,13 +5,14 @@ import SegmentedControl from '../components/arc/segmented-control/segmented-cont
 import { Select } from '../components/arc/select/select';
 import type { ControlKit } from './useControlKit';
 import { filterParts, isMake, type PartFilter, type PartSort } from './model';
+import type { Open } from './App';
 import { Boxes } from 'lucide-react';
 import { Button, DispositionChip, LineCost, PartMeta, SectionHead, Thumbnail } from './bits';
 
 const page = 50;
 
 /** Every part in the assembly, filterable by what happens to it. A row opens the part's details. */
-export function Parts({ kit, open }: { kit: ControlKit; open: (key: string) => void }) {
+export function Parts({ kit, open }: { kit: ControlKit; open: Open }) {
   const result = kit.result!;
   const [filter, setFilter] = useState<PartFilter>('all');
   const [query, setQuery] = useState('');
@@ -33,7 +34,7 @@ export function Parts({ kit, open }: { kit: ControlKit; open: (key: string) => v
     </div>
     {filter === 'suppressed' && <p className="muted small">Suppressed parts are not counted in quantities or purchasing.</p>}
     <section className="panel">
-      <div className="rows">{rows.slice(0, shown).map(line => <button key={line.bomLineKey} type="button" className={`row ${line.suppressed ? 'dim' : ''}`} onClick={() => open(line.bomLineKey)}>
+      <div className="rows">{rows.slice(0, shown).map(line => <button key={line.bomLineKey} type="button" className={`row ${line.suppressed ? 'dim' : ''}`} onClick={() => open(line.bomLineKey, { keys: rows.map(row => row.bomLineKey), listed: item => filter === 'suppressed' || filter === 'all' || (filter === 'make' ? isMake(item) : item.disposition === filter) })}>
         <span className="row-main"><span className="row-title"><Thumbnail line={line} /><span>{line.name}</span></span><PartMeta line={line} />
           {line.metadataIssue && !line.suppressed && <span className="small blocked-text">{line.missingMetadataReason}</span>}</span>
         <span className="row-aside"><LineCost line={line} /><DispositionChip line={line} /></span>

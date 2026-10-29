@@ -88,7 +88,7 @@ function purchaseNotes(line: BomLine, result: ScanResult) {
   if (line.priceCheck) values.push(`${line.priceCheck}; not priced`);
   if (ordered(line) && line.vendor!.priceUsd === null) values.push('No price, so no total');
   if (result.stats.staleVendorData && ordered(line)) values.push('Vendor data may be out of date');
-  if (line.disposition === 'hardware') values.push('Fastener from stock: CAD count can be low if Replicate or patterns placed some');
+  if (line.disposition === 'hardware') values.push('Fastener from stock: CAD count includes pattern and Replicate copies, not fasteners that were never modelled');
   if (line.purchasedAssembly) values.push(`One product (${line.purchasedAssembly.parts} internal parts not listed${line.purchasedAssembly.includes?.length ? `; includes ${line.purchasedAssembly.includes.join(', ')}` : ''})`);
   if (line.order && line.order.lines > 1) values.push(`Packs cover ${line.order.qty} pieces across ${line.order.lines} CAD lines with this SKU`);
   if (line.orderedWith) values.push(`Ordered with ${result.lines.find(other => other.bomLineKey === line.orderedWith)?.name ?? 'another row'} (same SKU)`);

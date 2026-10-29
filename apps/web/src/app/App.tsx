@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Boxes, Check, LayoutDashboard, ListChecks, LogOut, RefreshCw, Settings, ShoppingCart, Wrench } from 'lucide-react';
 import { Alert } from '../components/arc/alert/alert';
 import { Button } from './bits';
 import { Progress } from '../components/arc/progress/progress';
 import { contextKeys, useControlKit, type ControlKit, type ScanCounts, type ScanStep } from './useControlKit';
-import { ago, summarize, type View } from './model';
+import { ago, nextInList, summarize, type View } from './model';
+import type { BomLine } from '@control-kit/shared';
 import { Overview } from './Overview';
 import { Review } from './Review';
 import { Parts } from './Parts';
@@ -16,6 +17,11 @@ import { Landing } from './Landing';
 import { useControlPoint } from './useControlPoint';
 import { WorkspaceMark } from './ControlPoint';
 import { CONTROL_POINT_CAD_URL } from '@control-kit/shared';
+
+/** The list a part was opened from, in its order, and whether a part still belongs to it (a decided part leaves Review). */
+export type PartList = { keys: string[]; listed?: (line: BomLine) => boolean };
+export type Open = (key: string, list?: PartList) => void;
+export type ReviewFilter = 'all' | 'match' | 'suggested' | 'undecided' | 'product' | 'ai';
 
 const views: View[] = ['overview', 'review', 'parts', 'buy', 'make'];
 const viewLabel: Record<View, string> = { overview: 'Overview', review: 'Review', parts: 'Parts', buy: 'Buy list', make: 'Make' };
@@ -109,7 +115,14 @@ function Workspace({ kit }: { kit: ControlKit }) {
   const result = kit.result!;
   const cp = useControlPoint(kit);
   const [view, setView] = useState<View>(() => (views as string[]).includes(location.hash.slice(1)) ? location.hash.slice(1) as View : 'overview');
-  const [selected, setSelected] = useState<string | null>(null);
+  // The open part, and the list it was opened from: after a choice the drawer moves to the next part still in that list.
+  const [selected, setSelected] = useState<{ key: string; list: PartList | null } | null>(null);
+  /** "Bracket moved to 3D print": shown in the drawer when it moves on, or on the page when it closes. */
+  const [notice, setNotice] = useState<{ text: string; at: number } | null>(null);
+  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(null), 5000); return () => clearTimeout(timer); }, [notice]);
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('all');
+  const latest = useRef(result);
+  latest.current = result;
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Relative times need a clock, which the first render does not have.
   const [now, setNow] = useState<number | null>(null);
@@ -121,12 +134,24 @@ function Workspace({ kit }: { kit: ControlKit }) {
     document.querySelector('.tab[aria-current="page"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [view]);
   const summary = summarize(result);
-  const counts: Record<View, number | null> = { overview: null, review: summary.review, parts: summary.uniqueLines, buy: summary.buy, make: summary.make.total };
+  const counts: Record<View, number | null> = { overview: null, review: summary.toReview, parts: summary.uniqueLines, buy: summary.buy, make: summary.make.total };
   // Each section's colour job: review is orange while parts wait and green once none do; buy is sky; make is gold.
-  const tone: Record<View, string | null> = { overview: null, review: summary.review ? 'attention' : 'done', parts: null, buy: 'buy', make: 'make' };
+  const tone: Record<View, string | null> = { overview: null, review: summary.toReview ? 'attention' : 'done', parts: null, buy: 'buy', make: 'make' };
   const dot = (item: View) => tone[item] && <span className={`dot ${tone[item]}`} aria-hidden />;
-  const line = selected ? result.lines.find(item => item.bomLineKey === selected) ?? result.suppressed.find(item => item.bomLineKey === selected) ?? null : null;
-  const open = (key: string) => setSelected(key);
+  const line = selected ? result.lines.find(item => item.bomLineKey === selected.key) ?? result.suppressed.find(item => item.bomLineKey === selected.key) ?? null : null;
+  const open: Open = (key, list) => { setNotice(null); setSelected({ key, list: list ?? null }); };
+  /** After a saved choice: the next part still in the list the drawer came from, or close. The scan read is the latest. */
+  const moved = (from: BomLine, text: string) => {
+    setNotice({ text, at: Date.now() });
+    setSelected(current => {
+      if (!current || current.key !== from.bomLineKey) return current;
+      const list = current.list;
+      const lines = new Map(latest.current.lines.map(item => [item.bomLineKey, item]));
+      const next = list && nextInList(list.keys, current.key, key => { const item = lines.get(key); return Boolean(item) && (!list.listed || list.listed(item!)); });
+      return next ? { key: next, list } : null;
+    });
+  };
+  const goReview = (filter: ReviewFilter) => { setReviewFilter(filter); setView('review'); };
   const subtitle = [result.documentName, now ? `scanned ${ago(result.scannedAt, now)}` : null].filter(Boolean).join(' · ');
 
   return <div className="shell">
@@ -163,14 +188,15 @@ function Workspace({ kit }: { kit: ControlKit }) {
       <main className="content">
         {kit.error && <Alert tone="danger" title={kit.error} onDismiss={kit.clearError} />}
         {kit.progress && <section className="panel"><div className="panel-body" style={{ paddingTop: 16 }}><ScanProgress kit={kit} /></div></section>}
-        {view === 'overview' && <Overview kit={kit} cp={cp} summary={summary} go={setView} open={open} now={now} />}
-        {view === 'review' && <Review kit={kit} open={open} />}
+        {view === 'overview' && <Overview kit={kit} cp={cp} summary={summary} go={setView} goReview={goReview} open={open} now={now} />}
+        {view === 'review' && <Review kit={kit} open={open} filter={reviewFilter} setFilter={setReviewFilter} />}
         {view === 'parts' && <Parts kit={kit} open={open} />}
-        {view === 'buy' && <BuyList kit={kit} open={open} go={setView} />}
+        {view === 'buy' && <BuyList kit={kit} open={open} go={setView} goReview={goReview} />}
         {view === 'make' && <Make kit={kit} open={open} go={setView} />}
       </main>
     </div>
-    <PartDrawer kit={kit} line={line} onClose={() => setSelected(null)} />
+    <PartDrawer kit={kit} line={line} onClose={() => setSelected(null)} onMoved={moved} notice={notice && selected ? notice.text : null} hasNext={Boolean(selected?.list)} />
+    {notice && !selected && <div className="toast" role="status" key={notice.at}>{notice.text}</div>}
     <SettingsDrawer kit={kit} cp={cp} open={settingsOpen} onOpenChange={setSettingsOpen} />
   </div>;
 }
