@@ -135,19 +135,21 @@ function Linked({ kit, cp, now }: { kit: ControlKit; cp: ControlPoint; now: numb
   const workspace = cp.workspace!;
   const sent = cp.sent && cp.sent.workspaceId === workspace.id ? cp.sent : null;
   const current = Boolean(sent) && cp.sentCurrent;
+  // A partial export (some parts failed) still makes a zip; the card never claims it holds every part.
+  const stepGaps = kit.step && !kit.step.running ? kit.step.failed : 0;
   return <>
     <div className="workspace-line"><WorkspaceMark workspace={workspace} size={28} /><div><strong>{workspace.name}</strong><span className="muted small">{workspace.ftcNumber ? `FTC ${workspace.ftcNumber}` : 'No FTC number'}</span></div></div>
     {!workspace.canEditCad && <Alert tone="warning" title="You can't edit CAD parts in this workspace">Ask a workspace admin for CAD access, or switch workspace in Settings.</Alert>}
     {sent && <p className="small cp-sent"><Check aria-hidden size={13} />{current ? 'This scan was sent' : 'An earlier scan was sent'}{now ? ` ${ago(sent.sentAt, now)}` : ''}{sent.created !== undefined ? `: ${sent.created} new, ${sent.updated ?? 0} updated` : ''}. <a className="link" href={sent.url} {...external}>View in Control Point <ExternalLink aria-hidden size={11} /></a></p>}
     {cp.pulled && cp.pulled.types + cp.pulled.products > 0 && <p className="small cp-sent"><Check aria-hidden size={13} />Picked up {pulledText(cp.pulled)} made in Control Point.</p>}
     {sent && current && cp.makeCount > 0 && (cp.stepAttached
-      ? <p className="small cp-sent"><FileArchive aria-hidden size={13} />STEP files for {cp.makeCount} part{cp.makeCount === 1 ? '' : 's'} to make are in Control Point, ready to download.</p>
+      ? <p className="small cp-sent"><FileArchive aria-hidden size={13} />A STEP zip of this scan is in Control Point, ready to download.{stepGaps ? ` The last export left out ${stepGaps} part${stepGaps === 1 ? '' : 's'}; export again to add them.` : ''}</p>
       : <p className="small cp-step"><FileArchive aria-hidden size={13} />STEP files are not in Control Point yet.</p>)}
     {cp.pictures && <p className="small muted cp-pictures"><Image aria-hidden size={13} />{picturesText(cp.pictures)}</p>}
     <div className="inline-actions">
       <Button variant="secondary" disabled={!workspace.canEditCad || !kit.result!.scanId} loading={cp.busy === 'send'} onClick={() => void cp.send()}><Send aria-hidden size={14} />{current ? `Send again to ${workspace.name}` : `Send full BOM to ${workspace.name}`}</Button>
-      {sent && current && cp.makeCount > 0 && !cp.stepAttached && <Button variant="ghost" disabled={!workspace.canEditCad || cp.busy !== null || Boolean(kit.step?.running)} loading={cp.busy === 'step'} onClick={() => void cp.attachStep()}>
-        <FileArchive aria-hidden size={14} />{cp.zipCurrent ? 'Add STEP files' : 'Export and add STEP files'}</Button>}
+      {sent && current && cp.makeCount > 0 && (!cp.stepAttached || stepGaps > 0) && <Button variant="ghost" disabled={!workspace.canEditCad || cp.busy !== null || Boolean(kit.step?.running)} loading={cp.busy === 'step'} onClick={() => void cp.attachStep()}>
+        <FileArchive aria-hidden size={14} />{cp.zipCurrent && !stepGaps ? 'Add STEP files' : cp.stepAttached ? 'Export again and add' : 'Export and add STEP files'}</Button>}
     </div>
     <p className="muted small">Sends every part with its quantity, vendor, price, and status, plus the Excel BOM, the assembly picture, part pictures, and this session's STEP files, which your team can download from Control Point. Sending the same scan again changes nothing; a new scan updates the same parts and keeps your team's statuses. Part types and products chosen in Control Point arrive with your next scan.</p>
   </>;

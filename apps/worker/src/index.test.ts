@@ -208,6 +208,8 @@ describe('Onshape OAuth and session against mock Onshape', () => {
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get('access-control-allow-origin')).toBe(origin);
     expect(preflight.headers.get('access-control-allow-credentials')).toBe('true');
+    // Uploads to Control Point name their SHA-256 in a header the browser must be allowed to send.
+    expect(preflight.headers.get('access-control-allow-headers')).toContain('x-content-sha256');
     const session = await worker.fetch(new Request('http://localhost:8787/api/session', { headers: { origin } }), env);
     expect(session.status).toBe(401);
     expect(session.headers.get('access-control-allow-origin')).toBe(origin);

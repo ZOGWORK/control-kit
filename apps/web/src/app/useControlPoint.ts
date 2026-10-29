@@ -214,7 +214,8 @@ export function useControlPoint(kit: ControlKit) {
     setBusy('step'); setError('');
     try {
       const current = () => { const made = kit.lastStepZip.current; return made && made.scanId === result.scanId && made.makeList === makeListKey(result) ? made : null; };
-      if (!current()) await kit.downloadStep();
+      // No current zip, or the last export left parts out: export (again) before uploading.
+      if (!current() || (kit.step?.failed ?? 0) > 0) await kit.downloadStep();
       const made = current();
       if (!made) throw new Error('The STEP export did not finish, so nothing was added. Try again.');
       if (made.bytes.length > UPLOAD_FILE_LIMIT_BYTES) throw new Error(`The STEP zip is over ${UPLOAD_FILE_LIMIT_BYTES / 1024 / 1024} MB, so it stays in Control Kit.`);
