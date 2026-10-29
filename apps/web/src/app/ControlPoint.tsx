@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, ExternalLink, Send } from 'lucide-react';
+import { Check, ExternalLink, FileArchive, Image, Send } from 'lucide-react';
 import { buildControlPointPayload, CONTROL_POINT_CAD_URL, type ControlPointCadPart } from '@control-kit/shared';
 import { Alert } from '../components/arc/alert/alert';
 import { Button } from './bits';
@@ -118,6 +118,15 @@ function pulledText(pulled: { types: number; products: number }) {
   return [types, products].filter(Boolean).join(' and ');
 }
 
+/** "38 part pictures sent, 30 newly drawn by Onshape; 12 more next send" */
+function picturesText(sync: NonNullable<ControlPoint['pictures']>) {
+  if (sync.running) return 'Sending part pictures…';
+  const parts = [sync.sent ? `${sync.sent} part picture${sync.sent === 1 ? '' : 's'} sent` : 'Part pictures are up to date in Control Point'];
+  if (sync.drawn) parts.push(`${sync.drawn} newly drawn by Onshape`);
+  const text = parts.join(', ');
+  return sync.missing ? `${text}; ${sync.missing} more arrive with later sends.` : `${text}.`;
+}
+
 function Linked({ kit, cp, now }: { kit: ControlKit; cp: ControlPoint; now: number | null }) {
   const workspace = cp.workspace!;
   const sent = cp.sent && cp.sent.workspaceId === workspace.id ? cp.sent : null;
@@ -127,10 +136,16 @@ function Linked({ kit, cp, now }: { kit: ControlKit; cp: ControlPoint; now: numb
     {!workspace.canEditCad && <Alert tone="warning" title="You can't edit CAD parts in this workspace">Ask a workspace admin for CAD access, or switch workspace in Settings.</Alert>}
     {sent && <p className="small cp-sent"><Check aria-hidden size={13} />{current ? 'This scan was sent' : 'An earlier scan was sent'}{now ? ` ${ago(sent.sentAt, now)}` : ''}{sent.created !== undefined ? `: ${sent.created} new, ${sent.updated ?? 0} updated` : ''}. <a className="link" href={sent.url} {...external}>View in Control Point <ExternalLink aria-hidden size={11} /></a></p>}
     {cp.pulled && cp.pulled.types + cp.pulled.products > 0 && <p className="small cp-sent"><Check aria-hidden size={13} />Picked up {pulledText(cp.pulled)} made in Control Point.</p>}
+    {sent && current && cp.makeCount > 0 && (cp.stepAttached
+      ? <p className="small cp-sent"><FileArchive aria-hidden size={13} />STEP files for {cp.makeCount} part{cp.makeCount === 1 ? '' : 's'} to make are in Control Point, ready to download.</p>
+      : <p className="small cp-step"><FileArchive aria-hidden size={13} />STEP files are not in Control Point yet.</p>)}
+    {cp.pictures && <p className="small muted cp-pictures"><Image aria-hidden size={13} />{picturesText(cp.pictures)}</p>}
     <div className="inline-actions">
       <Button variant="secondary" disabled={!workspace.canEditCad || !kit.result!.scanId} loading={cp.busy === 'send'} onClick={() => void cp.send()}><Send aria-hidden size={14} />{current ? `Send again to ${workspace.name}` : `Send full BOM to ${workspace.name}`}</Button>
+      {sent && current && cp.makeCount > 0 && !cp.stepAttached && <Button variant="ghost" disabled={!workspace.canEditCad || cp.busy !== null || Boolean(kit.step?.running)} loading={cp.busy === 'step'} onClick={() => void cp.attachStep()}>
+        <FileArchive aria-hidden size={14} />{cp.zipCurrent ? 'Add STEP files' : 'Export and add STEP files'}</Button>}
     </div>
-    <p className="muted small">Sends every part with its quantity, vendor, price, and status, plus the Excel BOM, the assembly picture, and this session's STEP files. Sending the same scan again changes nothing; a new scan updates the same parts and keeps your team's statuses. Part types and products chosen in Control Point arrive with your next scan.</p>
+    <p className="muted small">Sends every part with its quantity, vendor, price, and status, plus the Excel BOM, the assembly picture, part pictures, and this session's STEP files, which your team can download from Control Point. Sending the same scan again changes nothing; a new scan updates the same parts and keeps your team's statuses. Part types and products chosen in Control Point arrive with your next scan.</p>
   </>;
 }
 

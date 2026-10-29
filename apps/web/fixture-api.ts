@@ -40,6 +40,7 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
   let cpLinked = cpMode === 'linked' || cpMode === 'none';
   let cpWorkspace: number | null = cpMode === 'linked' ? 12 : null;
   let cpSent: Record<string, unknown> | null = null;
+  const cpPictures = new Map<string, string>();
   return {
     name: 'control-kit-fixture-api',
     configureServer(server) {
@@ -94,8 +95,22 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
         if (url.pathname === '/api/control-point/send') {
           const payload = await body() as { idempotencyKey: string; cadParts: unknown[] };
           const duplicate = cpSent?.idempotencyKey === payload.idempotencyKey;
-          cpSent = { importId: 41, workspaceId: cpWorkspace, sentAt: new Date().toISOString(), idempotencyKey: payload.idempotencyKey, url: 'https://tryctrlpoint.org/cad-parts?import=41' };
+          cpSent = { importId: 41, workspaceId: cpWorkspace, sentAt: new Date().toISOString(), idempotencyKey: payload.idempotencyKey, url: 'https://tryctrlpoint.org/cad-parts?import=41', files: duplicate ? cpSent?.files : [] };
           return json({ importId: 41, duplicate, workspace: workspaces.find(item => item.id === cpWorkspace), created: duplicate ? 0 : payload.cadParts.length, updated: 0, markedRemoved: 0, filesStored: 1, url: cpSent.url, sentAt: cpSent.sentAt });
+        }
+        // Contract v1.2 §6: files after a send and part pictures, kept in memory like the send itself.
+        if (url.pathname === '/api/control-point/file') {
+          let size = 0;
+          for await (const chunk of request) size += (chunk as Buffer).length;
+          const name = url.searchParams.get('name') ?? 'file';
+          if (cpSent) cpSent = { ...cpSent, files: [...new Set([...((cpSent.files as string[] | undefined) ?? []), name])] };
+          return json({ name, url: 'https://tryctrlpoint.org/api/files/1', sizeBytes: size, sha256: request.headers['x-content-sha256'], duplicate: false });
+        }
+        if (url.pathname === '/api/control-point/pictures') {
+          if (request.method === 'GET') return json({ pictures: [...cpPictures].map(([identity, key]) => ({ identity, key })) });
+          const sent = await body() as { pictures: Array<{ identity: string; key: string }> };
+          for (const item of sent.pictures) cpPictures.set(item.identity, item.key);
+          return json({ stored: sent.pictures.length, unchanged: 0, unknown: 0, rejected: 0 });
         }
         if (url.pathname === '/control-point/start') { cpLinked = true; response.setHeader('content-type', 'text/html'); return response.end('<script>opener && opener.postMessage({ type: "control-point-linked" }, location.origin); close();</script>Linked.'); }
         if (url.pathname === '/api/scan') {

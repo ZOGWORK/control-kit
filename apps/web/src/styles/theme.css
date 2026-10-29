@@ -396,6 +396,8 @@ button.row:hover { background: var(--ck-raised); }
 .workspace-line > div { display: grid; }
 .cp-sent { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--ck-done); }
 .cp-sent .link { color: var(--ck-text); }
+.cp-step { display: flex; align-items: center; gap: 6px; color: var(--ck-attention); }
+.cp-pictures { display: flex; align-items: center; gap: 6px; }
 .button-link { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: var(--radius-control); border: 1px solid var(--ck-line-strong); color: var(--ck-text); font-size: 13.5px; font-weight: 500; text-decoration: none; }
 .button-link:hover { background: var(--ck-muted); }
 .primary-link { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 18px; border-radius: var(--radius-control); background: var(--ck-buy); color: #04212e; font-weight: 600; text-decoration: none; }

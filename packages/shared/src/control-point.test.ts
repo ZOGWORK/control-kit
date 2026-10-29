@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateAssembly, recalculatePurchasing, type VendorRecord } from './index';
-import { buildControlPointPayload, controlPointIdempotencyKey, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter } from './control-point';
+import { buildControlPointPayload, controlPointIdempotencyKey, controlPointPictureKey, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter, pictureTargets } from './control-point';
 
 describe('Control Point payload and adapter', () => {
   it('round-trips a payload through the in-memory adapter with a stable key per workspace', async () => {
@@ -44,7 +44,7 @@ describe('Control Point payload and adapter', () => {
     expect(before.cadParts[0].extra.identity).toBe('doc:parts:JHD:size=M4');
     expect(after.cadParts[0].extra.identity).toBe(before.cadParts[0].extra.identity);
   });
-  it('makes a send with the STEP zip attached a new import, whatever the file names or workbook bytes', async () => {
+  it('keys a send by its inline files only: the STEP zip goes after the bundle (v1.2), so adding it reaches the same import', async () => {
     const result = aggregateAssembly({ rootAssembly: { instances: [
       { id: 'a', name: 'Bracket', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JHD' },
     ] } }, { documentId: 'doc', elementId: 'assembly', workspaceOrVersion: 'w', workspaceOrVersionId: 'work' }, 'Robot');
@@ -55,10 +55,12 @@ describe('Control Point payload and adapter', () => {
     const rebuilt = await buildControlPointPayload(result, { workspaceId: 12, files: [workbook('2026-10-27', 2)] });
     const withStep = await buildControlPointPayload(result, { workspaceId: 12, files: [zip, workbook('2026-10-26', 1)] });
     expect(rebuilt.idempotencyKey).toBe(withoutStep.idempotencyKey);
-    expect(withStep.idempotencyKey).not.toBe(withoutStep.idempotencyKey);
+    // Even a small zip is a reference uploaded right after the bundle, so it never changes the key.
+    expect(withStep.files.find(item => item.name === 'Robot STEP.zip')).toMatchObject({ delivery: 'reference', reason: 'Uploaded right after this bundle.' });
+    expect(withStep.idempotencyKey).toBe(withoutStep.idempotencyKey);
     // The browser can learn the key without building files; order does not matter.
     expect(await controlPointIdempotencyKey(result, { workspaceId: 12, inlineMediaTypes: [xlsx] })).toBe(withoutStep.idempotencyKey);
-    expect(await controlPointIdempotencyKey(result, { workspaceId: 12, inlineMediaTypes: [xlsx, 'application/zip'] })).toBe(withStep.idempotencyKey);
+    expect(await controlPointIdempotencyKey(result, { workspaceId: 12, inlineMediaTypes: ['image/png', xlsx] })).toBe(await controlPointIdempotencyKey(result, { workspaceId: 12, inlineMediaTypes: [xlsx, 'image/png'] }));
     expect(await controlPointIdempotencyKey(result, { workspaceId: 12, inlineMediaTypes: [] })).toBe((await buildControlPointPayload(result, { workspaceId: 12 })).idempotencyKey);
     // A file sent only as a reference is not inline, so it does not change the key.
     const big = { name: 'Robot STEP.zip', mediaType: 'application/zip', bytes: new Uint8Array(INLINE_FILE_LIMIT_BYTES + 1) };
@@ -144,6 +146,22 @@ describe('Control Point attach bundle', () => {
     expect(mount.extra).toMatchObject({ disposition: 'print', manualOverride: 'print', partStudioUrl: 'https://cad.onshape.com/documents/doc/w/work/e/parts' });
     // A microversion context cannot be opened from outside Onshape, so the assembly link falls back to the document.
     expect((await buildControlPointPayload(scan(), { workspaceId: 12, context: { ...context, workspaceOrVersion: 'm', workspaceOrVersionId: 'micro1' } })).assembly.assemblyUrl).toBe('https://cad.onshape.com/documents/doc');
+  });
+  it('picks one picture per part identity, parts to make first, and keys it by the revision the Worker caches it at', async () => {
+    const result = aggregateAssembly({ rootAssembly: { documentMicroversion: 'mv-9', instances: [
+      { id: 'a', name: 'Bracket', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JHD' },
+      { id: 'b', name: 'Bracket', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JHD' },
+      { id: 'c', name: 'Plate', type: 'Part', documentId: 'doc', elementId: 'parts', partId: 'JKD' },
+    ] } }, { documentId: 'doc', elementId: 'assembly', workspaceOrVersion: 'w', workspaceOrVersionId: 'work' }, 'Robot');
+    result.diagnostics = { ...(result.diagnostics ?? {}), revision: { type: 'm', id: 'mv-9' } } as never;
+    result.lines = result.lines.map(line => ({ ...line, disposition: line.partId === 'JKD' ? 'cut-2d' : 'buy' }));
+    result.lines.push({ ...result.lines[0], partId: 'JZZ', bomLineKey: 'doc:parts:JZZ:', disposition: 'ignore' });
+    const targets = pictureTargets(result);
+    expect(targets.map(item => item.line.partId)).toEqual(['JKD', 'JHD']);
+    const key = await controlPointPictureKey(result, targets[0].line);
+    expect(key).toMatch(/^m:mv-9:[0-9a-f]{16}$/);
+    expect(await controlPointPictureKey(result, targets[0].line)).toBe(key);
+    expect(await controlPointPictureKey({ scanId: result.scanId, diagnostics: { revision: { type: 'm', id: 'mv-10' } } } as never, targets[0].line)).not.toBe(key);
   });
   it('attaches files inline or by reference, never drops one, and keeps the key independent of file bytes', async () => {
     const small = new Uint8Array([1, 2, 3]);

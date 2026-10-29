@@ -1,8 +1,10 @@
-# Control Kit ↔ Control Point link contract (v1.1)
+# Control Kit ↔ Control Point link contract (v1.2)
 
 Written 2026-10-26 at the owner's request ("build both sides now"). Both repositories build to this document, so it is the confirmed contract that `control-point.ts` waited for. Change it only in both places at once.
 
 v1.1 (2026-10-26, the owner's CAD rebuild: robots by season, the whole BOM in Control Point, and choices made there): §2 gains the bundle's additive line fields and where an import lands, and §5 describes how choices made in Control Point reach Control Kit. Nothing in v1 changes meaning; `bundleVersion` stays 2 and every new field is optional for a reader.
+
+v1.2 (2026-10-28, the owner's requests "i should also be able to download all the parts in control point itself, also show the preview images in control point too" and, for AI review, "when control point is linked it should work"): §6 adds files uploaded after a send (the STEP zip always goes this way now, and anything over 4 MB) and part pictures; §7 adds AI review answered with Control Point's own model keys. `bundleVersion` stays 2; a v1.1 reader ignores everything new.
 
 Hosts: Control Point `https://tryctrlpoint.org` (Express on Render, SQLite). Control Kit Worker `https://control-kit.control-kit-worker.workers.dev`, Pages `https://control-kit.pages.dev`.
 
@@ -161,3 +163,50 @@ Writes happen only for real changes, so an unchanged pull writes nothing to KV.
 ### Which choice wins
 
 The newest. A person's later choice in Control Kit is newer than Control Point's, so the pull skips it, and the next send carries it (`manualOverrideAt`, `matchDecisionAt`). Control Point shows, per part, the newer of its own choice and the line's; its own choice reads "Chosen in Control Point · reaches Control Kit at its next scan" until a send carries the same value. A re-send never erases a Control Point choice: imports update `ck_extra` and the Control Kit columns only, and choices live in their own columns.
+
+## 6. Files after a send, and part pictures (v1.2)
+
+### Files
+
+A bundle names every file it should hold. Files over 4 MB, and **the STEP zip always** (whatever its size), are listed with `delivery: "reference"` and uploaded right after the send, to the import the send answered with (a duplicate send included). The zip therefore never changes the idempotency key: adding STEP later reaches the same import instead of creating a new one. A file over 64 MB stays in Control Kit (its `reason` says so).
+
+`POST /api/integrations/control-kit/workspaces/{id}/imports/{importId}/files?name={name}`
+
+- Bearer, same checks as the BOM send (active member, CAD module on). The import must belong to workspace `id` (else 404 `not_found`) and be finished (else 409 `in_progress` with `Retry-After`).
+- Body: the file's raw bytes, at most 64 MB (413 `too_large`). `Content-Type` is `application/zip`, the xlsx type, or `text/csv`, and must match the name's extension (415 `bad_file`). `X-Content-SHA256` is the bytes' hex SHA-256; a mismatch is 400 `checksum_mismatch`. `name` is 1 to 160 characters with no slash, backslash, or control characters.
+- Stored as a CAD doc of the import (on its robot). In the import's `files` it replaces the entry of the same name, else the first unstored entry it completes (a `.zip` fills an entry named `*.zip` or mentioning STEP; an `.xlsx` one named `*.xlsx`, Excel, or workbook), else it is appended. The list is swapped from the value it was read as, so two uploads to one import never drop each other.
+- The same name with the same bytes again: `200 {duplicate: true}`, nothing changes. New bytes under the same name replace the stored file (the old one is deleted).
+- `200 { name, url, sizeBytes, sha256, duplicate }`; `url` is `/api/files/{id}` on Control Point.
+
+Control Kit Worker: `POST /api/control-point/file?documentId&elementId&importId&workspaceId&name` (Origin-checked, cookie session), headers `Content-Type`, `Content-Length` (411 without), `X-Content-SHA256`. Only for the caller's own latest send of that assembly (`cp-sent:{userId}:{documentId}:{elementId}` names that `importId` and workspace; else 409 `not_sent` or `workspace_changed`), with the link still on that workspace. The body streams through unread (the free plan's 10 ms CPU rules out hashing 64 MB; Control Point checks the hash), and a body longer than declared errors rather than arriving short. A new name is added to the sent record's `files`, so the panel knows STEP is there. A Control Point 401 ends the link and answers 409 `revoked`.
+
+The panel uploads the referenced files right after each send, and offers **Add STEP files** (exporting first when this session has no current zip) while the last send of the current scan has no zip in Control Point. Control Point shows the newest stored STEP zip and workbook of a robot as downloads.
+
+### Part pictures
+
+Each Control Point CAD part may carry one Onshape picture of the part (or, for a vendor product listed as one unit, of that product), drawn by Control Kit's `/api/preview` and stored in `cad_parts.ck_picture_url` with Control Kit's picture **key**: the revision the Worker caches the picture at (the scanned microversion `m:{id}` for workspace parts, else `{v|m}:{sourceId}`) plus 16 hex characters of SHA-256 of `{bomLineKey}|{part|assembly}` (`controlPointPictureKey`, at most 128 characters of `[A-Za-z0-9_:.-]`). The robot's own picture stays the send's `{assembly} assembly.png` file.
+
+- `GET …/workspaces/{id}/imports/{importId}/pictures` (Bearer, membership): `{ pictures: [{ identity, key, at }] }` for the parts of that import's assembly that have one.
+- `POST …/workspaces/{id}/imports/{importId}/pictures` (Bearer, CAD edit), JSON at most 8 MB: `{ pictures: [{ identity, key, contentBase64 }] }`, 1 to 40 items. Each must be a PNG of at most 1 MB for a part of that import's assembly; others count as `rejected` (bad key, not a PNG, too large) or `unknown` (no such part). A part already holding that key is `unchanged`; a new key replaces the picture (the old file is deleted). Imports never touch these columns. `200 { stored, unchanged, unknown, rejected }`.
+
+Control Kit Worker: `GET /api/control-point/pictures?documentId&elementId&importId` and `POST /api/control-point/pictures?documentId&elementId&importId&workspaceId` (Origin-checked, at most 8 MB, streamed unread), with the same send and link checks as files. `GET /api/preview?scanId&line&cached=1` answers a picture the Worker already drew, or 404 `not_cached`, never an Onshape request.
+
+**Onshape budget.** After a send the panel lists Control Point's keys and walks the scan's parts (one per identity, parts to make first, Not needed and undrawable lines left out). A part whose key Control Point holds is skipped. A picture the Worker already drew (cached 30 days per revision) is sent free. Only a part Control Point has **no** picture of is drawn now, at most `PICTURE_FILL_PER_SEND` = 30 per send (one billable `shaded-view` request each). A part whose newer revision was never drawn keeps its older picture. So a robot of N drawable parts costs at most N requests once, 30 per send, and later sends cost nothing unless new parts appear (again at most 30 per send).
+
+## 7. AI review through Control Point (v1.2)
+
+When the Control Kit Worker has no model key of its own (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`), a person linked with a workspace gets AI review through Control Point; Control Kit's own keys, if set, always take precedence. Control Kit keeps its per-person and global allowance (the `AiAllowance` Durable Object), its 30-day answer cache (`ai-review:{hash}:control-point`, apart from its own models' answers), and its `parseAiReview` check of every answer. No key or token reaches the browser.
+
+`POST /api/integrations/control-kit/workspaces/{id}/ai/review` (Bearer, active member, CAD module on), JSON at most 256 KB:
+
+```json
+{ "instructions": "…", "schema": { "…": "JSON Schema for the answer" }, "geminiSchema": { "…": "the same in Gemini's OpenAPI subset" },
+  "request": { "version": 1, "assembly": "…", "leftOut": 0, "lines": [] } }
+```
+
+- `request` is the review the Worker rebuilt from the caller's own stored scan (`trustedAiRequest`): version 1, 1 to 150 lines, each with `id`, `name`, optional facts, and at most 8 catalog `candidates` (`id`, `vendor`, `sku`, `name`). `instructions` at most 8,000 characters, each schema at most 8,000 characters of JSON. Anything else is 400 `bad_payload`, so the route is not a general model proxy.
+- Control Point asks Gemini (`GEMINI_MODEL`, default `gemini-3.5-flash-lite`) with the instructions as the system prompt, the request as JSON, and `responseSchema: geminiSchema`; it asks Anthropic (`ANTHROPIC_MODEL`, default `claude-sonnet-5-5`, effort low, `output_config.format` from `schema`) once, only when Gemini answers 429 or 5xx or cannot be reached, never on an auth or request error. Each call times out at 90 seconds; nothing is retried blindly.
+- Per workspace, at most 20 reviews an hour and 100 a day (in memory, reset on restart): 429 `rate_limited` with `Retry-After`. The token's own 30 calls a minute still apply.
+- `200 { items: [...], provider: "gemini" | "anthropic", usage: { inputTokens, outputTokens } }`: the model's items as it gave them (an unparseable answer is `items: []`). 501 `ai_unavailable` without keys; 502 `ai_failed`; 504 `ai_timeout`.
+
+Control Kit Worker: `GET /api/ai/status` answers `{enabled: true, via: "control-kit"}` with its own keys, `{enabled: true, via: "control-point"}` for a person linked with a workspace (and the `AI_ALLOWANCE` binding), else `{enabled: false}` (with `linkToEnable: true` when linking would turn it on). `POST /api/ai/review` is unchanged for the browser; through Control Point it waits at most 190 seconds (Gemini then Anthropic), answers with `via: "control-point"`, maps Control Point's 429, 501, 502 and 504 to the same statuses with plain words, and a 401 ends the link and answers 409 `{code: "revoked", linked: false}` like the other link routes.

@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { aiReviewHash, aiReviewInstructions, aiReviewSchema, configurationValues, dispositions, normalizeSku, parseAiReview, AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, type AiProvider, type AiReviewItem, type AiReviewLine, type AiReviewRequest, type ScanResult } from '@control-kit/shared';
+import { aiReviewHash, aiReviewInstructions, aiReviewSchema, configurationValues, ControlPointError, dispositions, normalizeSku, parseAiReview, AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, type AiProvider, type AiReviewItem, type AiReviewLine, type AiReviewRequest, type ControlPointAiAnswer, type ControlPointAiAsk, type ScanResult } from '@control-kit/shared';
 import type { AllowanceReply, AllowanceRequest } from './ai-allowance';
 import type { Kv } from './index';
 
@@ -25,7 +25,9 @@ const TIMEOUT_MS = 90_000;
 const CACHE_SECONDS = 30 * 24 * 3600;
 export type AiOutcome =
   | { ok: true; items: AiReviewItem[]; provider: AiProvider; cached: boolean; usage: { inputTokens: number | null; outputTokens: number | null } }
-  | { ok: false; status: number; error: string };
+  | { ok: false; status: number; error: string; code?: string };
+/** Where a review is answered: this Worker's own keys, or Control Point's through the person's link (contract v1.2 §7). */
+export type AiRoute = 'control-kit' | 'control-point';
 
 /** Errors that may fall back to the other provider: a rate limit or the provider's own failure. */
 class ProviderError extends Error {
@@ -34,7 +36,7 @@ class ProviderError extends Error {
 const providerLabel: Record<AiProvider, string> = { gemini: 'Gemini', anthropic: 'Anthropic' };
 
 /** Gemini's response schema is an OpenAPI subset: nullable instead of a type list, and no additionalProperties. */
-const geminiSchema = {
+export const geminiSchema = {
   type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: {
     id: { type: 'string' }, disposition: { type: 'string', enum: [...aiReviewSchema.properties.items.items.properties.disposition.enum] },
     candidateId: { type: 'string', nullable: true }, confidence: { type: 'number' }, reason: { type: 'string' },
@@ -114,9 +116,11 @@ export function validAiRequest(value: unknown): value is AiReviewRequest {
       && line.candidates.every(candidate => candidate && typeof candidate.id === 'string' && typeof candidate.sku === 'string'));
 }
 
+/** Answers through Control Point are cached apart: its models are its own, so they never answer for this Worker's, or back. */
+const controlPointCacheKey = async (request: AiReviewRequest) => `ai-review:${await aiReviewHash(request)}:control-point`;
 /** A saved answer for exactly this request, or null. Costs no AI call and no allowance. */
-export async function cachedAiReview(env: AiEnv, request: AiReviewRequest): Promise<AiOutcome | null> {
-  const cached = await env.APP_STATE.get(await cacheKeyFor(env, request));
+export async function cachedAiReview(env: AiEnv, request: AiReviewRequest, route: AiRoute = 'control-kit'): Promise<AiOutcome | null> {
+  const cached = await env.APP_STATE.get(route === 'control-point' ? await controlPointCacheKey(request) : await cacheKeyFor(env, request));
   if (!cached) return null;
   try {
     // A cached answer costs nothing and writes nothing, so repeated hits cannot use up KV writes.
@@ -183,6 +187,35 @@ export function trustedAiRequest(request: AiReviewRequest, keys: unknown, scan: 
     });
   }
   return { version: AI_REVIEW_VERSION, assembly: scan.assemblyName, leftOut: Math.max(0, Math.min(Number(request.leftOut) || 0, 10_000)), lines };
+}
+
+/** What Control Point is asked (contract v1.2 §7): the same instructions and schemas this Worker would use, and the rebuilt request. */
+export const aiReviewAsk = (request: AiReviewRequest): ControlPointAiAsk => ({ instructions: aiReviewInstructions, schema: aiReviewSchema as unknown as Record<string, unknown>, geminiSchema, request });
+
+/**
+ * The review answered by Control Point's own Gemini and Anthropic setup, for a person linked with a workspace when this
+ * Worker has no key. The answer is checked with `parseAiReview` exactly as a direct one, then cached and logged here.
+ * `ask` makes the one bounded call (no retries); a refused grant comes back as 409 `revoked`, like the other link routes.
+ */
+export async function reviewThroughControlPoint(env: AiEnv, request: AiReviewRequest, ask: (ask: ControlPointAiAsk) => Promise<ControlPointAiAnswer>): Promise<AiOutcome> {
+  const saved = await cachedAiReview(env, request, 'control-point');
+  if (saved) return saved;
+  let answer: ControlPointAiAnswer;
+  try { answer = await ask(aiReviewAsk(request)); }
+  catch (error) {
+    // Not logged here: no model of this Worker's was asked, and Control Point keeps its own record.
+    const refused = error instanceof ControlPointError ? error : new ControlPointError(503, 'unavailable');
+    if (refused.status === 401) return { ok: false, status: 409, code: 'revoked', error: 'Control Point access was removed. Link Control Point again.' };
+    if (refused.status === 429) return { ok: false, status: 429, code: 'rate_limited', error: 'Your Control Point workspace has used its AI reviews for now. Try again later.' };
+    if (refused.status === 501) return { ok: false, status: 501, code: 'ai_unavailable', error: 'AI review is not set up in Control Point yet. Everything else works as before.' };
+    if (refused.status === 403) return { ok: false, status: 403, code: refused.code, error: 'Your role in this Control Point workspace cannot use AI review. Pick another workspace.' };
+    if (refused.status === 504 || refused.code === 'ai_timeout') return { ok: false, status: 504, code: 'ai_timeout', error: 'The AI review took too long in Control Point. Your parts are unchanged.' };
+    return { ok: false, status: 502, code: refused.code, error: 'Control Point could not finish the AI review. Your parts are unchanged.' };
+  }
+  const items = parseAiReview({ items: answer.items }, request);
+  await logAiCall(env, { provider: answer.provider, lines: request.lines.length, ok: true, cached: false, ...answer.usage });
+  if (items.length) await env.APP_STATE.put(await controlPointCacheKey(request), JSON.stringify({ items, provider: answer.provider }), { expirationTtl: CACHE_SECONDS });
+  return { ok: true, items, provider: answer.provider, cached: false, usage: answer.usage };
 }
 
 export async function reviewWithAi(env: AiEnv, request: AiReviewRequest, fetcher: typeof fetch = fetch): Promise<AiOutcome> {

@@ -5,7 +5,7 @@ import { createMockOnshape } from './mock-onshape';
 import { createMockControlPoint } from './mock-control-point';
 import { HttpControlPointAdapter } from './control-point';
 import { seal, unseal } from './secrets';
-import { buildControlPointPayload, type ScanResult } from '@control-kit/shared';
+import { aiReviewInstructions, buildControlPointPayload, controlPointPictureKey, pictureTargets, type ScanResult } from '@control-kit/shared';
 
 class MemoryKv implements Kv {
   values = new Map<string, string>();
@@ -503,6 +503,158 @@ describe('assembly picture', () => {
     const both = await Promise.all([1, 2].map(() => call(`/api/preview/assembly/redraw?scanId=${result.scanId}&view=right&wvm=w&wvmId=work1`, { cookie, method: 'POST', config })));
     expect(both.map(response => response.status).sort()).toEqual([200, 429]);
     expect(onshape.apiRequests - before).toBe(1);
+  });
+});
+
+describe('files and pictures after a send (contract v1.2 §6)', () => {
+  async function sent() {
+    const cookie = await session();
+    await link(cookie);
+    await post(cookie, '/api/control-point/workspace', { workspaceId: 12 });
+    const result = await scan(cookie);
+    const zip = new TextEncoder().encode('PK step files for every part');
+    const payload = await buildControlPointPayload(result, { workspaceId: 12, files: [{ name: 'Robot STEP.zip', mediaType: 'application/zip', bytes: zip }] });
+    const answer = await (await send(cookie, result.scanId!, JSON.stringify(payload))).json() as { importId: number };
+    return { cookie, result, zip, payload, importId: answer.importId };
+  }
+  const hex = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes)))].map(value => value.toString(16).padStart(2, '0')).join('');
+  const upload = async (cookie: string, result: ScanResult, importId: number, bytes: Uint8Array, opts: { name?: string; length?: number; workspaceId?: number; hash?: string } = {}) =>
+    call(`/api/control-point/file?${new URLSearchParams({ documentId: result.documentId, elementId: result.elementId, importId: String(importId), workspaceId: String(opts.workspaceId ?? 12), name: opts.name ?? 'Robot STEP.zip' })}`,
+      { cookie, method: 'POST', body: new TextDecoder().decode(bytes), headers: { 'content-type': 'application/zip', 'content-length': String(opts.length ?? bytes.byteLength), 'x-content-sha256': opts.hash ?? await hex(bytes) } });
+
+  it('never puts the STEP zip inside the bundle: it is a reference uploaded after, so its key does not change', async () => {
+    const { payload, result } = await sent();
+    expect(payload.files).toEqual([expect.objectContaining({ name: 'Robot STEP.zip', delivery: 'reference', reason: 'Uploaded right after this bundle.' })]);
+    expect(payload.idempotencyKey).toBe((await buildControlPointPayload(result, { workspaceId: 12 })).idempotencyKey);
+  });
+  it('streams the zip to that import, records it on the send, and recognises the same bytes again', async () => {
+    const { cookie, result, zip, importId } = await sent();
+    const first = await upload(cookie, result, importId, zip);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ name: 'Robot STEP.zip', url: `${cpOrigin}/api/files/1`, sizeBytes: zip.byteLength, sha256: await hex(zip), duplicate: false });
+    expect(cp.uploads).toEqual([expect.objectContaining({ importId, name: 'Robot STEP.zip', mediaType: 'application/zip', bytes: zip })]);
+    const record = await (await call(`/api/control-point/sent?documentId=${result.documentId}&elementId=${result.elementId}`, { cookie })).json();
+    expect(record).toMatchObject({ importId, files: ['Robot STEP.zip'] });
+    expect(await (await upload(cookie, result, importId, zip)).json()).toMatchObject({ duplicate: true });
+    expect(cp.uploads).toHaveLength(1);
+  });
+  it('refuses another import, another workspace, a wrong hash, an oversize or overlong body, and a revoked grant', async () => {
+    const { cookie, result, zip, importId } = await sent();
+    const asked = cp.requests.length;
+    expect(await (await upload(cookie, result, importId + 1, zip)).json()).toMatchObject({ code: 'not_sent' });
+    expect(await (await upload(cookie, result, importId, zip, { workspaceId: 13 })).json()).toMatchObject({ code: 'workspace_changed' });
+    expect((await upload(cookie, result, importId, zip, { length: 64 * 1024 * 1024 + 1 })).status).toBe(413);
+    expect(cp.requests.length).toBe(asked);
+    expect(await (await upload(cookie, result, importId, zip, { hash: '0'.repeat(64) })).json()).toMatchObject({ code: 'checksum_mismatch' });
+    // More bytes than declared are cut off with an error, never sent short.
+    expect((await upload(cookie, result, importId, zip, { length: 4 })).status).not.toBe(200);
+    expect(cp.uploads).toHaveLength(0);
+    cp.revokeAll();
+    expect(await (await upload(cookie, result, importId, zip)).json()).toMatchObject({ code: 'revoked' });
+    expect(await storedLink()).toBeNull();
+  });
+  it('lists and uploads part pictures for that import, through the Worker without reading them', async () => {
+    const { cookie, result, importId } = await sent();
+    const where = new URLSearchParams({ documentId: result.documentId, elementId: result.elementId, importId: String(importId), workspaceId: '12' });
+    expect(await (await call(`/api/control-point/pictures?${where}`, { cookie })).json()).toEqual({ pictures: [] });
+    const [target] = pictureTargets(result);
+    const key = await controlPointPictureKey(result, target.line);
+    expect(key).toMatch(/^m:mv-1:[0-9a-f]{16}$/);
+    const body = JSON.stringify({ pictures: [{ identity: target.identity, key, contentBase64: btoa('PNG part') }] });
+    const stored = await call(`/api/control-point/pictures?${where}`, { cookie, method: 'POST', body, headers: { 'content-type': 'application/json', 'content-length': String(body.length) } });
+    expect(await stored.json()).toEqual({ stored: 1, unchanged: 0, unknown: 0, rejected: 0 });
+    expect(await (await call(`/api/control-point/pictures?${where}`, { cookie })).json()).toEqual({ pictures: [{ identity: target.identity, key }] });
+    const big = await call(`/api/control-point/pictures?${where}`, { cookie, method: 'POST', body, headers: { 'content-type': 'application/json', 'content-length': String(8 * 1024 * 1024 + 1) } });
+    expect(big.status).toBe(413);
+  });
+  it('serves a part picture already drawn with cached=1, and never asks Onshape for one that is not', async () => {
+    const cookie = await session();
+    const result = await scan(cookie);
+    const line = pictureTargets(result)[0].line;
+    const path = `/api/preview?${new URLSearchParams({ scanId: result.scanId!, line: line.bomLineKey })}`;
+    const before = onshape.apiRequests;
+    const missing = await call(`${path}&cached=1`, { cookie });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ code: 'not_cached' });
+    expect(onshape.apiRequests).toBe(before);
+    expect((await call(path, { cookie })).status).toBe(200);
+    expect(onshape.apiRequests).toBe(before + 1);
+    const cached = await call(`${path}&cached=1`, { cookie });
+    expect(cached.headers.get('content-type')).toBe('image/png');
+    expect(onshape.apiRequests).toBe(before + 1);
+  });
+});
+
+describe('AI review through Control Point (contract v1.2 §7)', () => {
+  const allowance = () => { const instance = new AiAllowance(memoryStorage()); return { idFromName: () => 'global', get: () => ({ fetch: (request: Request) => instance.fetch(request) }) }; };
+  const aiEnv = () => ({ ...env, AI_ALLOWANCE: allowance() }) as Env;
+  async function ready(config: Env) {
+    const cookie = await session();
+    await link(cookie);
+    await post(cookie, '/api/control-point/workspace', { workspaceId: 12 });
+    const result = await scan(cookie);
+    const line = result.lines[0];
+    const request = { version: 1, assembly: result.assemblyName, leftOut: 0, lines: [{ id: 'L1', name: line.name, description: null, material: null, partNumber: null, configuration: [], usedIn: [], quantity: 1,
+      source: 'this document', current: { disposition: 'review', suggestion: null, match: 'unmatched', reason: null, packUnknown: false }, candidates: [] }] };
+    const review = () => call('/api/ai/review', { cookie, config, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ documentId: result.documentId, scanId: result.scanId, request, keys: { L1: line.bomLineKey } }) });
+    return { cookie, result, review };
+  }
+  // Saved answers would otherwise carry from one test to the next.
+  beforeEach(() => { for (const key of [...env.APP_STATE.values.keys()]) if (key.startsWith('ai-')) env.APP_STATE.values.delete(key); });
+
+  it('is enabled for a person linked with a workspace when this Worker has no key, and says so', async () => {
+    const config = aiEnv();
+    const cookie = await session();
+    expect(await (await call('/api/ai/status', { cookie, config })).json()).toEqual({ enabled: false, linkToEnable: true });
+    await link(cookie);
+    expect(await (await call('/api/ai/status', { cookie, config })).json()).toMatchObject({ enabled: false });
+    await post(cookie, '/api/control-point/workspace', { workspaceId: 12 });
+    expect(await (await call('/api/ai/status', { cookie, config })).json()).toEqual({ enabled: true, via: 'control-point' });
+    // This Worker's own key wins.
+    expect(await (await call('/api/ai/status', { cookie, config: { ...config, GEMINI_API_KEY: 'own' } as Env })).json()).toEqual({ enabled: true, via: 'control-kit' });
+    expect(await (await call('/api/ai/status', { cookie, config: { ...config, AI_ALLOWANCE: undefined } as Env })).json()).toEqual({ enabled: false });
+  });
+  it('forwards the rebuilt request with the bearer token, keeps only valid items, and caches the answer here', async () => {
+    const config = aiEnv();
+    const { review, result } = await ready(config);
+    cp.setAiAnswer({ status: 200, body: { items: [
+      { id: 'L1', disposition: 'print', candidateId: null, confidence: 0.8, reason: 'Team-designed bracket' },
+      { id: 'L9', disposition: 'buy', candidateId: null, confidence: 0.9, reason: 'Not asked' },
+      { id: 'L1', disposition: 'buy', candidateId: 'rev:REV311152', confidence: 0.9, reason: 'Invented SKU' },
+    ], provider: 'gemini', usage: { inputTokens: 100, outputTokens: 20 } } });
+    const first = await review();
+    expect(first.status).toBe(200);
+    const body = await first.json();
+    expect(body).toEqual({ items: [{ id: 'L1', disposition: 'print', candidateId: null, confidence: 0.8, reason: 'Team-designed bracket' }], provider: 'gemini', cached: false, usage: { inputTokens: 100, outputTokens: 20 }, via: 'control-point' });
+    expect(JSON.stringify(body)).not.toContain('ckp_');
+    expect(cp.aiAsks).toHaveLength(1);
+    const ask = cp.aiAsks[0];
+    expect(ask.workspaceId).toBe(12);
+    expect(ask.ask).toMatchObject({ instructions: aiReviewInstructions, schema: expect.any(Object), geminiSchema: expect.any(Object), request: { version: 1, assembly: result.assemblyName, lines: [expect.objectContaining({ id: 'L1', name: result.lines[0].name })] } });
+    expect(cp.requests).toContain('POST /api/integrations/control-kit/workspaces/12/ai/review');
+    // The same request again is the saved answer: no second call to Control Point.
+    expect(await (await review()).json()).toMatchObject({ cached: true, via: 'control-point' });
+    expect(cp.aiAsks).toHaveLength(1);
+  });
+  it('passes on Control Point refusals in plain words, and ends the link on a revoked token', async () => {
+    const config = aiEnv();
+    const { review } = await ready(config);
+    cp.setAiAnswer(null);
+    const off = await review();
+    expect(off.status).toBe(501);
+    expect(await off.json()).toMatchObject({ code: 'ai_unavailable' });
+    cp.setAiAnswer({ status: 429, body: { error: 'rate_limited' } });
+    expect((await review()).status).toBe(429);
+    cp.setAiAnswer({ status: 502, body: { error: 'ai_failed' } });
+    expect((await review()).status).toBe(502);
+    expect(cp.aiAsks).toHaveLength(3);
+    cp.revokeAll();
+    const gone = await review();
+    expect(gone.status).toBe(409);
+    expect(await gone.json()).toMatchObject({ code: 'revoked', linked: false });
+    expect(await storedLink()).toBeNull();
+    // Unlinked and without a key of its own, the review is off again.
+    expect((await review()).status).toBe(501);
   });
 });
 
