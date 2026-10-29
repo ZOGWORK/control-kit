@@ -127,7 +127,48 @@ export function vendorTag(name: string): { vendor: VendorId; name: string } | nu
 }
 
 /** Normalized words of a library part name, with "6000rpm" and "Yellowjacket" split the way vendors write them. */
-const libraryWords = (value: string) => normalizeName(value.replace(/(\d)(rpm)\b/gi, '$1 $2').replace(/yellow ?jacket/gi, 'yellow jacket')).split(' ').filter(Boolean);
+/**
+ * A size written as one token ("8x14x5mm", "8 × 14 × 5 mm") is the same three sizes a vendor spells out
+ * ("8mm ID x 14mm OD, 5mm Thickness"), so it becomes "8mm 14mm 5mm".
+ */
+export const spellSizes = (value: string) => value.replace(/\b(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)(?:\s*[x×]\s*(\d+(?:\.\d+)?))?\s*mm\b/gi,
+  (_, a: string, b: string, c?: string) => [a, b, c].filter(Boolean).map(size => `${size}mm`).join(' '));
+const libraryWords = (value: string) => normalizeName(spellSizes(value).replace(/(\d)(rpm)\b/gi, '$1 $2').replace(/yellow ?jacket/gi, 'yellow jacket')).split(' ').filter(Boolean);
+/**
+ * Every number the part's name gives (sizes, tooth counts) appears in the product name, and sizes written as one token
+ * appear in the same order: "8x14x5mm" is bore, outside diameter, thickness, as vendors list them ("8mm ID x 14mm OD,
+ * 5mm Thickness"), so "5x14x8mm" is not that bearing.
+ */
+/** The sizes in normalized words, in order. Normalizing splits a decimal ("15.5mm" becomes "15 5mm"), so a bare number
+ * just before a size is joined back into it ("15.5mm"), the same way on both sides. */
+const sizeWords = (words: string[]) => words.flatMap((word, at) => {
+  if (!/^\d+mm$/.test(word)) return [];
+  return /^\d+$/.test(words[at - 1] ?? '') ? [`${words[at - 1]}.${word}`] : [word];
+});
+export const coversNumbers = (partName: string, normalizedProductName: string) => {
+  const productWords = libraryWords(normalizedProductName);
+  const product = new Set(productWords);
+  if (!libraryWords(partName).filter(word => /\d/.test(word)).every(word => product.has(word))) return false;
+  const sizes = partName.match(/\b\d+(?:\.\d+)?\s*[x×]\s*\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?)?\s*mm\b/gi) ?? [];
+  const productSizes = sizeWords(productWords);
+  return sizes.every(size => {
+    const wanted = sizeWords(libraryWords(spellSizes(size)));
+    let from = 0;
+    for (const word of wanted) { const at = productSizes.indexOf(word, from); if (at < 0) return false; from = at + 1; }
+    return true;
+  });
+};
+/**
+ * A bore the part names rules out products with the other bore: "Round Bore" is not goBILDA's 8mm REX (hex) bore,
+ * and "REX" or "hex" is not a round one. Null when the part names neither.
+ */
+export function boreConflict(partName: string, productName: string): boolean {
+  const part = partName.toLowerCase(), product = productName.toLowerCase();
+  const rex = /\b(?:rex|hex)\b/;
+  if (/\bround\s*bore\b/.test(part)) return rex.test(product);
+  if (rex.test(part)) return !rex.test(product);
+  return false;
+}
 
 /**
  * How much of a short library part name a vendor product name covers. Library names are terse ("Servo Hub") and vendor
