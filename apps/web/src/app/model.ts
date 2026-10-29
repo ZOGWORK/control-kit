@@ -115,15 +115,22 @@ export const matchedText = (name: string, record: VendorRecord) => `${name} matc
 /** A path segment without Onshape's instance number: "Right Pod <2>" is "Right Pod". */
 const segment = (name: string) => name.replace(/\s*<\d+>$/, '').trim();
 /**
- * The subassembly a part sits directly in, by its first placement ("Robot > Right Pod <1> > Intake <1> > Roller" is
- * "Intake"), or null for a part placed at the top level of the assembly.
+ * The subassembly a part sits directly in, by its first placement: its name and its path from the top without instance
+ * numbers ("Robot > Right Pod <1> > Intake <1> > Roller" is Intake at ["Right Pod", "Intake"]). The path keeps two
+ * unrelated subassemblies of one name (an Intake in each pod) apart, while every copy of one subassembly ("Pod <1>" and
+ * "Pod <2>") is the same. Null for a part placed at the top level of the assembly.
  */
-export function subassemblyOf(line: BomLine): string | null {
-  const parts = line.instancePaths[0]?.split(' > ') ?? [];
-  return parts.length > 2 ? segment(parts[parts.length - 2]) : null;
+export type Subassembly = { name: string; path: string[] };
+const ancestors = (path: string) => path.split(' > ').slice(1, -1).map(segment);
+export function subassemblyOf(line: BomLine): Subassembly | null {
+  const path = line.instancePaths[0] ? ancestors(line.instancePaths[0]) : [];
+  return path.length ? { name: path[path.length - 1], path } : null;
 }
-/** Whether any placement of the part sits inside a subassembly of that name, at any depth. */
-export const inSubassembly = (line: BomLine, name: string) => line.instancePaths.some(path => path.split(' > ').slice(1, -1).some(part => segment(part) === name));
+/** Whether any placement of the part sits inside that subassembly, at any depth below it. */
+export const inSubassembly = (line: BomLine, sub: Subassembly) => line.instancePaths.some(path => {
+  const above = ancestors(path);
+  return above.length >= sub.path.length && sub.path.every((part, index) => above[index] === part);
+});
 
 /**
  * The part a drawer moves to after a choice: the next one after `current` in the list it was opened from that is still

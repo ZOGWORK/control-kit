@@ -4,7 +4,7 @@ import { Alert } from '../components/arc/alert/alert';
 import SegmentedControl from '../components/arc/segmented-control/segmented-control';
 import type { ControlKit } from './useControlKit';
 import { aiCandidateRecord, needsAiReview, type BomLine, type ClassificationOverride } from '@control-kit/shared';
-import { catalogsComplete, inReview, queueKind, inSubassembly, matchedText, money, productOptions, reviewQueue, shortLabel, subassemblyOf, vendorLabel, vendorLookup, type QueueKind } from './model';
+import { catalogsComplete, inReview, queueKind, inSubassembly, matchedText, money, productOptions, reviewQueue, shortLabel, subassemblyOf, vendorLabel, vendorLookup, type QueueKind, type Subassembly } from './model';
 import { CheckCircle2, ExternalLink, ListChecks } from 'lucide-react';
 import { Button, PartMeta, SectionHead, Thumbnail } from './bits';
 import type { Open, ReviewFilter } from './App';
@@ -61,7 +61,8 @@ export function Review({ kit, open, filter, setFilter }: { kit: ControlKit; open
 
   // Selected parts, by line key, for one type at once. A part that leaves Review leaves the selection.
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const anchor = useRef<number | null>(null);
+  // The last row clicked, by line key: rows move as parts leave or the filter changes, so its position is looked up again.
+  const anchor = useRef<string | null>(null);
   const [bulkNote, setBulkNote] = useState<{ tone: 'danger' | 'success'; text: string } | null>(null);
   const [bulkRunning, setBulkRunning] = useState(false);
   const queuedKeys = new Set(queue.map(item => item.line.bomLineKey));
@@ -71,12 +72,13 @@ export function Review({ kit, open, filter, setFilter }: { kit: ControlKit; open
   const toggle = (index: number, event: MouseEvent<HTMLInputElement>) => {
     const key = visible[index].line.bomLineKey;
     const on = !selected.has(key);
-    const from = event.shiftKey && anchor.current !== null ? Math.min(anchor.current, index) : index;
-    const to = event.shiftKey && anchor.current !== null ? Math.max(anchor.current, index) : index;
+    // An anchor no longer shown (decided, or filtered out) starts no range.
+    const at = event.shiftKey && anchor.current ? visible.findIndex(item => item.line.bomLineKey === anchor.current) : -1;
+    const [from, to] = at < 0 ? [index, index] : [Math.min(at, index), Math.max(at, index)];
     setSelected(current => { const next = new Set(current); for (const item of visible.slice(from, to + 1)) if (on) next.add(item.line.bomLineKey); else next.delete(item.line.bomLineKey); return next; });
-    anchor.current = index;
+    anchor.current = key;
   };
-  const selectSubassembly = (name: string) => setSelected(current => new Set([...current, ...items.filter(item => inSubassembly(item.line, name)).map(item => item.line.bomLineKey)]));
+  const selectSubassembly = (sub: Subassembly) => setSelected(current => new Set([...current, ...items.filter(item => inSubassembly(item.line, sub)).map(item => item.line.bomLineKey)]));
   async function applyType(choice: ClassificationOverride) {
     setBulkRunning(true); setBulkNote(null);
     try {
@@ -113,7 +115,7 @@ export function Review({ kit, open, filter, setFilter }: { kit: ControlKit; open
       if (key === 'arrowdown' || key === 'j') setActive(index => Math.min(index + 1, visible.length - 1));
       else if (key === 'arrowup' || key === 'k') setActive(index => Math.max(index - 1, 0));
       else if (key === 'enter') openPart(line.bomLineKey);
-      else if (key === ' ') { const index = Math.min(active, visible.length - 1); setSelected(now => { const next = new Set(now); if (next.has(line.bomLineKey)) next.delete(line.bomLineKey); else next.add(line.bomLineKey); return next; }); anchor.current = index; }
+      else if (key === ' ') { setSelected(now => { const next = new Set(now); if (next.has(line.bomLineKey)) next.delete(line.bomLineKey); else next.add(line.bomLineKey); return next; }); anchor.current = line.bomLineKey; }
       else if (!ready) return;
       else if (key === 'a') {
         if (kind === 'match' || (kind === 'product' && line.matchStatus === 'possible' && line.vendor)) void kit.decide(line, 'confirmed');
@@ -190,7 +192,7 @@ export function Review({ kit, open, filter, setFilter }: { kit: ControlKit; open
             <span className="muted small">{kind === 'match' ? `Possible match: ${vendorLabel[line.vendor!.vendorId]} ${line.vendor!.sku}, ${line.vendor!.name}` : kind === 'product' ? productReason(line, complete, options.length, Boolean(lookup)) : line.reviewReason ?? (line.vendor && !line.vendor.packSizeVerified ? 'Pack size unknown, so no total yet' : '')}</span>
             {line.aiSuggestion && <span className="small">{aiText(line)}</span>}
             {busy && <span className="small muted" role="status">Saving…</span>}
-            {siblings > 1 && <button type="button" className="link-button small sub-select" onClick={() => selectSubassembly(sub!)}><span>Select all {siblings} in {sub}</span></button>}
+            {siblings > 1 && <button type="button" className="link-button small sub-select" onClick={() => selectSubassembly(sub!)}><span>Select all {siblings} in {sub!.name}</span></button>}
           </div>
           <div className="row-aside">
             {line.aiSuggestion && <>

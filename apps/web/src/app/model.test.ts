@@ -166,12 +166,18 @@ describe('Control Kit view model', () => {
     const roller = line('Roller', 'Robot > Right Pod <1> > Intake <1> > Roller <1>', 'Robot > Left Pod <1> > Intake <2> > Roller <1>');
     const plate = line('Plate', 'Robot > Right Pod <2> > Plate <1>');
     const top = line('Frame', 'Robot > Frame <1>');
-    expect([subassemblyOf(roller), subassemblyOf(plate), subassemblyOf(top)]).toEqual(['Intake', 'Right Pod', null]);
-    expect(inSubassembly(roller, 'Right Pod')).toBe(true);
-    expect(inSubassembly(roller, 'Left Pod')).toBe(true);
-    expect(inSubassembly(plate, 'Intake')).toBe(false);
+    const leftIntake = line('Intake roller', 'Robot > Left Pod <1> > Intake <1> > Intake roller <1>');
+    const rightIntake = subassemblyOf(roller)!;
+    expect(rightIntake).toEqual({ name: 'Intake', path: ['Right Pod', 'Intake'] });
+    expect(subassemblyOf(plate)).toEqual({ name: 'Right Pod', path: ['Right Pod'] });
+    expect(subassemblyOf(top)).toBeNull();
+    // Every copy of the right pod is the same subassembly; the left pod's Intake is a different one of the same name.
+    expect(inSubassembly(plate, { name: 'Right Pod', path: ['Right Pod'] })).toBe(true);
+    expect(inSubassembly(roller, { name: 'Right Pod', path: ['Right Pod'] })).toBe(true);
+    expect(inSubassembly(leftIntake, rightIntake)).toBe(false);
+    expect(inSubassembly(plate, rightIntake)).toBe(false);
     // The part itself is not its own subassembly.
-    expect(inSubassembly(top, 'Frame')).toBe(false);
+    expect(inSubassembly(top, { name: 'Frame', path: ['Frame'] })).toBe(false);
   });
   it('moves the drawer to the next part still in its list, wrapping to skipped ones, and closes when none is left', () => {
     const keys = ['a', 'b', 'c', 'd'];
