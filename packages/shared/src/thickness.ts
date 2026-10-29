@@ -39,9 +39,10 @@ function configurationPairs(configuration: string | null) {
 
 /**
  * A part's thickness when its name, description, or configuration states it: a thickness configuration value, a
- * phrase like "6mm thick" or "thickness 1/8 in", the last of "300x200x3mm", or else the one length of an inch or
- * less in the text ("3mm plate", "1/8 in Side Plate"). Longer lengths are sizes, not thickness, and two different
- * short lengths are ambiguous, so neither gives a thickness.
+ * phrase like "6mm thick" or "thickness 1/8 in", the smallest of "300x200x3mm", or else the one length of an inch or
+ * less in the name or description ("3mm plate", "1/8 in Side Plate"). Longer lengths are sizes, lengths named as
+ * holes, spacing, and the like are other dimensions, and two different short lengths are ambiguous, so none of them
+ * gives a thickness.
  */
 export function statedThicknessMm(line: Pick<BomLine, 'name' | 'description' | 'configuration'>): { mm: number; from: 'name' | 'configuration' } | null {
   const pairs = configurationPairs(line.configuration);
@@ -56,12 +57,15 @@ export function statedThicknessMm(line: Pick<BomLine, 'name' | 'description' | '
   if (explicit) { const mm = toMm(explicit[1], explicit[2]); if (Number.isFinite(mm) && mm > 0) return { mm, from: 'name' }; }
   const triple = text.match(new RegExp(String.raw`(\d*\.?\d+)\s*[x×]\s*(\d*\.?\d+)\s*[x×]\s*(\d*\.?\d+)\s*${unit}`, 'i'));
   if (triple) { const mm = Math.min(...[triple[1], triple[2], triple[3]].map(item => toMm(item, triple[4]))); if (Number.isFinite(mm) && mm > 0) return { mm, from: 'name' }; }
-  // Sizes written as "100x60mm" are not thickness: drop them before looking for a lone short length.
-  const loose = text.replace(new RegExp(String.raw`(\d*\.?\d+)\s*[x×]\s*(\d*\.?\d+)\s*${unit}`, 'gi'), ' ');
-  const configured = pairs.map(pair => pair.value).join(' ');
-  const short = [...new Set([...lengths(loose), ...lengths(configured)].filter(mm => mm <= 25.4 + toleranceMm).map(mm => Math.round(mm * 1000) / 1000))];
-  if (short.length === 1) return { mm: short[0], from: lengths(loose).some(mm => Math.abs(mm - short[0]) < 0.001) ? 'name' : 'configuration' };
-  return null;
+  // Sizes written as "100x60mm", and lengths named as another dimension ("8mm hole spacing", "bore 5mm"), are
+  // not thickness: drop them before looking for a lone short length. Configuration values count only under a
+  // thickness key (above); any other ("Hole_Spacing=8+mm") is some other dimension. Unknown is left to the geometry.
+  const other = String.raw`hole|holes|bore|spacing|pitch|radius|fillet|chamfer|slot|dia(?:meter)?|grid|pattern|offset|bolt|screw|wide|width|long|length|tall|height`;
+  const loose = text.replace(new RegExp(String.raw`(\d*\.?\d+)\s*[x×]\s*(\d*\.?\d+)\s*${unit}`, 'gi'), ' ')
+    .replace(new RegExp(`${number}\\s*${unit}\\s*(?:${other})\\b`, 'gi'), ' ')
+    .replace(new RegExp(`\\b(?:${other})\\s*[:=]?\\s*${number}\\s*${unit}`, 'gi'), ' ');
+  const short = [...new Set(lengths(loose).filter(mm => mm <= 25.4 + toleranceMm).map(mm => Math.round(mm * 1000) / 1000))];
+  return short.length === 1 ? { mm: short[0], from: 'name' } : null;
 }
 
 /**

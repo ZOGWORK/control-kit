@@ -60,5 +60,10 @@ describe('flat parts: 2D cut at 3 mm or less, 3D print above (owner rule, 2026-1
     expect(stated('120mm plate')).toBeNull();
     expect(stated('Plate 2mm 4mm')).toBeNull();
     expect(stated('Plate', 'Thickness=1.5+mm')).toBe(1.5);
+    // Other dimensions are not thickness, whether configured or named.
+    expect(stated('Side Plate', 'Hole_Spacing=8+mm')).toBeNull();
+    expect(classify(line('Side Plate', { configuration: 'Hole_Spacing=8+mm' })).disposition).toBe('cut-2d');
+    expect(stated('Side Plate 8mm hole spacing')).toBeNull();
+    expect(stated('Side Plate bore 5mm 2mm')).toBe(2);
   });
 });

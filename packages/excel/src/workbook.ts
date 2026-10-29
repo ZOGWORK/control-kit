@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from 'fflate';
-import { dxfFileName, isBundle, metadataIssueText, stepFileName, wantsDxf, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorRecord } from '../../shared/src/index';
+import { dxfFileName, isBundle, maxCutThicknessMm, metadataIssueText, statedThicknessMm, stepFileName, wantsDxf, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorRecord } from '../../shared/src/index';
 
 type Cell = { col: number; type: 's' | 'n' | 'f'; value: string | number; style: number; cached?: number };
 type Sheet = { name: string; rows: Map<number, Cell[]>; widths: number[]; fixed: Record<number, number>; merges: string[]; links: { cell: string; url: string }[]; filter?: string; frozen?: number; landscape?: boolean; drawing?: boolean; tall?: number[] };
@@ -203,7 +203,9 @@ function makeSheet(result: ScanResult, now: Date) {
     put(target, row, 5, line.material ?? '', body);
     const file = files.get(line.bomLineKey) ?? '';
     put(target, row, 6, file, body);
-    put(target, row, 7, file && wantsDxf(line) ? dxfFileName(file) : '', body);
+    // Without a stated thickness the export measures the part, and one over 3 mm is printed instead, so the name is conditional.
+    const dxf = file && wantsDxf(line) ? dxfFileName(file) : '';
+    put(target, row, 7, dxf && line.dispositionSource !== 'manual' && !statedThicknessMm(line) ? `${dxf} (if ${maxCutThicknessMm} mm thick or less; otherwise 3D printed)` : dxf, body);
     put(target, row, 8, 'Open Part Studio', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
     put(target, row, 9, line.dispositionEvidence.join('; '), band(index, S.wrap, S.wrapAlt));
   });
