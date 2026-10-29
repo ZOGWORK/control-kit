@@ -386,6 +386,12 @@ describe('parts library vendor tags', () => {
     const [round, rex, unsized, reordered] = result.lines;
     // The same numbers in another order are another bearing (5mm bore, 8mm thick), so it is never matched exactly.
     expect(reordered.matchStatus).not.toBe('exact');
+    // A decimal size keeps its place: goBILDA's 8mm x 15.5mm x 5mm thrust bearing.
+    clearCatalogMemoryCache();
+    const thrust = lines({ name: '8x15.5x5mm Thrust Bearing (GB)' });
+    await enrichScan(thrust, catalog([...shelf, ...bearings, record('gobilda', '1613-0515-0008', '1613 Series Thrust Ball Bearing (8mm ID x 15.5mm OD, 5mm Thickness)', 2.99)]));
+    expect(thrust.lines[0]).toMatchObject({ matchStatus: 'exact' });
+    expect(thrust.lines[0].vendor?.sku).toBe('1613-0515-0008');
     expect(round).toMatchObject({ matchStatus: 'exact' });
     expect(round.vendor?.sku).toBe('1611-0514-0008');
     expect(round.matchReasons[0]).toContain('every size in the name');

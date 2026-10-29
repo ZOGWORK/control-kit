@@ -139,14 +139,20 @@ const libraryWords = (value: string) => normalizeName(spellSizes(value).replace(
  * appear in the same order: "8x14x5mm" is bore, outside diameter, thickness, as vendors list them ("8mm ID x 14mm OD,
  * 5mm Thickness"), so "5x14x8mm" is not that bearing.
  */
+/** The sizes in normalized words, in order. Normalizing splits a decimal ("15.5mm" becomes "15 5mm"), so a bare number
+ * just before a size is joined back into it ("15.5mm"), the same way on both sides. */
+const sizeWords = (words: string[]) => words.flatMap((word, at) => {
+  if (!/^\d+mm$/.test(word)) return [];
+  return /^\d+$/.test(words[at - 1] ?? '') ? [`${words[at - 1]}.${word}`] : [word];
+});
 export const coversNumbers = (partName: string, normalizedProductName: string) => {
   const productWords = libraryWords(normalizedProductName);
   const product = new Set(productWords);
   if (!libraryWords(partName).filter(word => /\d/.test(word)).every(word => product.has(word))) return false;
   const sizes = partName.match(/\b\d+(?:\.\d+)?\s*[x×]\s*\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?)?\s*mm\b/gi) ?? [];
-  const productSizes = productWords.filter(word => /^\d+(?:\.\d+)?mm$/.test(word));
+  const productSizes = sizeWords(productWords);
   return sizes.every(size => {
-    const wanted = libraryWords(spellSizes(size));
+    const wanted = sizeWords(libraryWords(spellSizes(size)));
     let from = 0;
     for (const word of wanted) { const at = productSizes.indexOf(word, from); if (at < 0) return false; from = at + 1; }
     return true;
