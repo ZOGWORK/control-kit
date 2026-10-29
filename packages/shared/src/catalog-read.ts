@@ -1,6 +1,6 @@
-import { configurationValues, findBestMatch, findLibraryMapping, libraryMapKey, nameCoverage, nameSimilarity, vendorTag, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates, type LibraryMapping, type MatchResult, type VendorId, type VendorRecord } from './matching';
+import { boreConflict, configurationValues, coversNumbers, findBestMatch, findLibraryMapping, libraryMapKey, nameCoverage, nameSimilarity, vendorTag, normalizeName, normalizeSku, rankVendorAlternatives, skuCandidates, spellSizes, type LibraryMapping, type MatchResult, type VendorId, type VendorRecord } from './matching';
 import { decisionRecord, recalculatePurchasing, type MatchDecision, type ScanResult } from './index';
-import { knownProduct, withKnownPack } from './known-products';
+import { knownProduct, successorOf, withKnownPack } from './known-products';
 
 /**
  * Reading published vendor catalogs. Storage layout (written by the Worker's ingestion and staged publish):
@@ -190,17 +190,35 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
     // Without that vendor's catalog the part stays unmatched rather than falling back to another vendor.
     if (tag && !tagged) match = { vendor: null, confidence: 0, status: 'unmatched', reasons: [`no published ${tag.vendor} catalog to match "${tag.name}"`] };
     if (tag && tagged) {
-      const wanted = [tag.name, ...configurationValues(line.configuration)].join(' ');
+      // Sizes in the name ("8x14x5mm") outrank a configuration's own size field, which may be written another way.
+      const namedSizes = spellSizes(tag.name) !== tag.name;
+      const wanted = [tag.name, ...configurationValues(line.configuration).filter(value => !(namedSizes && /\d\s*[x×]\s*\d/i.test(value)))].join(' ');
       const positions = new Set<number>();
-      for (const token of tokensOf(wanted.replace(/(\d)(rpm)\b/gi, '$1 $2'))) for (const position of tagged.byToken.get(token) ?? []) positions.add(position);
-      const ranked = [...positions].map(position => [position, nameCoverage(wanted, tagged.entries[position][1])] as const)
+      for (const token of tokensOf(spellSizes(wanted).replace(/(\d)(rpm)\b/gi, '$1 $2'))) for (const position of tagged.byToken.get(token) ?? []) positions.add(position);
+      const ranked = [...positions].filter(position => !boreConflict(tag.name, tagged.entries[position][1]))
+        .map(position => [position, nameCoverage(wanted, tagged.entries[position][1])] as const)
         .filter(([, score]) => score >= 0.5).sort((a, b) => b[1] - a[1] || a[0] - b[0]);
       const close = ranked.filter(([, score]) => ranked[0][1] - score <= 0.25).slice(0, 4);
       const records = (await Promise.all(close.map(async ([position]) => (await batch(tagged, tagged.entries[position][2])).get(tagged.entries[position][0]) ?? null)))
         .filter((record): record is VendorRecord => Boolean(record));
-      match = records.length ? { vendor: records[0], confidence: 0.9, status: 'possible', choices: records,
-        reasons: [`"(${line.name.match(/\(([^)]*)\)\s*$/)![1]})" in the name means ${tag.vendor}; closest products by name and configuration, confirm which one`] }
+      const named = `"(${line.name.match(/\(([^)]*)\)\s*$/)![1]})" in the name means ${tag.vendor}`;
+      // One product left that carries every size and number the part names is that product: the tag fixes the vendor
+      // and the numbers fix the item ("8x14x5mm Bearing - Round Bore (GB)" is goBILDA's 8mm x 14mm x 5mm round-bore bearing).
+      match = records.length === 1 && /\d/.test(tag.name) && coversNumbers(tag.name, records[0].normalizedName)
+        ? { vendor: records[0], confidence: 1, status: 'exact', reasons: [`${named}, and its only product with every size in the name is ${records[0].sku}`] }
+        : records.length ? { vendor: records[0], confidence: 0.9, status: 'possible', choices: records, reasons: [`${named}; closest products by name and configuration, confirm which one`] }
         : { vendor: null, confidence: 0, status: 'unmatched', reasons: [`no ${tag.vendor} product matches "${tag.name}"`] };
+    }
+    // A part numbered with a SKU its vendor has discontinued is ordered as the product sold in its place.
+    // Every discontinued number the part carries counts: a part number and a name that name different old products
+    // (a hub and a servo) leave all their replacements as choices rather than pricing one of them.
+    const retired = !mapped && match.status !== 'exact' ? [...new Map(skus.map(successorOf).filter(item => item !== null).map(item => [item.old, item])).values()] : [];
+    if (retired.length) {
+      const wanted = [...new Map(retired.flatMap(item => item.skus).map(([vendor, sku]) => [`${vendor}:${sku}`, [vendor, sku] as const])).values()];
+      const records = (await Promise.all(wanted.map(([vendor, sku]) => recordAt(vendor, sku)))).filter((record): record is VendorRecord => Boolean(record));
+      const said = retired.map(item => `${item.old} is discontinued; ${item.product} is sold as ${item.skus.map(([, sku]) => sku).join(' or ')}`).join('. ');
+      if (records.length === 1 && wanted.length === 1) match = { vendor: records[0], confidence: 1, status: 'exact', reasons: [said] };
+      else if (records.length) match = { vendor: records[0], confidence: 0.9, status: 'possible', choices: records, reasons: [`${said}; pick one`] };
     }
     // A part named exactly like a known FTC product ("Pinpoint", "Control Hub") is that product; with several SKUs, a person picks.
     const found = !mapped && match.status !== 'exact' ? knownProduct(tag ? tag.name : line.name) : null;

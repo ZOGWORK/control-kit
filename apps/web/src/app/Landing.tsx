@@ -7,7 +7,7 @@ import { Policy, PolicyLinks, policyPages, type PolicyPage } from './Policies';
  * screenshots of a scanned FTC robot (HORS), and how to install it. Inside Onshape the panel always has assembly context.
  */
 const appStoreUrl = 'https://cad.onshape.com/appstore';
-// Set to true once Onshape publishes the listing; until then the page says the listing is pending.
+// Set to true once Onshape publishes the listing; until then the page says Control Kit is not listed yet.
 const listed = false;
 
 const features: Array<{ icon: ReactNode; title: string; text: string; image: string; alt: string }> = [
@@ -33,7 +33,7 @@ export function Landing() {
         <a className="landing-cta" href="#install">How to install</a>
         <a className="landing-link" href={appStoreUrl} target="_blank" rel="noopener noreferrer">Onshape App Store</a>
       </div>
-      {!listed && <p className="muted small">Control Kit's App Store listing is waiting for Onshape's review. The steps below work once it is listed.</p>}
+      {!listed && <p className="muted small">Control Kit is not in the Onshape App Store yet. The steps below work once it is listed.</p>}
       <img className="landing-shot" src="/listing/in-onshape.webp" width={2000} height={1000} alt="Control Kit scanning the HORS robot in Onshape's right panel, beside the 3D assembly" />
     </header>
 

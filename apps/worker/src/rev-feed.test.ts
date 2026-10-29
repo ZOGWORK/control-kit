@@ -341,14 +341,16 @@ describe('a REV buy line from the feed', () => {
     const context = { documentId: 'doc1', workspaceOrVersion: 'w' as const, workspaceOrVersionId: 'work1', elementId: 'elem1' };
     const result = aggregateAssembly(fixture, context, 'Robot');
     const base = result.lines[0];
-    result.lines = [{ ...base, name: 'Control Hub', partNumber: 'REV-31-1595', bomLineKey: 'hub', qty: 2 }, { ...base, name: 'Old Control Hub', partNumber: 'REV-31-1152', bomLineKey: 'old-hub', partId: 'old-hub', qty: 1 }];
+    result.lines = [{ ...base, name: 'Control Hub', partNumber: 'REV-31-1595', bomLineKey: 'hub', qty: 1 }, { ...base, name: 'Old Control Hub', partNumber: 'REV-31-1152', bomLineKey: 'old-hub', elementId: 'old-hub-studio', partId: 'old-hub', qty: 1 }];
     classifyScan(await enrichScan(result, kv), { teamNumber: null }, {});
     const hub = result.lines.find(line => line.bomLineKey === 'hub')!;
+    // The old hub is ordered as its successor, so the order is two hubs on the lead line.
     expect(hub).toMatchObject({ disposition: 'buy', matchStatus: 'exact', packsToOrder: 2, lineTotalUsd: 750 });
     expect(hub.vendor).toMatchObject({ sku: 'REV-31-1595', priceUsd: 375, url: 'https://www.revrobotics.com/rev-31-1595/', updatedAt: feedTime, parser: 'official-feed' });
-    // A part numbered with the discontinued SKU finds nothing: it was not in the feed, so no product or price is made up.
+    // The discontinued SKU itself never comes back: a part numbered with it is ordered as REV's current Control Hub.
     const old = result.lines.find(line => line.bomLineKey === 'old-hub')!;
-    expect(old.vendor?.sku).not.toBe('REV-31-1152');
+    expect(old.vendor?.sku).toBe('REV-31-1595');
+    expect(old.matchReasons[0]).toContain('REV-31-1152 is discontinued');
     expect(old.lineTotalUsd).toBeNull();
   });
 });
