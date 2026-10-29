@@ -180,8 +180,13 @@ describe('Onshape OAuth and session against mock Onshape', () => {
   it('keeps only the Onshape id and name, refreshes the session at most daily, and refuses cross-site logout', async () => {
     const start = await call('/oauth/start');
     const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
-    const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
-    expect(Object.keys((await (await call('/api/session', cookie)).json()).user).sort()).toEqual(['id', 'name']);
+    const issued = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!;
+    const cookie = issued.split(';')[0];
+    // The session cookie outlives the browser: 30 days, like the stored session, restarted on each panel load.
+    expect(issued).toMatch(/^controlkit_session=[^;]+; HttpOnly; Secure; SameSite=None; Path=\/; Max-Age=2592000/);
+    const panel = await call('/api/session', cookie);
+    expect(panel.headers.get('set-cookie')).toBe(`${cookie}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=2592000`);
+    expect(Object.keys((await panel.json()).user).sort()).toEqual(['id', 'name']);
     const key = `session:${cookie.split('=')[1]}`;
     const saved = env.APP_STATE.values.get(key);
     await call('/api/session', cookie);
