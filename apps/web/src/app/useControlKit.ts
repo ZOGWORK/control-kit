@@ -465,11 +465,16 @@ export function useControlKit(context: URLSearchParams) {
       if (saving.has(line.bomLineKey)) { failed.push(line); return false; }
       return true;
     });
+    // A part the person changed after choosing the batch (in the drawer, or a row button while it waited in the queue)
+    // keeps that newer choice: it is skipped, not overwritten, and counts as neither saved nor failed.
+    const edited = editedSince({ clock: editClock.current, saving: new Set(savingNow.current) });
+    const rowsOf = (line: BomLine) => (resultRef.current?.lines ?? []).filter(item => classificationIdentity(item) === classificationIdentity(line)).map(item => item.bomLineKey);
     let next = 0;
     const worker = async () => {
       while (next < todo.length) {
         const line = todo[next++];
         if (generation !== scanGeneration.current) { failed.push(line); continue; }
+        if ([line.bomLineKey, ...rowsOf(line)].some(key => edited('type', key))) continue;
         markSaving(line.bomLineKey, true, 'type');
         try { (await saveChoice(line, choice) ? saved : failed).push(line); }
         finally { markSaving(line.bomLineKey, false, 'type'); }

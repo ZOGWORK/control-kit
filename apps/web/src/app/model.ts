@@ -78,14 +78,14 @@ export type QueueKind = 'match' | 'suggested' | 'undecided' | 'product';
 export type QueueItem = { line: BomLine; kind: QueueKind };
 /** Whether a line waits in Review: its type is undecided, or it is to be bought but no product matched. */
 export const inReview = (line: BomLine) => line.disposition === 'review' || needsProduct(line);
+/** The Review group a line waiting in Review belongs to. */
+export const queueKind = (line: BomLine): QueueKind => line.disposition === 'buy' ? 'product' : line.matchStatus === 'possible' && line.vendor ? 'match' : line.suggestedDisposition ? 'suggested' : 'undecided';
 /**
  * Possible vendor matches first (one click settles both identity and Buy), then suggestions, then open questions, then
  * parts to buy that still need their product.
  */
 export function reviewQueue(result: ScanResult): QueueItem[] {
-  const items = result.lines.filter(inReview).map((line): QueueItem => ({
-    line, kind: line.disposition === 'buy' ? 'product' : line.matchStatus === 'possible' && line.vendor ? 'match' : line.suggestedDisposition ? 'suggested' : 'undecided',
-  }));
+  const items = result.lines.filter(inReview).map((line): QueueItem => ({ line, kind: queueKind(line) }));
   const order: Record<QueueKind, number> = { match: 0, suggested: 1, undecided: 2, product: 3 };
   return items.sort((a, b) => order[a.kind] - order[b.kind] || b.line.qty - a.line.qty || a.line.name.localeCompare(b.line.name));
 }

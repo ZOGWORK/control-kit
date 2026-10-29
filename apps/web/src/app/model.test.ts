@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateAssembly, classifyScan, recalculatePurchasing, type AssemblyInstance, type BomLine, type ScanResult, type VendorRecord } from '@control-kit/shared';
-import { buyList, catalogState, catalogStateText, catalogsComplete, composition, feedDates, filterParts, findParts, hasChanges, inReview, inSubassembly, matchedText, money, movedText, needsProduct, nextInList, priceDate, primaryAction, productOptions, readiness, reviewQueue, makeListKey, scanChanges, staleCatalogs, subassemblyOf, summarize, topCosts, workspaceAccent } from './model';
+import { buyList, catalogState, catalogStateText, catalogsComplete, composition, feedDates, filterParts, findParts, hasChanges, inReview, inSubassembly, matchedText, money, movedText, needsProduct, nextInList, priceDate, primaryAction, productOptions, queueKind, readiness, reviewQueue, makeListKey, scanChanges, staleCatalogs, subassemblyOf, summarize, topCosts, workspaceAccent } from './model';
 
 const vendor = (sku: string, packSize: number | null, priceUsd: number | null): VendorRecord => ({ vendorId: 'gobilda', sku, normalizedSku: sku.replace(/\D/g, ''), name: 'Screw', normalizedName: 'screw', url: 'https://www.gobilda.com/x/',
   priceUsd, packSize, packSizeVerified: packSize !== null, stock: 'in', stockQty: null, category: 'hardware', updatedAt: '2026-10-24T00:00:00Z', source: 'sitemap' });
@@ -133,6 +133,8 @@ describe('Control Kit view model', () => {
     const bearing = result.lines.find(line => line.partId === 'bearing')!;
     const motor = result.lines.find(line => line.partId === 'motor')!;
     expect([bearing.disposition, motor.disposition]).toEqual(['buy', 'buy']);
+    // Their group is No product, so a drawer working through another group never returns to them.
+    expect([queueKind(bearing), queueKind(motor)]).toEqual(['product', 'product']);
     expect(result.lines.filter(needsProduct).map(line => line.partId).sort()).toEqual(['bearing', 'motor']);
     const summary = summarize(result);
     expect(summary).toMatchObject({ review: 1, unmatched: 2, toReview: 3 });

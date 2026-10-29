@@ -4,7 +4,7 @@ import { Alert } from '../components/arc/alert/alert';
 import SegmentedControl from '../components/arc/segmented-control/segmented-control';
 import type { ControlKit } from './useControlKit';
 import { aiCandidateRecord, needsAiReview, type BomLine, type ClassificationOverride } from '@control-kit/shared';
-import { catalogsComplete, inReview, inSubassembly, matchedText, money, productOptions, reviewQueue, shortLabel, subassemblyOf, vendorLabel, vendorLookup, type QueueKind } from './model';
+import { catalogsComplete, inReview, queueKind, inSubassembly, matchedText, money, productOptions, reviewQueue, shortLabel, subassemblyOf, vendorLabel, vendorLookup, type QueueKind } from './model';
 import { CheckCircle2, ExternalLink, ListChecks } from 'lucide-react';
 import { Button, PartMeta, SectionHead, Thumbnail } from './bits';
 import type { Open, ReviewFilter } from './App';
@@ -52,7 +52,11 @@ export function Review({ kit, open, filter, setFilter }: { kit: ControlKit; open
   // the view returns to all.
   useEffect(() => { if ((filter === 'ai' || filter === 'product') && !items.length) setFilter('all'); }, [filter, items.length]);
   // The drawer moves through this same list, in this order, while its parts are still in Review.
-  const list = { keys: items.map(item => item.line.bomLineKey), listed: (line: BomLine) => inReview(line) || Boolean(line.aiSuggestion) };
+  // A part counts as still listed only while it is in the group shown: one marked Buy from Undecided has moved to No
+  // product, so working through Undecided never wraps back to it.
+  const listed = (line: BomLine) => filter === 'all' ? inReview(line) || Boolean(line.aiSuggestion)
+    : filter === 'ai' ? Boolean(line.aiSuggestion) && !inReview(line) : inReview(line) && queueKind(line) === filter;
+  const list = { keys: items.map(item => item.line.bomLineKey), listed };
   const openPart = (key: string) => open(key, list);
 
   // Selected parts, by line key, for one type at once. A part that leaves Review leaves the selection.
