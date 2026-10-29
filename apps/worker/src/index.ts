@@ -22,6 +22,13 @@ type OAuthState = { context?: Record<string, string>; redirectOnshapeUri?: strin
 const cookieName = 'controlkit_session';
 // SameSite=None is required because Onshape embeds Control Kit in a cross-site iframe.
 const cookieFlags = 'HttpOnly; Secure; SameSite=None; Path=/';
+/**
+ * A session lasts 30 days from its last use, in KV and in the browser alike. Without Max-Age the cookie was a browser
+ * session cookie, dropped whenever the browser closed, so people had to connect Onshape again though the session was
+ * still stored.
+ */
+const sessionTtl = 30 * 86400;
+const sessionCookie = (id: string) => `${cookieName}=${id}; ${cookieFlags}; Max-Age=${sessionTtl}`;
 const encode = new TextEncoder();
 const random = () => crypto.randomUUID();
 async function lineKeyDigest(lineKey: string) {
@@ -114,7 +121,7 @@ async function getSession(request: Request, env: Env) {
   if (!id || !value) return null;
   try { return { id, data: await unseal<Session>(env, value) }; } catch { return null; }
 }
-async function save(env: Env, id: string, data: Session) { data.savedAt = Date.now(); await env.APP_STATE.put(`session:${id}`, await seal(env, data), { expirationTtl: 2592000 }); }
+async function save(env: Env, id: string, data: Session) { data.savedAt = Date.now(); await env.APP_STATE.put(`session:${id}`, await seal(env, data), { expirationTtl: sessionTtl }); }
 /**
  * OAuth state lives in a signed, HttpOnly cookie on the browser that started sign-in, not in KV: starting sign-in
  * writes nothing (so nobody can spend the daily KV writes by opening /oauth/start), and a redirect only completes in
@@ -225,7 +232,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const destination = stateData.redirectOnshapeUri ? new URL(stateData.redirectOnshapeUri) : new URL('/', env.WEB_ORIGIN);
     for (const [k, v] of Object.entries(stateData.context ?? {})) destination.searchParams.set(k, v);
     const headers = new Headers({ location: destination.toString() });
-    headers.append('set-cookie', `${cookieName}=${id}; ${cookieFlags}`);
+    headers.append('set-cookie', sessionCookie(id));
     headers.append('set-cookie', clearCookie(stateCookie));
     return new Response(null, { status: 302, headers });
   }
@@ -235,7 +242,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!current) return reply({ connected: false }, 401);
     // Keep an active session alive, but write it at most once a day rather than on every panel load.
     if (!current.data.savedAt || Date.now() - current.data.savedAt > 86_400_000) await save(env, current.id, current.data);
-    return reply({ connected: true, user: { id: current.data.user.id, name: current.data.user.name } });
+    // The cookie's 30 days restart on every panel load (a header, not a KV write), so a team that opens Control Kit at
+    // least once a month never connects again; it also gives a cookie set before Max-Age existed its lifetime.
+    const answer = reply({ connected: true, user: { id: current.data.user.id, name: current.data.user.name } });
+    answer.headers.append('set-cookie', sessionCookie(current.id));
+    return answer;
   }
   if (url.pathname === '/api/logout' && request.method === 'POST') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
