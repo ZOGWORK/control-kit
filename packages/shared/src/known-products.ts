@@ -1,4 +1,4 @@
-import type { VendorId, VendorRecord } from './matching';
+import { normalizeSku, type VendorId, type VendorRecord } from './matching';
 
 /**
  * FTC products teams model under their plain product name, with the vendor SKUs they are sold as. Each SKU was looked up
@@ -22,6 +22,22 @@ const knownProducts: KnownProduct[] = [
   { product: 'REV Through Bore Encoder', name: /^(?:rev )?through ?bore encoder$/, skus: [['rev', 'REV-11-3174'], ['rev', 'REV-11-1271']] },
   { product: 'REV Through Bore Encoder V2', name: /^(?:rev )?through ?bore encoder v2$/, skus: [['rev', 'REV-11-3174']] },
 ];
+
+/**
+ * SKUs a vendor no longer sells, with what it sells in their place, checked against REV's official feed on 2026-10-28:
+ * the Control Hub REV-31-1152 became REV-31-1595, and the Smart Robot Servo REV-41-1097 became the V2 servo, sold as
+ * Balanced (REV-41-3334) and UltraSpeed (REV-41-3336). A part numbered with an old SKU is ordered as its successor; with
+ * two successors a person picks. The old SKU itself is never listed or priced.
+ */
+const successors: Record<string, { product: string; skus: Array<[VendorId, string]> }> = {
+  'REV-31-1152': { product: 'REV Control Hub', skus: [['rev', 'REV-31-1595']] },
+  'REV-41-1097': { product: 'REV Smart Robot Servo V2', skus: [['rev', 'REV-41-3334'], ['rev', 'REV-41-3336']] },
+};
+/** What a discontinued SKU (in any spelling: "REV-31-1152", "REV311152") is now sold as, with the SKU as REV writes it, or null. */
+export function successorOf(sku: string): { old: string; product: string; skus: Array<[VendorId, string]> } | null {
+  const old = Object.keys(successors).find(key => normalizeSku(key) === normalizeSku(sku));
+  return old ? { old, ...successors[old] } : null;
+}
 
 /** The product a part or subassembly name denotes, and its SKUs, or null. */
 export function knownProduct(name: string): { product: string; skus: Array<[VendorId, string]> } | null {

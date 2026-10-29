@@ -355,7 +355,8 @@ describe('parts library vendor tags', () => {
     const [hub, motor, revHub] = result.lines;
     expect(hub.matchStatus).toBe('possible');
     expect(hub.choices?.map(choice => choice.sku).sort()).toEqual(['1908-0024-0032', '1908-0025-0032']);
-    expect(motor.matchStatus).toBe('possible');
+    // The tag, "REX", and 6000rpm leave one product: the bare 6000 RPM motor with a REX shaft, matched exactly.
+    expect(motor.matchStatus).toBe('exact');
     expect(motor.vendor?.sku).toBe('5203-2402-0001');
     expect(motor.choices?.map(choice => choice.sku)).not.toContain('5203-2402-0139');
     expect(revHub.vendor?.sku).toBe('REV-11-1855');
@@ -370,5 +371,70 @@ describe('parts library vendor tags', () => {
     const missing = lines({ name: 'Servo Hub (GB)' });
     await enrichScan(missing, catalog(shelf.filter(item => item.vendorId !== 'gobilda')));
     expect(missing.lines[0]).toMatchObject({ matchStatus: 'unmatched', vendor: null });
+  });
+  it('reads sizes written as one token and the bore, and matches the one product with every size exactly', async () => {
+    clearCatalogMemoryCache();
+    // goBILDA's bearings with these sizes (2026-10-28): the round and REX bore 1611, and look-alikes one size off.
+    const bearings = [
+      record('gobilda', '1611-0514-0008', '1611 Series Flanged Ball Bearing (8mm ID x 14mm OD, 5mm Thickness) - 2 Pack', 4.99),
+      record('gobilda', '1611-0514-4008', '1611 Series Flanged Ball Bearing (8mm REX® ID x 14mm OD, 5mm Thickness) - 2 Pack', 4.99),
+      record('gobilda', '1601-0414-0008', '1601 Series Flanged Ball Bearing (8mm ID x 14mm OD, 4mm Thickness) - 2 Pack', 4.99),
+      record('gobilda', '1613-0514-0006', '1613 Series Thrust Ball Bearing (6mm ID x 14mm OD, 5mm Thickness)', 2.99),
+    ];
+    const result = lines({ name: '8x14x5mm Bearing - Round Bore (GB)', configuration: 'List_a1=8×14×50;List_b2=Mediumm' }, { name: '8 × 14 × 5 mm Bearing - REX Bore (GB)' }, { name: '8x14mm Bearing (GB)' }, { name: '5x14x8mm Bearing - Round Bore (GB)' });
+    await enrichScan(result, catalog([...shelf, ...bearings]));
+    const [round, rex, unsized, reordered] = result.lines;
+    // The same numbers in another order are another bearing (5mm bore, 8mm thick), so it is never matched exactly.
+    expect(reordered.matchStatus).not.toBe('exact');
+    // A decimal size keeps its place: goBILDA's 8mm x 15.5mm x 5mm thrust bearing.
+    clearCatalogMemoryCache();
+    const thrust = lines({ name: '8x15.5x5mm Thrust Bearing (GB)' });
+    await enrichScan(thrust, catalog([...shelf, ...bearings, record('gobilda', '1613-0515-0008', '1613 Series Thrust Ball Bearing (8mm ID x 15.5mm OD, 5mm Thickness)', 2.99)]));
+    expect(thrust.lines[0]).toMatchObject({ matchStatus: 'exact' });
+    expect(thrust.lines[0].vendor?.sku).toBe('1613-0515-0008');
+    expect(round).toMatchObject({ matchStatus: 'exact' });
+    expect(round.vendor?.sku).toBe('1611-0514-0008');
+    expect(round.matchReasons[0]).toContain('every size in the name');
+    expect(rex.vendor?.sku).toBe('1611-0514-4008');
+    expect(rex.matchStatus).toBe('exact');
+    // Two sizes fit several bearings, so a person still picks.
+    expect(unsized.matchStatus).toBe('possible');
+  });
+});
+
+describe('discontinued SKUs', () => {
+  const record = (sku: string, name: string, priceUsd: number): VendorRecord => ({ vendorId: 'rev', sku, normalizedSku: normalizeSku(sku, 'rev'), name, normalizedName: normalizeName(name), url: 'https://www.revrobotics.com/x/', priceUsd, packSize: 1, packSizeVerified: true, stock: 'in', stockQty: null, category: 'uncategorized', updatedAt: new Date().toISOString(), source: 'feed', parser: 'official-feed' });
+  // REV's feed of 2026-10-28 lists neither REV-31-1152 nor REV-41-1097, only what replaced them.
+  const feed = [
+    record('REV-31-1595', 'Control Hub', 375),
+    record('REV-41-3334', 'Smart Robot Servos V2 (Smart Robot Servo V2 - Balanced (REV-41-3334))', 32.5),
+    record('REV-41-3336', 'Smart Robot Servos V2 (Smart Robot Servo V2 - UltraSpeed (REV-41-3336))', 32.5),
+  ];
+  const lines = (...specs: Array<Partial<BomLine> & { name: string }>) => {
+    const result = aggregateAssembly(fixture('empty'), context, 'Robot');
+    const base = aggregateAssembly(fixture('simple'), context, 'Robot').lines[0];
+    result.lines = specs.map((spec, n) => ({ ...base, partNumber: null, configuration: null, bomLineKey: `line-${n}`, qty: 1, ...spec }));
+    return result;
+  };
+  it('orders a discontinued SKU as its successor, and asks which one when there are two', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: 'Control Hub REV-31-1152', partNumber: 'REV-31-1152' }, { name: 'Smart Robot Servo REV-41-1097' });
+    classifyScan(await enrichScan(result, catalog(feed)), { teamNumber: null }, {});
+    const [hub, servo] = result.lines;
+    expect(hub).toMatchObject({ matchStatus: 'exact', lineTotalUsd: 375 });
+    expect(hub.vendor?.sku).toBe('REV-31-1595');
+    expect(hub.matchReasons[0]).toBe('REV-31-1152 is discontinued; REV Control Hub is sold as REV-31-1595');
+    expect(servo.matchStatus).toBe('possible');
+    expect(servo.choices?.map(choice => choice.sku)).toEqual(['REV-41-3334', 'REV-41-3336']);
+    expect(servo.lineTotalUsd).toBeNull();
+  });
+  it('keeps every replacement a choice when a part names two discontinued products', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: 'Smart Robot Servo REV-41-1097', partNumber: 'REV-31-1152' });
+    await enrichScan(result, catalog(feed));
+    expect(result.lines[0].matchStatus).toBe('possible');
+    expect(result.lines[0].choices?.map(choice => choice.sku).sort()).toEqual(['REV-31-1595', 'REV-41-3334', 'REV-41-3336']);
+    expect(result.lines[0].matchReasons[0]).toContain('REV-31-1152 is discontinued');
+    expect(result.lines[0].matchReasons[0]).toContain('REV-41-1097 is discontinued');
   });
 });
