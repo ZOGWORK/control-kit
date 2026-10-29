@@ -121,10 +121,14 @@ function pulledText(pulled: { types: number; products: number }) {
 /** "38 part pictures sent, 30 newly drawn by Onshape; 12 more next send" */
 function picturesText(sync: NonNullable<ControlPoint['pictures']>) {
   if (sync.running) return 'Sending part pictures…';
+  if (sync.unreachable) return 'Part pictures could not reach Control Point. The next send tries again.';
   const parts = [sync.sent ? `${sync.sent} part picture${sync.sent === 1 ? '' : 's'} sent` : 'Part pictures are up to date in Control Point'];
   if (sync.drawn) parts.push(`${sync.drawn} newly drawn by Onshape`);
   const text = parts.join(', ');
-  return sync.missing ? `${text}; ${sync.missing} more arrive with later sends.` : `${text}.`;
+  const later = sync.missing ? `; ${sync.missing} more arrive with later sends` : '';
+  const failed = sync.failed ? `. ${sync.failed} did not arrive; the next send tries again` : '';
+  if (!sync.sent && !sync.drawn && !sync.missing && sync.failed) return `${sync.failed} part picture${sync.failed === 1 ? '' : 's'} did not reach Control Point. The next send tries again.`;
+  return `${text}${later}${failed}.`;
 }
 
 function Linked({ kit, cp, now }: { kit: ControlKit; cp: ControlPoint; now: number | null }) {

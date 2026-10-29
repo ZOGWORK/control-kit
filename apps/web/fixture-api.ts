@@ -103,7 +103,8 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
           let size = 0;
           for await (const chunk of request) size += (chunk as Buffer).length;
           const name = url.searchParams.get('name') ?? 'file';
-          if (cpSent) cpSent = { ...cpSent, files: [...new Set([...((cpSent.files as string[] | undefined) ?? []), name])] };
+          const sha256 = String(request.headers['x-content-sha256'] ?? '');
+          if (cpSent) cpSent = { ...cpSent, files: [...((cpSent.files as Array<{ name: string }> | undefined) ?? []).filter(item => item.name !== name), { name, sha256 }] };
           return json({ name, url: 'https://tryctrlpoint.org/api/files/1', sizeBytes: size, sha256: request.headers['x-content-sha256'], duplicate: false });
         }
         if (url.pathname === '/api/control-point/pictures') {

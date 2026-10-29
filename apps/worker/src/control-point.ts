@@ -13,8 +13,15 @@ type User = { id: string; name: string };
  * refresh that failed, so a Control Point outage still gets the 30-second pause.
  */
 type Link = { token: string; account: ControlPointAccount; workspaceId: number | null; linkedAt: string; workspaces?: ControlPointWorkspace[]; workspacesAt?: number; refreshTriedAt?: number };
-/** `files`: names uploaded to that import after its send (contract v1.2 §6), so the panel knows whether STEP is there. */
-export type SentRecord = { importId: number; workspaceId: number; sentAt: string; idempotencyKey: string; url: string; files?: string[] };
+export type SentRecord = { importId: number; workspaceId: number; sentAt: string; idempotencyKey: string; url: string };
+/**
+ * A file uploaded to an import after its send (contract v1.2 §6), kept per import and file kind at
+ * `cp-upload:{userId}:{importId}:{zip|xlsx|csv}`: one key per kind, never merged into the sent record, so a newer send
+ * or another upload can never erase it. `/api/control-point/sent` returns them as `files`.
+ */
+export type UploadRecord = { name: string; sha256: string; at: string };
+const uploadKinds = ['zip', 'xlsx', 'csv'] as const;
+const uploadKey = (userId: string, importId: number, kind: string) => `cp-upload:${userId}:${importId}:${kind}`;
 /**
  * Saves choices made in Control Point as Control Kit's own (contract §5): a part's shared type, and the person's product
  * pick, each only when Control Point's is newer. Implemented over the Worker's KV keys in index.ts.
@@ -515,8 +522,13 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
       if (!name || name.length > 160 || /[\\/]/.test(name) || [...name].some(char => char.charCodeAt(0) < 32) ||!/^[0-9a-f]{64}$/.test(sha256) || !mediaType) return failure(400, 'bad_file', 'Name the file and its SHA-256.');
       // The bytes stream through unread: the free plan's CPU limit rules out hashing them here; Control Point checks the hash.
       const stored = await adapter.uploadFile(link.token, sent.workspaceId, importId, { name, mediaType, sha256, body: capped(request.body, length), length });
-      // Recorded on the send, so the panel shows the STEP files as attached. One write per new file.
-      if (!stored.duplicate || !sent.files?.includes(name)) await env.APP_STATE.put(sentKey(user.id, documentId, elementId), JSON.stringify({ ...sent, files: [...new Set([...(sent.files ?? []), name])] } satisfies SentRecord), { expirationTtl: 365 * 86400 });
+      // Recorded per import and kind, so the panel shows STEP as attached; written only when it changed.
+      const kind = name.split('.').pop()?.toLowerCase() ?? '';
+      if ((uploadKinds as readonly string[]).includes(kind)) {
+        const key = uploadKey(user.id, importId, kind);
+        const before = await env.APP_STATE.get(key).then(value => value ? JSON.parse(value) as UploadRecord : null).catch(() => null);
+        if (before?.name !== name || before.sha256 !== sha256) await env.APP_STATE.put(key, JSON.stringify({ name, sha256, at: new Date().toISOString() } satisfies UploadRecord), { expirationTtl: 365 * 86400 });
+      }
       return reply(stored);
     } catch (error) {
       if (!(error instanceof ControlPointError)) return failure(502, 'unavailable', 'Control Point did not answer. Uploading again is safe.');
@@ -530,7 +542,11 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     const elementId = url.searchParams.get('elementId');
     if (!documentId || !/^[\w-]{1,128}$/.test(documentId) || !elementId || !/^[\w-]{1,128}$/.test(elementId)) return failure(400, 'bad_request', 'Invalid assembly.');
     const raw = await env.APP_STATE.get(sentKey(user.id, documentId, elementId));
-    return reply(raw ? JSON.parse(raw) as SentRecord : null);
+    if (!raw) return reply(null);
+    const record = JSON.parse(raw) as SentRecord;
+    const files = (await Promise.all(uploadKinds.map(kind => env.APP_STATE.get(uploadKey(user.id, record.importId, kind)))))
+      .flatMap(value => { try { return value ? [JSON.parse(value) as UploadRecord] : []; } catch { return []; } });
+    return reply({ ...record, files });
   }
   if (url.pathname === '/api/control-point/unlink' && request.method === 'POST') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);

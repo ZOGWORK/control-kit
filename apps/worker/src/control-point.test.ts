@@ -281,7 +281,7 @@ describe('sending a BOM to Control Point', () => {
     expect(cp.received[0]).toEqual({ workspaceId: 12, payload });
     expect(cp.received[0].payload.cadParts[0].extra.identity).toBe(`${payload.cadParts[0].extra.documentId}:${payload.cadParts[0].extra.elementId}:${payload.cadParts[0].extra.partId ?? ''}:${payload.cadParts[0].extra.configuration ?? ''}`);
     const sent = await (await call(`/api/control-point/sent?documentId=${result.documentId}&elementId=${result.elementId}`, { cookie })).json();
-    expect(sent).toEqual({ importId: 41, workspaceId: 12, sentAt: answer.sentAt, idempotencyKey: payload.idempotencyKey, url: `${cpOrigin}/cad-parts?import=41` });
+    expect(sent).toEqual({ importId: 41, workspaceId: 12, sentAt: answer.sentAt, idempotencyKey: payload.idempotencyKey, url: `${cpOrigin}/cad-parts?import=41`, files: [] });
     expect(await (await send(cookie, result.scanId!, body)).json()).toMatchObject({ importId: 41, duplicate: true });
     expect(cp.received).toHaveLength(1);
     expect(await (await call('/api/control-point/sent?documentId=other&elementId=elem1', { cookie })).json()).toBeNull();
@@ -534,9 +534,17 @@ describe('files and pictures after a send (contract v1.2 §6)', () => {
     expect(await first.json()).toEqual({ name: 'Robot STEP.zip', url: `${cpOrigin}/api/files/1`, sizeBytes: zip.byteLength, sha256: await hex(zip), duplicate: false });
     expect(cp.uploads).toEqual([expect.objectContaining({ importId, name: 'Robot STEP.zip', mediaType: 'application/zip', bytes: zip })]);
     const record = await (await call(`/api/control-point/sent?documentId=${result.documentId}&elementId=${result.elementId}`, { cookie })).json();
-    expect(record).toMatchObject({ importId, files: ['Robot STEP.zip'] });
+    expect(record).toMatchObject({ importId, files: [{ name: 'Robot STEP.zip', sha256: await hex(zip) }] });
     expect(await (await upload(cookie, result, importId, zip)).json()).toMatchObject({ duplicate: true });
     expect(cp.uploads).toHaveLength(1);
+    // A repeat send of the same scan rewrites the sent record; the upload is kept per import, so it survives.
+    const again = await buildControlPointPayload(result, { workspaceId: 12 });
+    expect(await (await send(cookie, result.scanId!, JSON.stringify(again))).json()).toMatchObject({ importId, duplicate: true });
+    expect((await (await call(`/api/control-point/sent?documentId=${result.documentId}&elementId=${result.elementId}`, { cookie })).json()).files).toEqual([expect.objectContaining({ name: 'Robot STEP.zip' })]);
+    // A re-exported zip under the same name is new bytes: it goes again and replaces the record.
+    const repaired = new TextEncoder().encode('PK step files, every part this time');
+    expect(await (await upload(cookie, result, importId, repaired)).json()).toMatchObject({ duplicate: false });
+    expect((await (await call(`/api/control-point/sent?documentId=${result.documentId}&elementId=${result.elementId}`, { cookie })).json()).files).toEqual([expect.objectContaining({ sha256: await hex(repaired) })]);
   });
   it('refuses another import, another workspace, a wrong hash, an oversize or overlong body, and a revoked grant', async () => {
     const { cookie, result, zip, importId } = await sent();
