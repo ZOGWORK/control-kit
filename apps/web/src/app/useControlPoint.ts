@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { buildControlPointPayload, controlPointIdempotencyKey, INLINE_FILE_LIMIT_BYTES, type AssemblyContext } from '@control-kit/shared';
+import { buildControlPointPayload, controlPointIdempotencyKey, controlPointPictureKey, INLINE_FILE_LIMIT_BYTES, PICTURE_FILL_PER_SEND, PICTURES_PER_CALL, pictureTargets, UPLOAD_FILE_LIMIT_BYTES, uploadedAfterSend, wantsStep, type AssemblyContext, type ScanResult } from '@control-kit/shared';
 import { api, postJson, workerUrl, type ControlKit } from './useControlKit';
 import { makeListKey, workspaceAccent, type Accent } from './model';
 
@@ -10,7 +10,14 @@ export type LinkState =
   | { linked: false; available?: boolean }
   | { linked: true; account: { email: string; name: string }; workspace: Workspace | null; workspaces: Workspace[]; linkedAt: string; refreshAfter?: string };
 /** The last import of this assembly into Control Point. */
-export type SentRecord = { importId: number; workspaceId: number; sentAt: string; idempotencyKey: string; url: string; created?: number; updated?: number; duplicate?: boolean };
+export type SentRecord = { importId: number; workspaceId: number; sentAt: string; idempotencyKey: string; url: string; created?: number; updated?: number; duplicate?: boolean; files?: Array<{ name: string; sha256: string }> };
+/**
+ * Part pictures sent with the last send: how many went, how many Onshape drew for it, how many wait for a later send
+ * (`missing`), and how many did not arrive (`failed`: a call failed or Control Point refused them; `unreachable` when
+ * the list of pictures it holds could not be read at all).
+ */
+export type PictureSync = { importId: number; running: boolean; sent: number; drawn: number; missing: number; failed: number; unreachable: boolean };
+type LocalFile = { name: string; mediaType: string; bytes: Uint8Array };
 
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 /** The assembly picture (already drawn for the Overview) goes with a send, so Control Point can show the robot whole. */
@@ -18,6 +25,14 @@ const PICTURE_TYPE = 'image/png';
 /** Choices made in Control Point that this scan picked up (`POST /api/control-point/decisions`, contract §5). */
 export type Pulled = { scanId: string; types: number; products: number };
 const workerOrigin = () => new URL(workerUrl || location.origin, location.href).origin;
+const sha256Hex = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes)))].map(value => value.toString(16).padStart(2, '0')).join('');
+function base64(bytes: Uint8Array) {
+  let text = '';
+  for (let start = 0; start < bytes.length; start += 0x8000) text += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
+  return btoa(text);
+}
+/** One pictures call stays under Control Point's 8 MB body limit with room for the JSON around the base64. */
+const PICTURE_BATCH_BYTES = 6 * 1024 * 1024;
 /** The Worker's own wording for a failure when it gave one. */
 const message = async (response: Response, fallback: string) => (await response.json().catch(() => null) as { error?: string } | null)?.error ?? fallback;
 
@@ -29,7 +44,8 @@ const message = async (response: Response, fallback: string) => (await response.
 export function useControlPoint(kit: ControlKit) {
   const [link, setLink] = useState<LinkState | null>(null);
   const [sent, setSent] = useState<SentRecord | null>(null);
-  const [busy, setBusy] = useState<'link' | 'workspace' | 'send' | 'unlink' | null>(null);
+  const [busy, setBusy] = useState<'link' | 'workspace' | 'send' | 'unlink' | 'step' | null>(null);
+  const [pictures, setPictures] = useState<PictureSync | null>(null);
   const [error, setError] = useState('');
   const [pulled, setPulled] = useState<Pulled | null>(null);
   const popup = useRef<Window | null>(null);
@@ -72,14 +88,16 @@ export function useControlPoint(kit: ControlKit) {
 
   // A linked workspace's colour becomes the brand accent; unlinked, or with a colour that fails contrast, it stays volt.
   const workspace = link?.linked ? link.workspace : null;
+  // Linked with a workspace, AI review can run through Control Point (contract v1.2 §7): ask again whether it is on.
+  useEffect(() => { if (link) kit.refreshAiStatus(); }, [link?.linked, workspace?.id]);
   // The key a send would carry now: it changes with the BOM, the workspace, and which files would go inline (the
   // workbook always, the STEP ZIP once exported this session), so "sent" means this exact BOM went to this workspace.
   const [currentKey, setCurrentKey] = useState<string | null>(null);
-  // The STEP ZIP goes with a send only when it was exported from this scan's current make list; it goes inline (and so
-  // into the key) only up to the payload's inline limit, larger ZIPs travel as references, exactly as the builder decides.
+  // The STEP ZIP goes with a send only when it was exported from this scan's current make list. It is uploaded right
+  // after the bundle (contract v1.2 §6), never inside it, so it is not part of the key: adding it later reaches the
+  // same import instead of making a new one.
   const zip = kit.lastStepZip.current;
   const zipCurrent = Boolean(kit.step?.zipMade) && Boolean(result) && zip?.scanId === result?.scanId && zip?.makeList === makeListKey(result!);
-  const zipReady = zipCurrent && zip!.bytes.length <= INLINE_FILE_LIMIT_BYTES;
   useEffect(() => {
     setCurrentKey(null);
     if (!result || !workspace) return;
@@ -87,10 +105,10 @@ export function useControlPoint(kit: ControlKit) {
     // The same choice times and files a send carries, so a choice saved since the last send shows as a change, and a
     // send without a picture (Onshape would not draw one) still reads as current.
     void Promise.all([kit.choiceTimes(result), assemblyPictureBytes()]).then(([choiceTimes, picture]) => controlPointIdempotencyKey(result, { workspaceId: workspace.id,
-      inlineMediaTypes: [XLSX_TYPE, ...(picture ? [PICTURE_TYPE] : []), ...(zipReady ? ['application/zip'] : [])], choiceTimes: choiceTimes ?? undefined }))
+      inlineMediaTypes: [XLSX_TYPE, ...(picture ? [PICTURE_TYPE] : [])], choiceTimes: choiceTimes ?? undefined }))
       .then(key => { if (live) setCurrentKey(key); }).catch(() => undefined);
     return () => { live = false; };
-  }, [result, workspace?.id, zipReady]);
+  }, [result, workspace?.id]);
 
   // Choices made in Control Point reach a scan here: once per scan, after matching, while a workspace is linked. The
   // Worker saves the newer ones as Control Kit's own, then the scan reloads its choices. A failure is quiet: the next
@@ -111,6 +129,100 @@ export function useControlPoint(kit: ControlKit) {
   }, [result?.scanId, result?.vendorMatching, workspace?.id]);
 
   const sentCurrent = Boolean(sent && workspace && currentKey && sent.workspaceId === workspace.id && sent.idempotencyKey === currentKey);
+  /** Parts to make in this scan, and whether the last send of it already holds their STEP zip in Control Point. */
+  const makeCount = result ? result.lines.filter(wantsStep).length : 0;
+  const stepAttached = Boolean(sent?.files?.some(file => /\.zip$/i.test(file.name)));
+
+  /** A file of the last send, uploaded to Control Point through the Worker, which streams it there unread. */
+  async function uploadFile(record: SentRecord, scanned: ScanResult, file: LocalFile) {
+    const query = new URLSearchParams({ documentId: scanned.documentId, elementId: scanned.elementId, importId: String(record.importId), workspaceId: String(record.workspaceId), name: file.name });
+    const hash = await sha256Hex(file.bytes);
+    const response = await api(`/api/control-point/file?${query}`, { method: 'POST', headers: { 'content-type': file.mediaType, 'x-content-sha256': hash }, body: new Uint8Array(file.bytes) });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: string; code?: string } | null;
+      if (body?.code === 'revoked') { await refresh(); throw new Error('Control Point ended the link. Link it again to send.'); }
+      throw new Error(body?.error ?? `${file.name} did not reach Control Point. Try again.`);
+    }
+    setSent(current => current && current.importId === record.importId ? { ...current, files: [...(current.files ?? []).filter(item => item.name !== file.name), { name: file.name, sha256: hash }] } : current);
+  }
+
+  /**
+   * Part pictures for Control Point (contract v1.2 §6). Pictures Control Point already holds at the same revision are
+   * skipped; ones the Worker has drawn before go free; at most PICTURE_FILL_PER_SEND parts Control Point has no picture
+   * of at all are drawn now (one billable Onshape request each). A part whose newer revision was never drawn keeps its
+   * older picture there. Quiet: a failure here never touches the send.
+   */
+  // One picture run at a time: a newer send stops the older run and waits for it, so two runs never draw the same part.
+  const pictureRun = useRef<{ id: number; done: Promise<void> }>({ id: 0, done: Promise.resolve() });
+  function sendPictures(record: SentRecord, scanned: ScanResult) {
+    const previous = pictureRun.current;
+    const id = previous.id + 1;
+    const done = previous.done.then(() => runPictures(id, record, scanned)).catch(() => undefined);
+    pictureRun.current = { id, done };
+    return done;
+  }
+  async function runPictures(id: number, record: SentRecord, scanned: ScanResult) {
+    const live = () => pictureRun.current.id === id;
+    if (!scanned.scanId || !live()) return;
+    const where = new URLSearchParams({ documentId: scanned.documentId, elementId: scanned.elementId, importId: String(record.importId) });
+    setPictures({ importId: record.importId, running: true, sent: 0, drawn: 0, missing: 0, failed: 0, unreachable: false });
+    let sentCount = 0, drawn = 0, missing = 0, failed = 0, unreachable = false;
+    try {
+      const listed = await api(`/api/control-point/pictures?${where}`).catch(() => null);
+      if (!listed?.ok) { unreachable = true; return; }
+      const held = new Map(((await listed.json()) as { pictures: Array<{ identity: string; key: string }> }).pictures.map(item => [item.identity, item.key]));
+      let batch: string[] = [];
+      let batchBytes = 0;
+      const flush = async () => {
+        if (!batch.length) return;
+        const count = batch.length;
+        const body = `{"pictures":[${batch.join(',')}]}`;
+        batch = []; batchBytes = 0;
+        const response = await api(`/api/control-point/pictures?${where}&workspaceId=${record.workspaceId}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }).catch(() => null);
+        if (!response?.ok) { failed += count; return; }
+        const answer = await response.json() as { stored: number; rejected?: number; unknown?: number };
+        sentCount += answer.stored;
+        failed += (answer.rejected ?? 0) + (answer.unknown ?? 0);
+      };
+      for (const { identity, line } of pictureTargets(scanned)) {
+        // A newer send took over: it carries on from what this run already stored.
+        if (!live()) return;
+        const key = await controlPointPictureKey(scanned, line);
+        if (held.get(identity) === key) continue;
+        const path = `/api/preview?${new URLSearchParams({ scanId: scanned.scanId, line: line.bomLineKey })}`;
+        let response = await api(`${path}&cached=1`).catch(() => null);
+        if (!response?.ok) {
+          // Only a part Control Point has no picture of is drawn now, and only within this send's budget.
+          if (held.has(identity) || drawn >= PICTURE_FILL_PER_SEND) { if (!held.has(identity)) missing++; continue; }
+          drawn++;
+          response = await api(path).catch(() => null);
+          if (!response?.ok) { missing++; continue; }
+        }
+        const encoded = base64(new Uint8Array(await response.arrayBuffer()));
+        if (batchBytes + encoded.length > PICTURE_BATCH_BYTES || batch.length >= PICTURES_PER_CALL) await flush();
+        batch.push(JSON.stringify({ identity, key, contentBase64: encoded }));
+        batchBytes += encoded.length;
+      }
+      if (live()) await flush();
+    } catch { failed++; /* Pictures are extra: the next send tries again. */ }
+    finally { if (live()) setPictures({ importId: record.importId, running: false, sent: sentCount, drawn, missing, failed, unreachable }); }
+  }
+
+  /** Puts this scan's STEP zip in Control Point: exported now if needed (Onshape translations), then uploaded to the last send. */
+  async function attachStep() {
+    if (!result || !sent || !sentCurrent) return;
+    setBusy('step'); setError('');
+    try {
+      const current = () => { const made = kit.lastStepZip.current; return made && made.scanId === result.scanId && made.makeList === makeListKey(result) ? made : null; };
+      // No current zip, or the last export left parts out: export (again) before uploading.
+      if (!current() || (kit.step?.failed ?? 0) > 0) await kit.downloadStep();
+      const made = current();
+      if (!made) throw new Error('The STEP export did not finish, so nothing was added. Try again.');
+      if (made.bytes.length > UPLOAD_FILE_LIMIT_BYTES) throw new Error(`The STEP zip is over ${UPLOAD_FILE_LIMIT_BYTES / 1024 / 1024} MB, so it stays in Control Kit.`);
+      await uploadFile(sent, result, { name: made.name, mediaType: 'application/zip', bytes: made.bytes });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'The STEP files did not reach Control Point. Try again.'); }
+    finally { setBusy(null); }
+  }
   const accent: Accent | null = workspaceAccent(workspace?.accentColor);
   useEffect(() => {
     const root = document.documentElement;
@@ -193,7 +305,16 @@ export function useControlPoint(kit: ControlKit) {
       const body = await response.json() as { importId: number; url: string; sentAt: string; created: number; updated: number; duplicate: boolean };
       // What was just sent is current, whichever files it carried (a picture can arrive only at send time).
       setCurrentKey(payload.idempotencyKey);
-      setSent({ importId: body.importId, workspaceId: workspace.id, sentAt: body.sentAt, idempotencyKey: payload.idempotencyKey, url: body.url, created: body.created, updated: body.updated, duplicate: body.duplicate });
+      const record: SentRecord = { importId: body.importId, workspaceId: workspace.id, sentAt: body.sentAt, idempotencyKey: payload.idempotencyKey, url: body.url, created: body.created, updated: body.updated, duplicate: body.duplicate,
+        files: body.duplicate && sent?.importId === body.importId ? sent.files : [] };
+      setSent(record);
+      // Files the bundle names but does not carry (the STEP zip, anything over 4 MB) follow it, to the same import.
+      // Skipped only when Control Point already holds those exact bytes under that name: a re-exported zip goes again.
+      const held = new Map((record.files ?? []).map(item => [item.name, item.sha256]));
+      const hashes = new Map(payload.files.map(item => [item.name, item.sha256]));
+      const later = files.filter(item => uploadedAfterSend(item.mediaType, item.bytes.length) && item.bytes.length <= UPLOAD_FILE_LIMIT_BYTES && held.get(item.name) !== hashes.get(item.name));
+      for (const item of later) await uploadFile(record, result, item);
+      void sendPictures(record, result);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'The send failed. Try again.'); }
     finally { setBusy(null); }
   }
@@ -208,6 +329,7 @@ export function useControlPoint(kit: ControlKit) {
     finally { setBusy(null); }
   }
 
-  return { refresh, link, workspace, accent, sent, sentCurrent, pulled: pulled && pulled.scanId === result?.scanId ? pulled : null, busy, error, clearError: () => setError(''), startLink, chooseWorkspace, send, unlink };
+  return { refresh, link, workspace, accent, sent, sentCurrent, makeCount, stepAttached, zipCurrent, attachStep, pictures: pictures && pictures.importId === sent?.importId ? pictures : null,
+    pulled: pulled && pulled.scanId === result?.scanId ? pulled : null, busy, error, clearError: () => setError(''), startLink, chooseWorkspace, send, unlink };
 }
 export type ControlPoint = ReturnType<typeof useControlPoint>;

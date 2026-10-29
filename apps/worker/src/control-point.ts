@@ -1,4 +1,4 @@
-import { ControlPointError, dispositions, type ControlPointAccount, type ControlPointAdapter, type ControlPointDecision, type ControlPointImport, type ControlPointImportSummary, type ControlPointWorkspace, type ScanResult } from '@control-kit/shared';
+import { ControlPointError, dispositions, PICTURES_BODY_LIMIT_BYTES, UPLOAD_FILE_LIMIT_BYTES, type ControlPointAccount, type ControlPointAdapter, type ControlPointAiAnswer, type ControlPointAiAsk, type ControlPointDecision, type ControlPointImport, type ControlPointImportSummary, type ControlPointPictureKey, type ControlPointUpload, type ControlPointWorkspace, type PassThroughBody, type ScanResult } from '@control-kit/shared';
 import type { Kv } from './index';
 import { clearCookie, readSignedCookie, seal, signedCookie, unseal, type SignedCookie } from './secrets';
 
@@ -14,6 +14,14 @@ type User = { id: string; name: string };
  */
 type Link = { token: string; account: ControlPointAccount; workspaceId: number | null; linkedAt: string; workspaces?: ControlPointWorkspace[]; workspacesAt?: number; refreshTriedAt?: number };
 export type SentRecord = { importId: number; workspaceId: number; sentAt: string; idempotencyKey: string; url: string };
+/**
+ * A file uploaded to an import after its send (contract v1.2 §6), kept per import and file kind at
+ * `cp-upload:{userId}:{importId}:{zip|xlsx|csv}`: one key per kind, never merged into the sent record, so a newer send
+ * or another upload can never erase it. `/api/control-point/sent` returns them as `files`.
+ */
+export type UploadRecord = { name: string; sha256: string; at: string };
+const uploadKinds = ['zip', 'xlsx', 'csv'] as const;
+const uploadKey = (userId: string, importId: number, kind: string) => `cp-upload:${userId}:${importId}:${kind}`;
 /**
  * Saves choices made in Control Point as Control Kit's own (contract §5): a part's shared type, and the person's product
  * pick, each only when Control Point's is newer. Implemented over the Worker's KV keys in index.ts.
@@ -56,6 +64,18 @@ function readWorkspace(value: unknown, origin: string): ControlPointWorkspace | 
     cadUrl: cadUrl?.startsWith(`${origin}/`) ? cadUrl : `${origin}/cad-parts` };
 }
 const ownUrl = (value: unknown, origin: string) => { const url = text(value, 2048); return url?.startsWith(`${origin}/`) ? url : `${origin}/cad-parts`; };
+/** A stored file's link: Control Point answers `/api/files/{id}`, which only opens inside Control Point itself. */
+const fileUrl = (value: unknown, origin: string) => { const url = text(value, 2048); return url && /^\/api\/files\/\d+$/.test(url) ? `${origin}${url}` : ownUrl(url, origin); };
+const aiProviders = ['gemini', 'anthropic'];
+const tokens = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+/** Workers sends a stream of known length with that Content-Length; elsewhere (tests) it streams as-is. */
+function passThrough(body: PassThroughBody, length: number): PassThroughBody {
+  const Fixed = (globalThis as { FixedLengthStream?: new (length: number) => TransformStream<Uint8Array, Uint8Array> }).FixedLengthStream;
+  if (!Fixed || typeof body === 'string') return body;
+  const fixed = new Fixed(length);
+  body.pipeTo(fixed.writable).catch(() => undefined);
+  return fixed.readable;
+}
 async function refusal(response: Response) {
   const body = await response.text().then(value => { try { return JSON.parse(value.slice(0, 4000)) as { error?: unknown; detail?: unknown }; } catch { return null; } }).catch(() => null);
   const code = typeof body?.error === 'string' && /^[a-z_]{1,40}$/.test(body.error) ? body.error : `http_${response.status}`;
@@ -87,12 +107,8 @@ export class HttpControlPointAdapter implements ControlPointAdapter {
     const body = await this.json(await this.call('/workspaces', { headers: this.bearer(token) }, 10_000));
     return { account: readAccount(body.account), workspaces: (Array.isArray(body.workspaces) ? body.workspaces : []).map(item => readWorkspace(item, this.origin)).filter(item => item !== null) };
   }
-  async sendBom(token: string, workspaceId: number, body: ReadableStream<Uint8Array> | string, length: number): Promise<ControlPointImport> {
-    // Workers sends a stream of known length with that Content-Length; elsewhere (tests) it streams as-is.
-    const Fixed = (globalThis as { FixedLengthStream?: new (length: number) => TransformStream<Uint8Array, Uint8Array> }).FixedLengthStream;
-    let sent: ReadableStream<Uint8Array> | string = body;
-    if (Fixed && typeof body !== 'string') { const fixed = new Fixed(length); body.pipeTo(fixed.writable).catch(() => undefined); sent = fixed.readable; }
-    const response = await this.call(`/workspaces/${workspaceId}/bom`, { method: 'POST', headers: { ...this.bearer(token), 'content-type': 'application/json' }, body: sent, duplex: 'half' }, 60_000);
+  async sendBom(token: string, workspaceId: number, body: PassThroughBody, length: number): Promise<ControlPointImport> {
+    const response = await this.call(`/workspaces/${workspaceId}/bom`, { method: 'POST', headers: { ...this.bearer(token), 'content-type': 'application/json' }, body: passThrough(body, length), duplex: 'half' }, 60_000);
     const result = await this.json(response);
     const workspace = result.workspace as Record<string, unknown> | null;
     if (typeof result.importId !== 'number' || !Number.isSafeInteger(result.importId)) throw badResponse();
@@ -121,6 +137,37 @@ export class HttpControlPointAdapter implements ControlPointAdapter {
     });
   }
   async revoke(token: string) { await this.call('/revoke', { method: 'POST', headers: this.bearer(token) }, 5_000); }
+  async uploadFile(token: string, workspaceId: number, importId: number, file: { name: string; mediaType: string; sha256: string; body: PassThroughBody; length: number }): Promise<ControlPointUpload> {
+    const query = new URLSearchParams({ name: file.name });
+    // Two minutes: up to 64 MB goes through, never retried.
+    const response = await this.call(`/workspaces/${workspaceId}/imports/${importId}/files?${query}`, { method: 'POST', duplex: 'half',
+      headers: { ...this.bearer(token), 'content-type': file.mediaType, 'x-content-sha256': file.sha256 }, body: passThrough(file.body, file.length) }, 120_000);
+    const body = await this.json(response);
+    return { name: text(body.name, 160) ?? file.name, url: fileUrl(body.url, this.origin), sizeBytes: count(body.sizeBytes), sha256: text(body.sha256, 64) ?? file.sha256, duplicate: body.duplicate === true };
+  }
+  async pictureKeys(token: string, workspaceId: number, importId: number): Promise<ControlPointPictureKey[]> {
+    const body = await this.json(await this.call(`/workspaces/${workspaceId}/imports/${importId}/pictures`, { headers: this.bearer(token) }, 10_000));
+    return (Array.isArray(body.pictures) ? body.pictures : []).slice(0, 5000).flatMap(value => {
+      const item = value as { identity?: unknown; key?: unknown } | null;
+      const identity = text(item?.identity, 2000);
+      const key = text(item?.key, 128);
+      return identity && key && /^[\w:.-]+$/.test(key) ? [{ identity, key }] : [];
+    });
+  }
+  async uploadPictures(token: string, workspaceId: number, importId: number, body: PassThroughBody, length: number) {
+    const response = await this.call(`/workspaces/${workspaceId}/imports/${importId}/pictures`, { method: 'POST', duplex: 'half',
+      headers: { ...this.bearer(token), 'content-type': 'application/json' }, body: passThrough(body, length) }, 60_000);
+    const result = await this.json(response);
+    return { stored: count(result.stored), unchanged: count(result.unchanged), unknown: count(result.unknown), rejected: count(result.rejected) };
+  }
+  async aiReview(token: string, workspaceId: number, ask: ControlPointAiAsk): Promise<ControlPointAiAnswer> {
+    // Control Point asks Gemini (90 s) and at most once Anthropic (90 s); this waits for both, never retries.
+    const response = await this.call(`/workspaces/${workspaceId}/ai/review`, { method: 'POST', headers: { ...this.bearer(token), 'content-type': 'application/json' }, body: JSON.stringify(ask) }, 190_000);
+    const body = await this.json(response);
+    if (typeof body.provider !== 'string' || !aiProviders.includes(body.provider)) throw badResponse();
+    const usage = body.usage as { inputTokens?: unknown; outputTokens?: unknown } | null;
+    return { items: body.items, provider: body.provider as ControlPointAiAnswer['provider'], usage: { inputTokens: tokens(usage?.inputTokens), outputTokens: tokens(usage?.outputTokens) } };
+  }
 }
 
 const vendorIds = ['gobilda', 'servocity', 'andymark', 'rev', 'pitsco'];
@@ -271,7 +318,40 @@ async function splitBody(body: ReadableStream<Uint8Array>, length: number) {
   return { stream, idempotencyKey: match?.[1] ?? null, documentId: match?.[2] ?? null, elementId: match?.[3] ?? null, oversized: size > length };
 }
 
-export async function controlPointRoute(request: Request, url: URL, env: ControlPointEnv, user: User | null, adapter: ControlPointAdapter = new HttpControlPointAdapter(controlPointOrigin(env), env.CONTROL_KIT_CLIENT_SECRET?.trim() ?? ''), store?: DecisionStore): Promise<Response> {
+/**
+ * The link's bearer token and saved workspace when the person is linked with one (AI review through Control Point,
+ * contract v1.2 §7), else null. `forget` ends this grant after Control Point refused it, unless a newer one replaced it.
+ */
+export async function linkedWorkspace(env: ControlPointEnv, userId: string): Promise<{ token: string; workspaceId: number; forget(): Promise<void> } | null> {
+  if (!controlPointAvailable(env)) return null;
+  const link = await readLink(env, userId);
+  if (!link || link.workspaceId === null) return null;
+  return { token: link.token, workspaceId: link.workspaceId, forget: async () => { await forgetLink(env, userId, link.token); } };
+}
+export const defaultAdapter = (env: ControlPointEnv): ControlPointAdapter => new HttpControlPointAdapter(controlPointOrigin(env), env.CONTROL_KIT_CLIENT_SECRET?.trim() ?? '');
+
+/** Counts bytes passing through and errors once more arrive than the request declared, rather than sending a truncated file. */
+function capped(body: ReadableStream<Uint8Array>, length: number) {
+  let total = 0;
+  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) { total += chunk.byteLength; if (total > length) controller.error(new Error('Body longer than its Content-Length')); else controller.enqueue(chunk); },
+  }));
+}
+const declaredLength = (request: Request) => { const value = request.headers.get('content-length'); return value && /^\d{1,10}$/.test(value) ? Number(value) : null; };
+const sentWords: Record<string, string> = {
+  not_found: 'Control Point no longer has that send. Send this BOM again.', in_progress: 'Control Point is still saving that send. Try again in a few seconds.',
+  checksum_mismatch: 'The file changed on the way. Try again.', too_large: 'This file is too large for Control Point.', bad_file: 'Control Point would not take this file.',
+  not_member: 'You are no longer a member of this Control Point workspace. Pick another one.', no_cad_edit: 'Your role in this workspace cannot edit CAD parts.',
+};
+/** Plain words for a refused upload; 401 is handled by the caller (it ends the link). */
+function uploadRefusal(error: ControlPointError) {
+  if (error.status === 429 || error.code === 'in_progress' || error.code === 'busy') return failure(429, error.code === 'rate_limited' ? 'rate_limited' : error.code, sentWords.in_progress, {}, { 'retry-after': String(error.retryAfter ?? 5) });
+  if (error.status === 404) return failure(409, 'not_sent', sentWords.not_found);
+  if (error.status === 400 || error.status === 403 || error.status === 413 || error.status === 415) return failure(error.status, error.code, sentWords[error.code] ?? 'Control Point refused this upload.');
+  return failure(502, 'unavailable', 'Control Point did not answer. Uploading again is safe.');
+}
+
+export async function controlPointRoute(request: Request, url: URL, env: ControlPointEnv, user: User | null, adapter: ControlPointAdapter = defaultAdapter(env), store?: DecisionStore): Promise<Response> {
   const available = controlPointAvailable(env);
   const callbackUri = `${url.origin}/control-point/callback`;
   if (url.pathname === '/control-point/start' && request.method === 'GET') {
@@ -407,13 +487,66 @@ export async function controlPointRoute(request: Request, url: URL, env: Control
     }
     return reply(await store.apply(user.id, scanned, decisions));
   }
+  if ((url.pathname === '/api/control-point/file' || url.pathname === '/api/control-point/pictures') && (request.method === 'POST' || request.method === 'GET')) {
+    // Contract v1.2 §6: files after a send and part pictures, only for the person's own latest send of this assembly.
+    if (request.method === 'POST' && request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
+    if (!available) return failure(501, 'unavailable', 'Control Point linking is not set up on this server.');
+    if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);
+    const documentId = url.searchParams.get('documentId');
+    const elementId = url.searchParams.get('elementId');
+    const importId = Number(url.searchParams.get('importId'));
+    if (!documentId || !/^[\w-]{1,128}$/.test(documentId) || !elementId || !/^[\w-]{1,128}$/.test(elementId) || !Number.isSafeInteger(importId) || importId <= 0) return failure(400, 'bad_request', 'Invalid send.');
+    const raw = await env.APP_STATE.get(sentKey(user.id, documentId, elementId));
+    const sent = raw ? JSON.parse(raw) as SentRecord : null;
+    // The import this person sent last for this assembly; that send proved their Onshape access read it.
+    if (!sent || sent.importId !== importId) return failure(409, 'not_sent', 'Send this BOM to Control Point first.');
+    const link = await readLink(env, user.id);
+    if (!link) return failure(409, 'not_linked', 'Link Control Point first.', { linked: false });
+    if (link.workspaceId !== sent.workspaceId) return failure(409, 'workspace_changed', 'That send went to another workspace. Send this BOM again.');
+    const named = url.searchParams.get('workspaceId');
+    if (request.method === 'POST' && named !== String(sent.workspaceId)) return failure(409, 'workspace_changed', 'The workspace changed. Check where it goes and send again.');
+    const length = declaredLength(request);
+    try {
+      if (url.pathname === '/api/control-point/pictures' && request.method === 'GET') return reply({ pictures: await adapter.pictureKeys(link.token, sent.workspaceId, importId) });
+      if (request.method !== 'POST') return reply({ error: 'Not found' }, 404);
+      if (length === null) return failure(411, 'length_required', 'Control Kit could not size this upload. Try again.');
+      if (!request.body || length === 0) return failure(400, 'bad_request', 'Nothing to upload.');
+      if (url.pathname === '/api/control-point/pictures') {
+        if (length > PICTURES_BODY_LIMIT_BYTES) return failure(413, 'too_large', 'Too many pictures in one upload.');
+        return reply(await adapter.uploadPictures(link.token, sent.workspaceId, importId, capped(request.body, length), length));
+      }
+      if (length > UPLOAD_FILE_LIMIT_BYTES) return failure(413, 'too_large', `Files over ${UPLOAD_FILE_LIMIT_BYTES / 1024 / 1024} MB stay in Control Kit.`);
+      const name = url.searchParams.get('name') ?? '';
+      const sha256 = request.headers.get('x-content-sha256') ?? '';
+      const mediaType = (request.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+      if (!name || name.length > 160 || /[\\/]/.test(name) || [...name].some(char => char.charCodeAt(0) < 32) ||!/^[0-9a-f]{64}$/.test(sha256) || !mediaType) return failure(400, 'bad_file', 'Name the file and its SHA-256.');
+      // The bytes stream through unread: the free plan's CPU limit rules out hashing them here; Control Point checks the hash.
+      const stored = await adapter.uploadFile(link.token, sent.workspaceId, importId, { name, mediaType, sha256, body: capped(request.body, length), length });
+      // Recorded per import and kind, so the panel shows STEP as attached; written only when it changed.
+      const kind = name.split('.').pop()?.toLowerCase() ?? '';
+      if ((uploadKinds as readonly string[]).includes(kind)) {
+        const key = uploadKey(user.id, importId, kind);
+        const before = await env.APP_STATE.get(key).then(value => value ? JSON.parse(value) as UploadRecord : null).catch(() => null);
+        if (before?.name !== name || before.sha256 !== sha256) await env.APP_STATE.put(key, JSON.stringify({ name, sha256, at: new Date().toISOString() } satisfies UploadRecord), { expirationTtl: 365 * 86400 });
+      }
+      return reply(stored);
+    } catch (error) {
+      if (!(error instanceof ControlPointError)) return failure(502, 'unavailable', 'Control Point did not answer. Uploading again is safe.');
+      if (error.status === 401) { await forgetLink(env, user.id, link.token); return revoked(); }
+      return uploadRefusal(error);
+    }
+  }
   if (url.pathname === '/api/control-point/sent' && request.method === 'GET') {
     if (!user) return reply({ error: 'Reconnect Onshape.' }, 401);
     const documentId = url.searchParams.get('documentId');
     const elementId = url.searchParams.get('elementId');
     if (!documentId || !/^[\w-]{1,128}$/.test(documentId) || !elementId || !/^[\w-]{1,128}$/.test(elementId)) return failure(400, 'bad_request', 'Invalid assembly.');
     const raw = await env.APP_STATE.get(sentKey(user.id, documentId, elementId));
-    return reply(raw ? JSON.parse(raw) as SentRecord : null);
+    if (!raw) return reply(null);
+    const record = JSON.parse(raw) as SentRecord;
+    const files = (await Promise.all(uploadKinds.map(kind => env.APP_STATE.get(uploadKey(user.id, record.importId, kind)))))
+      .flatMap(value => { try { return value ? [JSON.parse(value) as UploadRecord] : []; } catch { return []; } });
+    return reply({ ...record, files });
   }
   if (url.pathname === '/api/control-point/unlink' && request.method === 'POST') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);

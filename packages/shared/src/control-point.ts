@@ -1,6 +1,7 @@
 import type { AssemblyContext, BomLine, ScanResult } from './index';
 import type { LicensedImage, VendorRecord } from './matching';
 import { classificationIdentity, type Disposition } from './classifier';
+import type { AiProvider, AiReviewRequest } from './ai-review';
 
 /**
  * The bundle a reviewed scan attaches to Control Point: every line (active, suppressed, and missing-metadata), scan
@@ -12,6 +13,16 @@ import { classificationIdentity, type Disposition } from './classifier';
 export const CONTROL_POINT_CAD_URL = 'https://tryctrlpoint.org/cad-parts';
 /** Files up to this size travel inside the bundle (base64); larger ones as a reference with name, size, and hash. */
 export const INLINE_FILE_LIMIT_BYTES = 4 * 1024 * 1024;
+/**
+ * Contract v1.2 §6: a referenced file is uploaded right after its send, up to this size. The STEP zip always travels
+ * that way, so a send's key never depends on whether STEP was exported, and adding it later reaches the same import.
+ */
+export const UPLOAD_FILE_LIMIT_BYTES = 64 * 1024 * 1024;
+/** Part pictures: at most this many new Onshape drawings per send (each one billable request); cached ones are free. */
+export const PICTURE_FILL_PER_SEND = 30;
+/** One pictures call to Control Point holds at most this many, and at most this many bytes of JSON. */
+export const PICTURES_PER_CALL = 40;
+export const PICTURES_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 
 /** Control Point's `cad_parts` row (server/cad.ts): sections, sources, and statuses are its own enums. */
 export type ControlPointCadPart = {
@@ -86,6 +97,16 @@ export type ControlPointImport = {
   created: number; updated: number; markedRemoved: number; filesStored: number; url: string; sentAt: string;
 };
 export type ControlPointImportSummary = { importId: number; idempotencyKey: string; sentAt: string; sentBy: string; created: number; updated: number; markedRemoved: number; url: string };
+/** A file stored in Control Point after its send (contract v1.2 §6); `duplicate` means those exact bytes were already there. */
+export type ControlPointUpload = { name: string; url: string; sizeBytes: number; sha256: string; duplicate: boolean };
+/** Which parts of an import's assembly already have a picture in Control Point, by Control Kit's picture key. */
+export type ControlPointPictureKey = { identity: string; key: string };
+export type ControlPointPictureResult = { stored: number; unchanged: number; unknown: number; rejected: number };
+/** An AI review asked of Control Point (contract v1.2 §7): Control Kit's own instructions and schemas, and the request it rebuilt. */
+export type ControlPointAiAsk = { instructions: string; schema: Record<string, unknown>; geminiSchema: Record<string, unknown>; request: AiReviewRequest };
+export type ControlPointAiAnswer = { items: unknown; provider: AiProvider; usage: { inputTokens: number | null; outputTokens: number | null } };
+/** A body the Worker passes through without reading it: a stream of known length, or (tests) a string. */
+export type PassThroughBody = ReadableStream<Uint8Array> | string;
 /** A refused Control Point call: HTTP status, Control Point's error code (`revoked`, `not_member`, ...), and any `Retry-After` seconds. */
 export class ControlPointError extends Error {
   constructor(readonly status: number, readonly code: string, readonly detail: string | null = null, readonly retryAfter: number | null = null) { super(`Control Point ${status} ${code}`); }
@@ -103,6 +124,14 @@ export interface ControlPointAdapter {
   /** Choices people made in Control Point for one document's parts (contract §5). */
   decisions(token: string, workspaceId: number, documentId: string): Promise<ControlPointDecision[]>;
   revoke(token: string): Promise<void>;
+  /** v1.2 §6: a file of an import, uploaded after its send as raw bytes Control Point checks against `sha256`. */
+  uploadFile(token: string, workspaceId: number, importId: number, file: { name: string; mediaType: string; sha256: string; body: PassThroughBody; length: number }): Promise<ControlPointUpload>;
+  /** v1.2 §6: the picture keys Control Point holds for the parts of an import's assembly. */
+  pictureKeys(token: string, workspaceId: number, importId: number): Promise<ControlPointPictureKey[]>;
+  /** v1.2 §6: part pictures, a JSON body `{ pictures: [{ identity, key, contentBase64 }] }` passed through as-is. */
+  uploadPictures(token: string, workspaceId: number, importId: number, body: PassThroughBody, length: number): Promise<ControlPointPictureResult>;
+  /** v1.2 §7: an AI review answered with Control Point's own model keys. */
+  aiReview(token: string, workspaceId: number, ask: ControlPointAiAsk): Promise<ControlPointAiAnswer>;
 }
 
 const hex = (buffer: ArrayBuffer) => [...new Uint8Array(buffer)].map(value => value.toString(16).padStart(2, '0')).join('');
@@ -193,10 +222,40 @@ function expectedFiles(files: Array<{ name: string }>, explained: Array<{ name: 
   return missing;
 }
 
+/** Whether a file goes after its bundle (contract v1.2 §6) rather than inside it: the STEP zip always, anything over 4 MB. */
+export const uploadedAfterSend = (mediaType: string, sizeBytes: number) => mediaType === 'application/zip' || sizeBytes > INLINE_FILE_LIMIT_BYTES;
 async function file(name: string, mediaType: string, bytes: Uint8Array): Promise<ControlPointFile> {
   const base = { name, mediaType, sizeBytes: bytes.byteLength, sha256: await sha256(bytes) };
-  return bytes.byteLength <= INLINE_FILE_LIMIT_BYTES ? { ...base, delivery: 'inline', contentBase64: base64(bytes) }
-    : { ...base, delivery: 'reference', reason: `Larger than ${INLINE_FILE_LIMIT_BYTES / 1024 / 1024} MB, so it is uploaded separately once the file-upload contract is confirmed.` };
+  if (!uploadedAfterSend(mediaType, bytes.byteLength)) return { ...base, delivery: 'inline', contentBase64: base64(bytes) };
+  return { ...base, delivery: 'reference', reason: bytes.byteLength > UPLOAD_FILE_LIMIT_BYTES ? `Larger than ${UPLOAD_FILE_LIMIT_BYTES / 1024 / 1024} MB, so it stays in Control Kit.` : 'Uploaded right after this bundle.' };
+}
+
+/**
+ * Control Kit's name for the picture of a line at the revision it was drawn (contract v1.2 §6): the source revision the
+ * Worker caches it by (the scanned microversion for workspace parts) and a short hash of the line and what is drawn.
+ * Control Point skips a picture whose key it already holds.
+ */
+export async function controlPointPictureKey(result: Pick<ScanResult, 'diagnostics' | 'scanId'>, line: BomLine): Promise<string> {
+  const revision = line.sourceType === 'w' ? `m:${result.diagnostics?.revision?.id ?? result.scanId ?? 'unknown'}` : `${line.sourceType}:${line.sourceId}`;
+  const digest = (await sha256(`${line.bomLineKey}|${line.purchasedAssembly ? 'assembly' : 'part'}`)).slice(0, 16);
+  return `${revision}:${digest}`.replace(/[^\w:.-]/g, '_').slice(0, 128);
+}
+const makeOrder: Partial<Record<Disposition, number>> = { print: 0, cnc: 0, 'cut-2d': 0, fabricate: 0, review: 1, buy: 2, hardware: 3 };
+/**
+ * The lines whose pictures Control Point shows, one per part identity (the line that leads its CAD part), parts to make
+ * first: those are the ones a team needs to recognise. Not-needed parts and lines Onshape cannot draw are left out.
+ */
+export function pictureTargets(result: ScanResult): Array<{ identity: string; line: BomLine }> {
+  const seen = new Set<string>();
+  const out: Array<{ identity: string; line: BomLine }> = [];
+  for (const line of [...result.lines].sort((a, b) => a.bomLineKey.localeCompare(b.bomLineKey))) {
+    const identity = classificationIdentity(line);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    if (line.disposition === 'ignore' || !line.sourceType || !line.sourceId || (!line.partId && !line.purchasedAssembly)) continue;
+    out.push({ identity, line });
+  }
+  return out.sort((a, b) => (makeOrder[a.line.disposition] ?? 4) - (makeOrder[b.line.disposition] ?? 4));
 }
 
 /** A scan's three line lists as the bundle carries them, sorted by line key. */
@@ -300,4 +359,45 @@ export class MockControlPointAdapter implements ControlPointAdapter {
     return structuredClone(this.choices.get(`${workspaceId}:${documentId}`) ?? []);
   }
   async revoke(token: string) { this.check(token); this.revoked = true; }
+  /** Files uploaded after a send and part pictures, per workspace and import (contract v1.2 §6). */
+  readonly uploads: Array<{ workspaceId: number; importId: number; name: string; mediaType: string; sha256: string; bytes: Uint8Array }> = [];
+  readonly pictures = new Map<string, string>();
+  private ownImport(workspaceId: number, importId: number) {
+    const found = [...this.imported.values()].find(item => item.workspace.id === workspaceId && item.importId === importId);
+    if (!found) throw new ControlPointError(404, 'not_found');
+    return found;
+  }
+  async uploadFile(token: string, workspaceId: number, importId: number, file: { name: string; mediaType: string; sha256: string; body: PassThroughBody; length: number }) {
+    this.check(token);
+    this.ownImport(workspaceId, importId);
+    const bytes = new Uint8Array(await new Response(file.body).arrayBuffer());
+    if (await sha256(bytes) !== file.sha256) throw new ControlPointError(400, 'checksum_mismatch');
+    const earlier = this.uploads.find(item => item.importId === importId && item.name === file.name);
+    if (earlier?.sha256 === file.sha256) return { name: file.name, url: `/api/files/${this.uploads.indexOf(earlier) + 1}`, sizeBytes: bytes.byteLength, sha256: file.sha256, duplicate: true };
+    this.uploads.push({ workspaceId, importId, name: file.name, mediaType: file.mediaType, sha256: file.sha256, bytes });
+    return { name: file.name, url: `/api/files/${this.uploads.length}`, sizeBytes: bytes.byteLength, sha256: file.sha256, duplicate: false };
+  }
+  async pictureKeys(token: string, workspaceId: number, importId: number) {
+    this.check(token);
+    this.ownImport(workspaceId, importId);
+    return [...this.pictures].map(([identity, key]) => ({ identity, key }));
+  }
+  async uploadPictures(token: string, workspaceId: number, importId: number, body: PassThroughBody) {
+    this.check(token);
+    this.ownImport(workspaceId, importId);
+    const parsed = JSON.parse(await new Response(body).text()) as { pictures: Array<{ identity: string; key: string }> };
+    let stored = 0, unchanged = 0;
+    for (const item of parsed.pictures) { if (this.pictures.get(item.identity) === item.key) unchanged++; else { this.pictures.set(item.identity, item.key); stored++; } }
+    return { stored, unchanged, unknown: 0, rejected: 0 };
+  }
+  /** What `aiReview` answers next; null answers 501 (no keys in Control Point). */
+  aiAnswer: ControlPointAiAnswer | null = null;
+  readonly aiAsks: ControlPointAiAsk[] = [];
+  async aiReview(token: string, workspaceId: number, ask: ControlPointAiAsk) {
+    this.check(token);
+    if (!this.list.some(item => item.id === workspaceId)) throw new ControlPointError(403, 'not_member');
+    this.aiAsks.push(structuredClone(ask));
+    if (!this.aiAnswer) throw new ControlPointError(501, 'ai_unavailable');
+    return structuredClone(this.aiAnswer);
+  }
 }

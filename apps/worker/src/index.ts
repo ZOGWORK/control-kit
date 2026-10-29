@@ -4,13 +4,13 @@ import { applyMatchDecision, catalogReadKey, decisionRecord, classificationIdent
 import { runRevFeed } from './rev-feed';
 import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
-import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, reviewWithAi, trustedAiRequest, validAiRequest, type AiEnv } from './ai-review';
+import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, reviewThroughControlPoint, reviewWithAi, trustedAiRequest, validAiRequest, type AiEnv } from './ai-review';
 export { AiAllowance } from './ai-allowance';
 import { advanceExport, BudgetExhaustedError, createExportJob, dxfKey, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 import { assemblyNowKey, assemblyPreview, assemblyPreviewCacheKey, assemblyView, linePreview, previewCacheKey, PreviewUnavailableError, readAssemblyNow, redrawAssembly, reserveRedraw, type AssemblySource } from './preview';
 import { clearCookie, readSignedEnvelope, seal, signedCookie, unseal, type SignedCookie } from './secrets';
-import { controlPointRoute, type ControlPointEnv, type DecisionStore } from './control-point';
+import { controlPointAvailable, controlPointRoute, defaultAdapter, linkedWorkspace, type ControlPointEnv, type DecisionStore } from './control-point';
 
 export interface Env extends ControlPointEnv { APP_STATE: Kv; VENDOR_CATALOG: Kv; ONSHAPE_OAUTH_CLIENT_ID: string; ONSHAPE_OAUTH_CLIENT_SECRET: string; ONSHAPE_OAUTH_REDIRECT_URI: string; ONSHAPE_API_BASE: string; ONSHAPE_API_VERSION: string; ONSHAPE_OAUTH_BASE: string; SESSION_ENCRYPTION_KEY: string; WEB_ORIGIN: string; VENDOR_STALE_HOURS?: string;
   /** Optional AI review keys (Worker secrets). Without either, the review is off and nothing else changes. */
@@ -312,12 +312,23 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
     return reply({ choices });
   }
-  if (url.pathname === '/api/ai/status' && request.method === 'GET') return reply({ enabled: aiReviewEnabled(env) });
+  if (url.pathname === '/api/ai/status' && request.method === 'GET') {
+    // This Worker's own keys come first; without them, a person linked with a Control Point workspace reviews through it.
+    if (aiReviewEnabled(env)) return reply({ enabled: true, via: 'control-kit' });
+    if (!env.AI_ALLOWANCE || !controlPointAvailable(env)) return reply({ enabled: false });
+    const current = await getSession(request, env);
+    const linked = current ? await linkedWorkspace(env, current.data.user.id) : null;
+    return reply(linked ? { enabled: true, via: 'control-point' } : { enabled: false, linkToEnable: true });
+  }
   if (url.pathname === '/api/ai/review' && request.method === 'POST') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
-    if (!aiReviewEnabled(env)) return reply({ error: 'AI review is not set up on this server. Everything else works as before.' }, 501);
+    const own = aiReviewEnabled(env);
+    if (!own && !(env.AI_ALLOWANCE && controlPointAvailable(env))) return reply({ error: 'AI review is not set up on this server. Everything else works as before.' }, 501);
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
+    // Through Control Point only when this Worker has no key of its own; the allowance and the answer cache stay here.
+    const linked = own ? null : await linkedWorkspace(env, current.data.user.id);
+    if (!own && !linked) return reply({ error: 'Link Control Point with a workspace to use AI review.', code: 'not_linked' }, 501);
     const text = await request.text();
     if (text.length > 150_000) return reply({ error: 'Too many parts for one AI review.' }, 413);
     let body: { documentId?: string; scanId?: string; request?: unknown; keys?: unknown };
@@ -331,14 +342,23 @@ async function route(request: Request, env: Env): Promise<Response> {
     const trusted = trustedAiRequest(body.request, body.keys, scanned);
     if (!trusted) return reply({ error: 'These parts are not in your scan. Rescan and try again.' }, 409);
     // A saved answer is free; anything else takes one of the person's daily reviews, reserved before the call.
-    let outcome = await cachedAiReview(env, trusted);
+    let outcome = await cachedAiReview(env, trusted, linked ? 'control-point' : 'control-kit');
     if (!outcome) {
       const refused = await reserveAiReview(env, current.data.user.id);
       if (refused) return reply({ error: refused }, 429);
-      try { outcome = await reviewWithAi(env, trusted); }
+      try {
+        outcome = linked
+          ? await reviewThroughControlPoint(env, trusted, async ask => {
+            try { return await defaultAdapter(env).aiReview(linked.token, linked.workspaceId, ask); }
+            catch (error) { if ((error as { status?: number }).status === 401) await linked.forget(); throw error; }
+          })
+          : await reviewWithAi(env, trusted);
+      }
       finally { await releaseAiReview(env, current.data.user.id); }
     }
-    return outcome.ok ? reply({ items: outcome.items, provider: outcome.provider, cached: outcome.cached, usage: outcome.usage }) : reply({ error: outcome.error }, outcome.status);
+    const via = linked ? 'control-point' : 'control-kit';
+    return outcome.ok ? reply({ items: outcome.items, provider: outcome.provider, cached: outcome.cached, usage: outcome.usage, via })
+      : reply({ error: outcome.error, ...(outcome.code ? { code: outcome.code } : {}), ...(outcome.code === 'revoked' ? { linked: false } : {}) }, outcome.status);
   }
   if (url.pathname === '/api/classification/override' && request.method === 'POST') {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
@@ -473,9 +493,16 @@ async function route(request: Request, env: Env): Promise<Response> {
     const result = JSON.parse(raw) as ScanResult;
     const line = [...result.lines, ...result.suppressed].find(item => item.bomLineKey === lineKey);
     if (!line) return reply({ error: 'This part is not in your latest scan.' }, 404);
+    const cacheKey = previewCacheKey(current.data.user.id, result, line, await lineKeyDigest(`${line.bomLineKey}|${line.purchasedAssembly ? 'assembly' : 'part'}`));
+    // `cached=1` (pictures for Control Point, contract v1.2 §6): only a picture already drawn, never an Onshape request.
+    if (url.searchParams.get('cached') === '1') {
+      const saved = await env.APP_STATE.get(cacheKey);
+      return saved ? new Response(Uint8Array.from(atob(saved), char => char.charCodeAt(0)), { headers: { 'content-type': 'image/png', 'cache-control': 'private, max-age=3600' } })
+        : reply({ error: 'Not drawn yet.', code: 'not_cached' }, 404);
+    }
     const ledger = new RequestLedger('preview');
     try {
-      const png = await linePreview(line, previewCacheKey(current.data.user.id, result, line, await lineKeyDigest(`${line.bomLineKey}|${line.purchasedAssembly ? 'assembly' : 'part'}`)), env.APP_STATE, onshapeFetcher(env, current, ledger, { remaining: 3 }), env.ONSHAPE_API_VERSION, result.diagnostics?.revision);
+      const png = await linePreview(line, cacheKey, env.APP_STATE, onshapeFetcher(env, current, ledger, { remaining: 3 }), env.ONSHAPE_API_VERSION, result.diagnostics?.revision);
       return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png', 'cache-control': 'private, max-age=3600' } });
     } catch (error) {
       if (error instanceof SessionExpiredError) return reply({ error: 'Reconnect Onshape.' }, 401);
@@ -555,7 +582,7 @@ export const cronVendors: Record<string, VendorId> = { '0 * * * *': 'gobilda', '
 export default {
   async fetch(request: Request, env: Env) {
     const origin = request.headers.get('origin');
-    if (request.method === 'OPTIONS' && origin === env.WEB_ORIGIN) return new Response(null, { status: 204, headers: { 'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'content-type' } });
+    if (request.method === 'OPTIONS' && origin === env.WEB_ORIGIN) return new Response(null, { status: 204, headers: { 'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'content-type, x-content-sha256' } });
     let result: Response;
     try { result = await route(request, env); }
     catch (error) { console.error('Control Kit request failed', error); result = reply({ error: 'Control Kit could not complete this request. Try again.' }, 502); }

@@ -4,7 +4,7 @@ export { applyClassificationChoice, classificationIdentity, classifyLine, classi
 import { purchasedAssemblyReason } from './classifier';
 export type { ClassificationOverride, ClassificationOverrides, Confidence, Disposition, DispositionSource, Provenance, UserSettings } from './classifier';
 export type { Attribution, LibraryMapping, LicensedImage, VendorId, VendorRecord, MatchResult } from './matching';
-export { buildControlPointPayload, controlPointIdempotencyKey, CONTROL_POINT_CAD_URL, ControlPointError, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter } from './control-point';
+export { buildControlPointPayload, controlPointIdempotencyKey, controlPointPictureKey, CONTROL_POINT_CAD_URL, ControlPointError, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter, PICTURE_FILL_PER_SEND, PICTURES_BODY_LIMIT_BYTES, PICTURES_PER_CALL, pictureTargets, UPLOAD_FILE_LIMIT_BYTES, uploadedAfterSend } from './control-point';
 export { recalculatePurchasing, updatePurchasing } from './purchasing';
 export { isBundle, knownProduct, successorOf, withKnownPack } from './known-products';
 export { AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, aiCandidateRecord, aiDispositions, aiReviewHash, aiReviewInstructions, aiReviewSchema, applyAiReview, buildAiReviewRequest, lineCandidates, needsAiReview, parseAiReview } from './ai-review';
@@ -13,7 +13,7 @@ import { recalculatePurchasing } from './purchasing';
 export { batchKey, catalogReadKey, catalogVendors, clearCatalogMemoryCache, indexKey, matchCatalog, pointerKey } from './catalog-read';
 export type { MatchProgress } from './catalog-read';
 export type { CatalogReader, IndexEntry } from './catalog-read';
-export type { ControlPointAccount, ControlPointAdapter, ControlPointBomPayload, ControlPointCadExtra, ControlPointCadPart, ControlPointCandidate, ControlPointChoiceTimes, ControlPointDecision, ControlPointFile, ControlPointImport, ControlPointImportSummary, ControlPointLine, ControlPointWorkspace } from './control-point';
+export type { ControlPointAccount, ControlPointAdapter, ControlPointAiAnswer, ControlPointAiAsk, ControlPointPictureKey, ControlPointPictureResult, ControlPointUpload, PassThroughBody, ControlPointBomPayload, ControlPointCadExtra, ControlPointCadPart, ControlPointCandidate, ControlPointChoiceTimes, ControlPointDecision, ControlPointFile, ControlPointImport, ControlPointImportSummary, ControlPointLine, ControlPointWorkspace } from './control-point';
 export { checkStep, exportManifest, stepDispositions, stepFileName, wantsDxf, wantsStep } from './step';
 export type { DxfPart, ExportPart, StepCheck } from './step';
 export { cutsFromSheet, maxCutThicknessMm, statedThicknessMm, thicknessRule, tooThickText } from './thickness';

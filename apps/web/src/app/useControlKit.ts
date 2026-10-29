@@ -336,10 +336,12 @@ export function useControlKit(context: URLSearchParams) {
     } finally { markSaving(line.bomLineKey, false, 'product'); }
   }
 
-  useEffect(() => {
+  /** Whether the AI review button shows: this Worker's own keys, or (contract v1.2 §7) a Control Point workspace linked. */
+  function refreshAiStatus() {
     api('/api/ai/status').then(response => response.ok ? response.json() as Promise<{ enabled?: boolean }> : { enabled: false })
       .then(status => setAi(current => ({ ...current, enabled: Boolean(status.enabled) }))).catch(() => { /* The review stays hidden. */ });
-  }, []);
+  }
+  useEffect(refreshAiStatus, []);
 
   /** One batched request for every uncertain line. Suggestions only: nothing is saved until a person accepts one. */
   async function runAiReview() {
@@ -353,11 +355,13 @@ export function useControlKit(context: URLSearchParams) {
     setAi(state => ({ ...state, running: true, note: '' }));
     try {
       const response = await postJson('/api/ai/review', { documentId: result.documentId, scanId, request, keys });
-      const body = await response.json().catch(() => ({})) as { items?: AiReviewItem[]; provider?: AiProvider; cached?: boolean; error?: string };
+      const body = await response.json().catch(() => ({})) as { items?: AiReviewItem[]; provider?: AiProvider; cached?: boolean; error?: string; via?: string; code?: string };
+      // Control Point ended the link: the review goes away with it until the person links again.
+      if (body.code === 'revoked' || body.code === 'not_linked') refreshAiStatus();
       if (!current()) return;
       if (!response.ok || !body.items || !body.provider) { setAi(state => ({ ...state, note: body.error ?? 'The AI review failed. Your parts are unchanged.' })); return; }
       setResult(state => state && state.scanId === scanId ? applyAiReview(state, keys, body.items!, body.provider!) : state);
-      const who = body.provider === 'gemini' ? 'Gemini' : 'Claude';
+      const who = `${body.provider === 'gemini' ? 'Gemini' : 'Claude'}${body.via === 'control-point' ? ' (through Control Point)' : ''}`;
       setAi(state => ({ ...state, note: `${who} suggested ${body.items!.length} of ${request.lines.length} uncertain parts${body.cached ? ' (a saved answer, no new AI call)' : ''}${request.leftOut ? `; ${request.leftOut} more were not sent` : ''}. Nothing changes until you accept a suggestion.` }));
     } catch { if (current()) setAi(state => ({ ...state, note: 'Could not reach the AI review. Your parts are unchanged.' })); }
     finally { if (current()) setAi(state => ({ ...state, running: false })); }
@@ -678,7 +682,7 @@ export function useControlKit(context: URLSearchParams) {
     return { url: URL.createObjectURL(await response.blob()), drawnAt: response.headers.get('x-picture-drawn'), view };
   }
 
-  return { assemblyPicture, redrawAssemblyPicture, choiceTimes, refreshChoices, context, buildWorkbook, lastStepZip, previous, ai, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
+  return { assemblyPicture, redrawAssemblyPicture, choiceTimes, refreshChoices, context, buildWorkbook, lastStepZip, previous, ai, refreshAiStatus, runAiReview, acceptAi, dismissAi, saving, showInOnshape, partPicture, session, checkingSession, refreshSession, connectUrl, error, clearError: () => setError(''), result, progress, scan, cancelScan, decide, setDisposition,
     acceptSuggestions, setDispositions, bulk, pending, settings, savingSettings, saveSettings, signOut, excel, downloadExcel, downloadCsv, step, downloadStep };
 }
 export type ControlKit = ReturnType<typeof useControlKit>;
