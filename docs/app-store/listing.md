@@ -2,7 +2,7 @@
 
 Everything Control Kit's store entry needs, ready to paste into the Onshape Developer Portal (My account → Developer → OAuth applications → Control Kit → Store entry). The owner signs in and submits; nothing here is sent automatically.
 
-Every screenshot is the live app on the HORS assembly (MR. HORS, HORS 25-26), scanned from Onshape and matched against the production vendor catalogs, rendered with the current interface on 2026-10-26: 119 parts, 61 to buy, 55 to make, none waiting for review, $1,768.05 priced from 50 of 61 buy lines. No numbers are made up. `5-scan.png` is the owner's own capture of Onshape with the panel scanning HORS beside the 3D model.
+Every screenshot is the live app on the HORS assembly (MR. HORS, HORS 25-26), scanned from Onshape and matched against the production vendor catalogs, rendered with the current interface (recaptured 2026-10-27, PR #51): 119 parts, 61 to buy, 55 to make, none waiting for review, $1,768.05 priced from 50 of 61 buy lines. No numbers are made up. `5-scan.png` is the owner's own capture of Onshape with the panel scanning HORS beside the 3D model.
 
 ## What Onshape asks for
 
