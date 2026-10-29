@@ -21,7 +21,7 @@ export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) =
 
     <section className="panel" aria-labelledby="step-export">
       <div className="panel-head">
-        <div><h2 id="step-export">STEP files</h2><p>For slicers and CAM. A 2D-cut part still needs a cut file (DXF) made from its flat face.</p></div>
+        <div><h2 id="step-export">STEP files</h2><p>For slicers and CAM. Each 2D-cut part also gets a DXF of its flat face, in millimetres, ready for a laser, router, or waterjet.</p></div>
         <Button loading={step?.running} onClick={() => void kit.downloadStep()}><Download aria-hidden size={15} /> Download STEP files</Button>
       </div>
       {step?.running && <div className="panel-body stack" aria-live="polite">
@@ -29,7 +29,7 @@ export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) =
         <p className="muted small">{step.total ? `${step.ready} of ${step.total} exported${step.failed ? `, ${step.failed} failed` : ''}. Onshape translates each part; large parts take longer.` : 'Starting the export…'}</p>
       </div>}
       {step && !step.running && step.zipMade !== null && <div className="panel-body stack">
-        {step.zipMade ? <Alert tone={step.failures.length ? 'warning' : 'success'} title={`${step.ready} of ${step.total} STEP files downloaded`}>{step.failures.length ? 'The parts below failed. They are also listed in MANIFEST.txt in the ZIP.' : 'Every part exported and passed its file check.'}</Alert>
+        {step.zipMade ? <Alert tone={step.failures.length ? 'warning' : 'success'} title={`${step.ready} of ${step.total} STEP files${step.dxfTotal ? ` and ${step.dxfReady ?? 0} of ${step.dxfTotal} DXF cut files` : ''} downloaded`}>{step.failures.length ? 'The parts below failed. They are also listed in MANIFEST.txt in the ZIP.' : 'Every part exported and passed its file check.'}</Alert>
           : <Alert tone="danger" title="No STEP file could be exported">No ZIP was made. Each part and its reason is listed below.</Alert>}
         {step.failures.length > 0 && <div className="rows">{step.failures.map(failure => <div key={`${failure.name}:${failure.reason}`} className="row">
           <div className="row-main"><span className="row-title"><span>{failure.name}</span></span><span className="muted small">{failure.reason}</span></div>

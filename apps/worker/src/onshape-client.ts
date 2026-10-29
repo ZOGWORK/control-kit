@@ -3,7 +3,7 @@ import type { Kv } from './index';
 
 /** Endpoint families counted against the owner's annual Onshape API allowance. */
 export type OnshapeRequestKind = 'session-info' | 'microversion' | 'assembly-definition' | 'assembly-bom' | 'metadata' | 'element-info' | 'mass-properties'
-  | 'part-stl' | 'translation-start' | 'translation-status' | 'external-data' | 'shaded-view' | 'other';
+  | 'part-stl' | 'translation-start' | 'translation-status' | 'external-data' | 'shaded-view' | 'body-details' | 'tessellated-edges' | 'other';
 export type RequestPurpose = 'oauth-profile' | 'scan' | 'export' | 'preview';
 /** Outcome of one outbound request; `error` means the fetch threw before a status arrived. */
 export type LedgerEntry = { kind: OnshapeRequestKind; status: number | 'error'; retry: boolean };
@@ -23,6 +23,8 @@ export function requestKind(path: string, method = 'GET'): OnshapeRequestKind {
   if (/\/translations\/[^/]+$/.test(pathname)) return 'translation-status';
   if (pathname.includes('/externaldata/')) return 'external-data';
   if (pathname.endsWith('/shadedviews')) return 'shaded-view';
+  if (pathname.endsWith('/bodydetails')) return 'body-details';
+  if (pathname.endsWith('/tessellatededges')) return 'tessellated-edges';
   return 'other';
 }
 

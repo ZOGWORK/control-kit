@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import type { Plugin } from 'vite';
-import { aggregateAssembly, classifyScan, mergeBom, wantsStep, type AssemblyDefinition, type CatalogHealth, type ScanResult } from '../../packages/shared/src/index';
-import { mockBom, mockStep } from '../worker/src/mock-onshape';
+import { aggregateAssembly, classifyScan, dxfFileName, mergeBom, wantsDxf, wantsStep, type AssemblyDefinition, type CatalogHealth, type ScanResult } from '../../packages/shared/src/index';
+import { mockBom, mockPlateBody, mockStep } from '../worker/src/mock-onshape';
 
 /** The team's choices a saved scan already carries, so serving it keeps them as the Worker would. */
 const savedChoices = (result: ScanResult) => Object.fromEntries(result.lines.flatMap(line => line.manualClassification ? [[line.bomLineKey, line.manualClassification]] : []));
@@ -116,8 +116,11 @@ export function fixtureApi(fixturePath?: string, catalogOrigin?: string, preview
         }
         const job = () => ({ jobId: '00000000-0000-4000-8000-0000000000bb', done: true, assemblyName: result.assemblyName, documentName: result.documentName, revision: null, scannedAt: result.scannedAt,
           parts: result.lines.filter(wantsStep).map((line, index) => ({ lineKey: line.bomLineKey, name: line.name, qty: line.qty, disposition: line.disposition, partId: line.partId, configuration: line.configuration,
-            sourceUrl: line.partStudioUrl, fileName: `part_${index}.step`, state: 'ready', error: null, units: 'mm', nameMatches: true, bytes: 400 })) });
+            sourceUrl: line.partStudioUrl, fileName: `part_${index}.step`, state: 'ready', error: null, units: 'mm', nameMatches: true, bytes: 400,
+            ...(wantsDxf(line) ? { dxf: { fileName: dxfFileName(`part_${index}.step`), state: 'ready', error: null, bytes: null, widthMm: null, heightMm: null, thicknessMm: null, edges: false } } : {}) })) });
         if (url.pathname === '/api/exports') return json(job());
+        // A 2D-cut part's geometry is the mock plate; the app draws its DXF as it does from the Worker's.
+        if (/^\/api\/exports\/[\w-]+\/files\/\d+\.body$/.test(url.pathname)) return json(mockPlateBody('plate'));
         const file = url.pathname.match(/^\/api\/exports\/[\w-]+\/files\/(\d+)$/);
         if (file) { response.setHeader('content-type', 'application/step'); return response.end(mockStep(job().parts[Number(file[1])]?.name ?? 'part')); }
         if (/^\/api\/exports\/[\w-]+$/.test(url.pathname)) return json(job());

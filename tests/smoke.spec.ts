@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { unzipSync } from 'fflate';
 import { aggregateAssembly, classifyScan, type AssemblyDefinition, type ScanResult } from '../packages/shared/src/index';
+import { mockPlateBody } from '../apps/worker/src/mock-onshape';
 
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/assembly-simple.json', import.meta.url), 'utf8')) as AssemblyDefinition;
 const result = classifyScan(aggregateAssembly(fixture, { documentId: 'simple', workspaceOrVersion: 'w', workspaceOrVersionId: 'work1', elementId: 'elem1' }, 'Simple FTC Assembly'), { teamNumber: null }, {});
@@ -146,18 +147,23 @@ test('review explains each part, saves a one-click choice, and accepts all sugge
   await expect(page.getByRole('region', { name: 'Fasteners' })).toContainText('M3 Screw');
 });
 
-test('STEP export polls the job, zips ready files with a manifest, and shows failures', async ({ page }) => {
+test('STEP export polls the job, zips ready files and a 2D-cut DXF with a manifest, and shows failures', async ({ page }) => {
   const printed = { ...result, lines: result.lines.map((line, index) => index === 0 ? { ...line, disposition: 'print' as const } : { ...line, disposition: 'buy' as const }) };
   const step = "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n#1=PRODUCT('Guide','Guide','',(#2));\nENDSEC;\nEND-ISO-10303-21;\n";
   const parts = (state: string) => [
     { lineKey: 'a', name: 'Guide', qty: 2, disposition: 'print', partId: 'p1', configuration: null, sourceUrl: 'https://cad.onshape.com/documents/a', fileName: 'Guide__p1.step', state, error: null, units: 'mm', nameMatches: true, bytes: 80 },
     { lineKey: 'b', name: 'Motor', qty: 1, disposition: 'print', partId: 'p2', configuration: null, sourceUrl: 'https://cad.onshape.com/documents/b', fileName: 'Motor__p2.step', state: 'failed', error: 'Deliberate failure', units: null, nameMatches: null, bytes: null },
+    { lineKey: 'c', name: 'Plate', qty: 2, disposition: 'cut-2d', partId: 'p3', configuration: null, sourceUrl: 'https://cad.onshape.com/documents/c', fileName: 'Plate__p3.step', state, error: null, units: 'mm', nameMatches: true, bytes: 80,
+      dxf: { fileName: 'Plate__p3.dxf', state: state === 'translating' ? 'pending' : 'ready', error: null, bytes: null, widthMm: null, heightMm: null, thicknessMm: null, edges: false } },
   ];
   const job = (done: boolean, state: string) => ({ jobId: '11111111-1111-4111-8111-111111111111', done, assemblyName: 'Simple FTC Assembly', scannedAt: '2026-10-24T00:00:00Z', revision: { type: 'm', id: 'mv' }, parts: parts(state) });
   let polls = 0;
   await page.route('**/api/exports', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(job(false, 'translating')) }));
   await page.route('**/api/exports/11111111-1111-4111-8111-111111111111', route => { polls++; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(job(true, 'ready')) }); });
   await page.route('**/api/exports/11111111-1111-4111-8111-111111111111/files/0', route => route.fulfill({ status: 200, contentType: 'application/step', body: step }));
+  await page.route('**/api/exports/11111111-1111-4111-8111-111111111111/files/2', route => route.fulfill({ status: 200, contentType: 'application/step', body: step }));
+  // The app draws the plate's DXF from the Onshape geometry the Worker stored.
+  await page.route('**/api/exports/11111111-1111-4111-8111-111111111111/files/2.body', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockPlateBody('p3')) }));
   await connected(page, printed);
   await section(page, /^Make/).click();
   const download = page.waitForEvent('download');
@@ -165,14 +171,18 @@ test('STEP export polls the job, zips ready files with a manifest, and shows fai
   const zip = await download;
   expect(polls).toBeGreaterThanOrEqual(1);
   expect(zip.suggestedFilename()).toBe('Simple_FTC_Assembly_STEP.zip');
-  expect(Object.keys(unzipSync(new Uint8Array(readFileSync(await zip.path())))).sort()).toEqual(['Simple_FTC_Assembly_STEP/3D_print/Guide__p1.step', 'Simple_FTC_Assembly_STEP/MANIFEST.txt']);
-  await expect(page.getByRole('status').filter({ hasText: '1 of 2 STEP files downloaded' })).toBeVisible();
+  const files = unzipSync(new Uint8Array(readFileSync(await zip.path())));
+  expect(Object.keys(files).sort()).toEqual(['Simple_FTC_Assembly_STEP/2D_cut/Plate__p3.dxf', 'Simple_FTC_Assembly_STEP/2D_cut/Plate__p3.step', 'Simple_FTC_Assembly_STEP/3D_print/Guide__p1.step', 'Simple_FTC_Assembly_STEP/MANIFEST.txt']);
+  expect(new TextDecoder().decode(files['Simple_FTC_Assembly_STEP/2D_cut/Plate__p3.dxf']).startsWith('0\nSECTION')).toBe(true);
+  expect(new TextDecoder().decode(files['Simple_FTC_Assembly_STEP/MANIFEST.txt'])).toContain('Plate__p3.dxf | Plate | 2 | 100 x 60 | 3 |');
+  await expect(page.getByRole('status').filter({ hasText: '2 of 3 STEP files and 1 of 1 DXF cut files downloaded' })).toBeVisible();
   await expect(page.locator('.row').filter({ hasText: 'Motor' })).toContainText('Deliberate failure');
   // When every part fails there is no ZIP, only an explanation, and each reason stays visible.
   await page.unroute('**/api/exports/11111111-1111-4111-8111-111111111111');
-  await page.route('**/api/exports/11111111-1111-4111-8111-111111111111', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...job(true, 'failed'), parts: parts('failed').map(item => ({ ...item, state: 'failed', error: 'Deliberate failure' })) }) }));
+  await page.route('**/api/exports/11111111-1111-4111-8111-111111111111', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...job(true, 'failed'), parts: parts('failed').map(item => ({ ...item, state: 'failed', error: 'Deliberate failure', ...(item.dxf ? { dxf: { ...item.dxf, state: 'failed', error: 'Deliberate DXF failure' } } : {}) })) }) }));
   await page.getByRole('button', { name: 'Download STEP files' }).click();
-  await expect(page.getByRole('alert').filter({ hasText: 'No STEP file could be exported (2 parts failed).' })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'No STEP file could be exported (3 parts failed).' })).toBeVisible();
+  await expect(page.locator('.row').filter({ hasText: 'Plate (DXF)' })).toContainText('Deliberate DXF failure');
   await expect(page.locator('.row').filter({ hasText: 'Guide' })).toContainText('Deliberate failure');
 });
 

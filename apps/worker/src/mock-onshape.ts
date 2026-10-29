@@ -34,7 +34,7 @@ export function mockBom(definition: MockDefinition) {
       itemSource: { documentId: instance.documentId, elementId: instance.elementId, partId: instance.partId, wvmType: 'w', wvmId: 'work1', fullConfiguration: 'default', configuration: 'default', isStandardContent: false } })) };
 }
 
-const stepNames: Record<string, string> = { 'intake-guide': 'Custom Printed Intake Guide', 'sensor-mount': 'Custom Printed Sensor Mount' };
+const stepNames: Record<string, string> = { 'intake-guide': 'Custom Printed Intake Guide', 'sensor-mount': 'Custom Printed Sensor Mount', 'wheel-96': '96mm Wheel' };
 /** A minimal but well-formed ISO-10303-21 file in millimetres, naming its product like Onshape's STEP export. */
 export const mockStep = (name: string) => `ISO-10303-21;
 HEADER;
@@ -50,6 +50,34 @@ DATA;
 ENDSEC;
 END-ISO-10303-21;
 `;
+
+/**
+ * Body details for a 3 mm plate, 100 x 60 mm, in metres as Onshape reports them: one rounded corner (an arc), a
+ * 10 mm hole (a circle), and with `curved` a spline edge that needs Onshape's tessellation. The bottom face is the
+ * largest; the top is smaller because of a countersink. Shaped like BTExportModelBodiesResponse.
+ */
+export function mockPlateBody(partId: string, curved = false) {
+  const p = (x: number, y: number, z = 0) => ({ x, y, z });
+  const line = (id: string, a: ReturnType<typeof p>, b: ReturnType<typeof p>) => ({ id, curve: { type: 'LINE', origin: a, direction: p(b.x - a.x, b.y - a.y) }, geometry: { startPoint: a, endPoint: b, midPoint: p((a.x + b.x) / 2, (a.y + b.y) / 2) }, vertices: [] });
+  const r = Math.SQRT1_2 * 0.01;
+  const edges = [
+    line('e1', p(0, 0), p(0.1, 0)),
+    line('e2', p(0.1, 0), p(0.1, 0.05)),
+    { id: 'e3', curve: { type: 'CIRCLE', origin: p(0.09, 0.05), normal: p(0, 0, 1), radius: 0.01 }, geometry: { startPoint: p(0.1, 0.05), endPoint: p(0.09, 0.06), midPoint: p(0.09 + r, 0.05 + r) }, vertices: [] },
+    curved ? { id: 'e4', curve: { type: 'BCURVE' }, geometry: { startPoint: p(0.09, 0.06), endPoint: p(0, 0.06) }, vertices: [] } : line('e4', p(0.09, 0.06), p(0, 0.06)),
+    line('e5', p(0, 0.06), p(0, 0)),
+    { id: 'e6', curve: { type: 'CIRCLE', origin: p(0.03, 0.03), normal: p(0, 0, 1), radius: 0.005 }, geometry: { startPoint: p(0.035, 0.03), endPoint: p(0.035, 0.03) }, vertices: [] },
+    line('t1', p(0, 0, 0.003), p(0.1, 0, 0.003)),
+  ];
+  const loop = (outer: boolean, ids: string[]) => ({ isOuter: outer, isInner: !outer, coedges: ids.map(edgeId => ({ edgeId, orientation: true })) });
+  return { bodies: [{ id: partId, type: 'SOLID', edges, vertices: [{ id: 'v1', point: p(0, 0, 0) }, { id: 'v2', point: p(0, 0, 0.003) }], faces: [
+    { id: 'bottom', area: 0.0059, surface: { type: 'PLANE', origin: p(0, 0, 0), normal: p(0, 0, -1), isOrientedWithFace: true }, loops: [loop(true, ['e1', 'e2', 'e3', 'e4', 'e5']), loop(false, ['e6'])] },
+    { id: 'top', area: 0.0058, surface: { type: 'PLANE', origin: p(0, 0, 0.003), normal: p(0, 0, 1), isOrientedWithFace: true }, loops: [loop(true, ['t1'])] },
+    { id: 'hole', area: 0.0001, surface: { type: 'CYLINDER', origin: p(0.03, 0.03), axis: p(0, 0, 1), radius: 0.005 }, loops: [] },
+  ] }] };
+}
+/** Onshape's tessellation of the curved plate's spline edge: a gentle bow from (90, 60) to (0, 60) mm. */
+export const mockPlateEdges = (ids: string[]) => ({ bodies: [{ edges: ids.filter(id => id === 'e4').map(id => ({ id, vertices: [0, 0.25, 0.5, 0.75, 1].map(t => ({ x: 0.09 * (1 - t), y: 0.06 + 0.005 * Math.sin(Math.PI * t), z: 0 })) })) }] });
 
 export function createMockOnshape() {
   let bomFailure: number | null = null;
@@ -121,6 +149,18 @@ export function createMockOnshape() {
       apiRequests++;
       if (external[1] === 'bad-file') return new Response('<html><body>Error</body></html>', { headers: { 'content-type': 'text/html' } });
       return new Response(mockStep(stepNames[external[1]] ?? external[1]), { headers: { 'content-type': 'application/octet-stream' } });
+    }
+    // Body details and tessellated edges for a 2D-cut part's DXF: every part is the mock plate. 'curved-plate' has a
+    // spline edge, 'no-face' has no planar face, and 'body-403' is refused.
+    const bodyDetails = url.pathname.match(/^\/api\/v\d+\/parts\/d\/[^/]+\/[wv]\/[^/]+\/e\/[^/]+\/partid\/([^/]+)\/(bodydetails|tessellatededges)$/);
+    if (bodyDetails) {
+      apiRequests++;
+      const partId = decodeURIComponent(bodyDetails[1]);
+      if (partId === 'body-403') return json(403, { error: 'forbidden' });
+      if (bodyDetails[2] === 'tessellatededges') return json(200, mockPlateEdges(url.searchParams.getAll('edgeId').length ? url.searchParams.getAll('edgeId') : ['e4']));
+      const body = mockPlateBody(partId, partId === 'curved-plate');
+      if (partId === 'no-face') body.bodies[0].faces = body.bodies[0].faces.filter(face => face.surface.type !== 'PLANE');
+      return json(200, body);
     }
     // A shaded view: a stand-in PNG naming what was drawn, so tests can tell a part from the whole assembly.
     const shaded = url.pathname.match(/^\/api\/v\d+\/(assemblies|parts|partstudios)\/d\/(simple|robot|empty)\/([wvm])\/([^/]+)\/e\/[^/]+(?:\/partid\/[^/]+)?\/shadedviews$/);

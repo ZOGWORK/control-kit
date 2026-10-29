@@ -42,8 +42,32 @@ describe('STEP ZIP', () => {
     expect(manifest).toContain('Files: 2 of 3 parts exported, 1 failed');
     expect(manifest).toContain('Plate.step | Plate | 2 | 2D cut (laser/waterjet/router) | mm |');
     expect(manifest).toContain('Motor (qty 2): Deliberate failure | https://cad.onshape.com/documents/d/w/w/e/Motor');
-    expect(manifest).toContain('still needs a cut file (DXF)');
-    expect(zip).toMatchObject({ filename: 'MR_HORS_STEP.zip', ready: 2, failed: 1 });
+    expect(manifest).not.toContain('DXF');
+    expect(zip).toMatchObject({ filename: 'MR_HORS_STEP.zip', ready: 2, failed: 1, dxf: 0 });
+  });
+  it("puts each 2D-cut part's DXF beside its STEP, lists it in the manifest, and reports a DXF failure without dropping the STEP", () => {
+    const dxf = (state: 'ready' | 'failed', error: string | null = null) => ({ fileName: '', state, error, bytes: 120, widthMm: 100, heightMm: 60.5, thicknessMm: 3.175 });
+    const parts = [
+      part('Plate', 'ready', { disposition: 'cut-2d', fileName: 'Plate__p1.step', dxf: { ...dxf('ready'), fileName: 'Plate__p1.dxf' } }),
+      part('Gusset', 'ready', { disposition: 'cut-2d', fileName: 'Gusset__p2.step', dxf: { ...dxf('failed', 'This part has no flat face to cut from'), fileName: 'Gusset__p2.dxf' } }),
+      part('Bracket', 'failed', { disposition: 'cut-2d', fileName: 'Bracket__p3.step', dxf: { ...dxf('ready'), fileName: 'Bracket__p3.dxf' } }),
+      part('Arm', 'ready', { disposition: 'cut-2d', fileName: 'Arm__p4.step', dxf: { ...dxf('ready'), fileName: 'Arm__p4.dxf' } }),
+    ];
+    const cut = '0\nSECTION\n2\nENTITIES\n0\nLINE\n8\nCUT\n10\n0\n20\n0\n30\n0\n11\n10\n21\n0\n31\n0\n0\nENDSEC\n0\nEOF\n';
+    const zip = buildStepZip({ assemblyName: 'Robot', scannedAt: '2026-10-24T00:00:00Z', parts, files: { 0: step('Plate'), 1: step('Gusset'), 3: step('Arm') }, dxfFiles: { 0: cut, 2: cut }, now: new Date('2026-10-24T01:00:00Z') });
+    const files = unzipSync(zip.bytes);
+    expect(Object.keys(files).sort()).toEqual(['Robot_STEP/2D_cut/Arm__p4.step', 'Robot_STEP/2D_cut/Bracket__p3.dxf', 'Robot_STEP/2D_cut/Gusset__p2.step', 'Robot_STEP/2D_cut/Plate__p1.dxf', 'Robot_STEP/2D_cut/Plate__p1.step', 'Robot_STEP/MANIFEST.txt']);
+    expect(strFromU8(files['Robot_STEP/2D_cut/Plate__p1.dxf']).startsWith('0\nSECTION')).toBe(true);
+    const manifest = strFromU8(files['Robot_STEP/MANIFEST.txt']);
+    expect(manifest).toContain('DXF cut files: 2 of 4 2D-cut parts, 2 failed (listed below)');
+    expect(manifest).toContain('Plate__p1.dxf | Plate | 2 | 100 x 60.5 | 3.18 |');
+    expect(manifest).toContain('DXF not made (the STEP file is unaffected):');
+    expect(manifest).toContain('Gusset (qty 2): This part has no flat face to cut from');
+    expect(manifest).toContain('Arm (qty 2): DXF was not downloaded');
+    expect(zip).toMatchObject({ ready: 3, failed: 1, dxf: 2 });
+    // A DXF alone still makes a ZIP: the cut file is useful without its STEP.
+    const only = buildStepZip({ assemblyName: 'Robot', scannedAt: '', parts: [parts[2]], files: {}, dxfFiles: { 0: cut } });
+    expect(Object.keys(unzipSync(only.bytes))).toContain('Robot_STEP/2D_cut/Bracket__p3.dxf');
   });
   it('refuses to build a ZIP when every part failed or no file arrived', () => {
     expect(() => buildStepZip({ assemblyName: 'Robot', scannedAt: '', parts: [part('Motor', 'failed')], files: {} })).toThrow(NoStepFilesError);
