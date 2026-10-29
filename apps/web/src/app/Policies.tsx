@@ -40,14 +40,14 @@ function Privacy() {
       <h2>What Control Kit reads</h2>
       <ul className="landing-list">
         <li><strong>Your Onshape profile</strong> (the "read your profile" permission): your Onshape user id and name. The name shows who is signed in and who changed a part's type.</li>
-        <li><strong>Your documents</strong> (the "read your documents" permission): only the assembly you open Control Kit beside, its bill of materials, part pictures, and the STEP files you ask to export.</li>
+        <li><strong>Your documents</strong> (the "read your documents" permission): only the assembly you open Control Kit beside, its bill of materials, part pictures, and the STEP and DXF files you ask to export.</li>
       </ul>
     </section>
     <section className="landing-section">
       <h2>What it keeps, and for how long</h2>
       <ul className="landing-list">
         <li>Your Onshape sign-in tokens, encrypted on our server, for 30 days after you last use Control Kit. Your browser holds only a random session cookie. Signing out deletes them at once.</li>
-        <li>For you alone: the assembly and its bill of materials for 30 days per revision, your latest scan for a week, part pictures for 30 days, and exported STEP files for an hour. These make rescans fast and keep Onshape requests low.</li>
+        <li>For you alone: the assembly and its bill of materials for 30 days per revision, your latest scan for a week, part pictures for 30 days, and exported STEP and DXF files for an hour. These make rescans fast and keep Onshape requests low.</li>
         <li>Your team number, if you enter one in Settings.</li>
         <li>Your team's part choices, saved with the document for everyone who scans it, with the name of who made each change. The history of changes is kept for a year.</li>
         <li>AI review's suggestions for 30 days, so asking again about the same parts gives the same answer without another AI call.</li>

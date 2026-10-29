@@ -6,7 +6,7 @@ import { runVendor } from './vendor-ingest';
 import { catalogHealth } from './catalog';
 import { aiReviewEnabled, cachedAiReview, releaseAiReview, reserveAiReview, reviewWithAi, trustedAiRequest, validAiRequest, type AiEnv } from './ai-review';
 export { AiAllowance } from './ai-allowance';
-import { advanceExport, BudgetExhaustedError, createExportJob, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
+import { advanceExport, BudgetExhaustedError, createExportJob, dxfKey, fileKey, jobKey, jobSummary, pollBudget, type ExportJob, type RequestBudget } from './step-export';
 import { countedFetch, persistLedger, RequestLedger } from './onshape-client';
 import { assemblyNowKey, assemblyPreview, assemblyPreviewCacheKey, assemblyView, linePreview, previewCacheKey, PreviewUnavailableError, readAssemblyNow, redrawAssembly, reserveRedraw, type AssemblySource } from './preview';
 import { clearCookie, readSignedEnvelope, seal, signedCookie, unseal, type SignedCookie } from './secrets';
@@ -483,19 +483,23 @@ async function route(request: Request, env: Env): Promise<Response> {
       throw error;
     } finally { await persistLedger(env.APP_STATE, ledger).catch(() => undefined); }
   }
-  const exportsMatch = url.pathname.match(/^\/api\/exports(?:\/([a-f0-9-]{36}))?(?:\/files\/(\d{1,4}))?$/);
+  const exportsMatch = url.pathname.match(/^\/api\/exports(?:\/([a-f0-9-]{36}))?(?:\/files\/(\d{1,4})(?:\.(body|edges))?)?$/);
   if (exportsMatch) {
     if (request.headers.get('origin') !== env.WEB_ORIGIN) return reply({ error: 'Invalid request origin.' }, 403);
     const current = await getSession(request, env);
     if (!current) return reply({ error: 'Reconnect Onshape.' }, 401);
     const userId = current.data.user.id;
     const [, jobId, fileIndex] = exportsMatch;
-    // A finished file is served from KV: downloading it again costs no Onshape request.
+    const geometry = exportsMatch[3] as 'body' | 'edges' | undefined;
+    // A finished file is served from KV: downloading it again costs no Onshape request. `.body` and `.edges` are the
+    // Onshape geometry a 2D-cut part's DXF is drawn from in the browser.
     if (jobId && fileIndex !== undefined && request.method === 'GET') {
       const raw = await env.APP_STATE.get(jobKey(userId, jobId));
       const part = raw ? (JSON.parse(raw) as ExportJob).parts[Number(fileIndex)] : undefined;
-      const file = part?.state === 'ready' ? await env.APP_STATE.get(fileKey(userId, jobId, Number(fileIndex))) : null;
+      const ready = geometry ? part?.dxf?.state === 'ready' : part?.state === 'ready';
+      const file = ready ? await env.APP_STATE.get(geometry ? dxfKey(userId, jobId, Number(fileIndex), geometry) : fileKey(userId, jobId, Number(fileIndex))) : null;
       if (!part || !file) return reply({ error: 'This file is not ready or has expired. Export again.' }, 404);
+      if (geometry) return new Response(file, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
       return new Response(file, { headers: { 'content-type': 'application/step', 'content-disposition': `attachment; filename="${part.fileName}"`, 'cache-control': 'no-store' } });
     }
     let job: ExportJob;

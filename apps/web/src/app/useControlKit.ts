@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { aiCandidateRecord, applyAiReview, applyClassificationChoice, applyMatchDecision, buildAiReviewRequest, classificationIdentity, classifyScan, decisionRecord, matchCatalog, type AiProvider, type AiReviewItem, type BomLine, type ClassificationOverride, type ControlPointChoiceTimes, type ExportPart, type MatchProgress, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
+import { aiCandidateRecord, applyAiReview, applyClassificationChoice, applyMatchDecision, buildAiReviewRequest, classificationIdentity, classifyScan, decisionRecord, drawFlatPart, matchCatalog, withDrawnDxf, type AiProvider, type AiReviewItem, type BomLine, type ClassificationOverride, type ControlPointChoiceTimes, type ExportPart, type MatchProgress, type ScanResult, type UserSettings, type VendorRecord } from '@control-kit/shared';
 import { makeListKey } from './model';
 /** Spreadsheet and ZIP builders load on first download, keeping them out of the initial bundle. */
 const exporters = () => import('@control-kit/excel');
@@ -9,7 +9,11 @@ export type Session = { connected: boolean; setupPending?: boolean; user?: { id:
 export type ScanStep = 'revision' | 'assembly' | 'bom' | 'choices' | 'catalogs' | 'matching';
 export type ScanCounts = { parts?: number; subassemblies?: number; bomRows?: number; cached?: boolean; lines?: number; catalogs?: number; catalogsTotal?: number; products?: number; matched?: number };
 export type ScanProgress = { stage: string; current: number; total: number; instances: number; retry?: string; step?: ScanStep; counts?: ScanCounts };
-export type ExportState = { running: boolean; ready: number; failed: number; total: number; failures: { name: string; reason: string; url: string }[]; zipMade: boolean | null };
+export type ExportState = { running: boolean; ready: number; failed: number; total: number; failures: { name: string; reason: string; url: string }[]; zipMade: boolean | null;
+  /** Parts the export changed how they are made, with why (a flat part over 3 mm thick is printed). */
+  notes?: { name: string; reason: string; url: string }[];
+  /** DXF cut files for 2D-cut parts: how many arrived of how many were wanted. */
+  dxfReady?: number; dxfTotal?: number };
 type ScanEvent =
   | { type: 'progress'; stage: string; step?: ScanStep; current: number; total: number; instances: number; counts?: ScanCounts }
   | { type: 'rate-limit'; retryInMs: number }
@@ -577,7 +581,7 @@ export function useControlKit(context: URLSearchParams) {
       let previous = '';
       let stalled = false;
       while (!job.done) {
-        const signature = job.parts.map(part => part.state).join();
+        const signature = job.parts.map(part => `${part.state}:${part.dxf?.state ?? ''}`).join();
         // Waiting out an Onshape rate limit is progress, not a stuck job.
         if (signature !== previous || job.rateLimited) { previous = signature; lastChange = Date.now(); }
         setStep(current => current && { ...current, ready: job.parts.filter(part => part.state === 'ready').length, failed: job.parts.filter(part => part.state === 'failed').length, total: job.parts.length });
@@ -588,27 +592,50 @@ export function useControlKit(context: URLSearchParams) {
         if (!active()) return;
       }
       // A stalled export still delivers the files that finished; the rest are reported as unfinished.
-      if (stalled) job = { ...job, parts: job.parts.map(part => part.state === 'ready' || part.state === 'failed' ? part : { ...part, state: 'failed', error: 'Export stopped before this part finished. Export again to retry it.' }) };
+      if (stalled) job = { ...job, parts: job.parts.map(part => {
+        const unfinished = 'Export stopped before this part finished. Export again to retry it.';
+        const step = part.state === 'ready' || part.state === 'failed' ? part : { ...part, state: 'failed' as const, error: unfinished };
+        return step.dxf?.state === 'pending' ? { ...step, dxf: { ...step.dxf, state: 'failed' as const, error: unfinished } } : step;
+      }) };
       // One failed download fails only that part; the others are still zipped.
       const files: Record<number, string> = {};
+      const dxfFiles: Record<number, string> = {};
       for (const [index, part] of job.parts.entries()) {
-        if (part.state !== 'ready') continue;
-        try { const response = await api(`/api/exports/${job.jobId}/files/${index}`); if (response.ok) files[index] = await response.text(); }
-        catch { /* Reported below as "File was not downloaded". */ }
-        if (!active()) return;
+        if (part.state === 'ready') {
+          try { const response = await api(`/api/exports/${job.jobId}/files/${index}`); if (response.ok) files[index] = await response.text(); }
+          catch { /* Reported below as "File was not downloaded". */ }
+          if (!active()) return;
+        }
+        // A 2D-cut part's DXF is drawn here from the Onshape geometry the Worker stored; a failure never drops the STEP.
+        if (part.dxf?.state === 'ready') {
+          let drawn = null;
+          try {
+            const body = await api(`/api/exports/${job.jobId}/files/${index}.body`);
+            const edges = part.dxf.edges ? await api(`/api/exports/${job.jobId}/files/${index}.edges`) : null;
+            if (body.ok && (!edges || edges.ok)) drawn = drawFlatPart(await body.json(), edges ? await edges.json() : null, part.partId);
+          } catch { /* Reported below as "DXF was not downloaded". */ }
+          if (!active()) return;
+          job.parts[index] = withDrawnDxf(part, drawn);
+          if (drawn?.ok) dxfFiles[index] = drawn.text;
+        }
       }
-      const failures = job.parts.filter((part, index) => part.state === 'failed' || (part.state === 'ready' && files[index] === undefined))
+      const stepFailures = job.parts.filter((part, index) => part.state === 'failed' || (part.state === 'ready' && files[index] === undefined))
         .map(part => ({ name: part.name, reason: part.error ?? 'File was not downloaded', url: part.sourceUrl }));
-      const ready = job.parts.length - failures.length;
+      const dxfFailures = job.parts.filter((part, index) => part.dxf && (part.dxf.state === 'failed' || (part.dxf.state === 'ready' && dxfFiles[index] === undefined)))
+        .map(part => ({ name: `${part.name} (DXF)`, reason: part.dxf!.error ?? 'DXF was not downloaded', url: part.sourceUrl }));
+      const failures = [...stepFailures, ...dxfFailures];
+      const ready = job.parts.length - stepFailures.length;
       // Failures are recorded before the ZIP is built, so an export where every part failed still lists each one.
       // The export counts as running, and the ZIP as not yet made, until the browser has been handed the file.
-      setStep({ running: true, ready, failed: failures.length, total: job.parts.length, failures, zipMade: null });
+      const dxfTotal = job.parts.filter(part => part.dxf).length;
+      const notes = job.parts.filter(part => part.note).map(part => ({ name: part.name, reason: part.note!, url: part.sourceUrl }));
+      setStep({ running: true, ready, failed: stepFailures.length, total: job.parts.length, failures, notes, zipMade: null, dxfReady: dxfTotal - dxfFailures.length, dxfTotal });
       const { buildStepZip } = await exporters();
       if (!active()) return;
-      const zip = buildStepZip({ ...job, files });
+      const zip = buildStepZip({ ...job, files, dxfFiles });
       saveFile(zip.bytes, zip.filename, 'application/zip');
       lastStepZip.current = { scanId: result.scanId, makeList, name: zip.filename, bytes: zip.bytes };
-      setStep(current => current && { ...current, running: false, zipMade: ready > 0 });
+      setStep(current => current && { ...current, running: false, zipMade: ready + zip.dxf > 0 });
     } catch (cause) {
       if (!active()) return;
       setStep(current => current && { ...current, running: false, zipMade: false });
