@@ -16,6 +16,7 @@ export type { CatalogReader, IndexEntry } from './catalog-read';
 export type { ControlPointAccount, ControlPointAdapter, ControlPointBomPayload, ControlPointCadExtra, ControlPointCadPart, ControlPointCandidate, ControlPointChoiceTimes, ControlPointDecision, ControlPointFile, ControlPointImport, ControlPointImportSummary, ControlPointLine, ControlPointWorkspace } from './control-point';
 export { checkStep, exportManifest, stepDispositions, stepFileName, wantsDxf, wantsStep } from './step';
 export type { DxfPart, ExportPart, StepCheck } from './step';
+export { cutsFromSheet, maxCutThicknessMm, statedThicknessMm, thicknessRule, tooThickText } from './thickness';
 export { drawFlatPart, dxfFileName, flatFaceDxf, needsTessellatedEdges, pickFlatFace, tessellatedPoints, withDrawnDxf } from './dxf';
 export type { BodyDetails, DxfResult, FlatFace, TessellatedEdges } from './dxf';
 export { bomColumns, bomIdentity, bomProperties, bomText, flagMissingSources, mergeBom } from './bom';

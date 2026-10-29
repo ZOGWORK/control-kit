@@ -52,11 +52,12 @@ END-ISO-10303-21;
 `;
 
 /**
- * Body details for a 3 mm plate, 100 x 60 mm, in metres as Onshape reports them: one rounded corner (an arc), a
- * 10 mm hole (a circle), and with `curved` a spline edge that needs Onshape's tessellation. The bottom face is the
- * largest; the top is smaller because of a countersink. Shaped like BTExportModelBodiesResponse.
+ * Body details for a 100 x 60 mm plate, 3 mm thick unless `thickness` (metres) says otherwise, in metres as Onshape
+ * reports them: one rounded corner (an arc), a 10 mm hole (a circle), side walls joining both faces, and with
+ * `curved` a spline edge that needs Onshape's tessellation. The bottom face is the largest; the top is smaller
+ * because of a countersink. Shaped like BTExportModelBodiesResponse.
  */
-export function mockPlateBody(partId: string, curved = false) {
+export function mockPlateBody(partId: string, curved = false, thickness = 0.003) {
   const p = (x: number, y: number, z = 0) => ({ x, y, z });
   const line = (id: string, a: ReturnType<typeof p>, b: ReturnType<typeof p>) => ({ id, curve: { type: 'LINE', origin: a, direction: p(b.x - a.x, b.y - a.y) }, geometry: { startPoint: a, endPoint: b, midPoint: p((a.x + b.x) / 2, (a.y + b.y) / 2) }, vertices: [] });
   const r = Math.SQRT1_2 * 0.01;
@@ -67,13 +68,16 @@ export function mockPlateBody(partId: string, curved = false) {
     curved ? { id: 'e4', curve: { type: 'BCURVE' }, geometry: { startPoint: p(0.09, 0.06), endPoint: p(0, 0.06) }, vertices: [] } : line('e4', p(0.09, 0.06), p(0, 0.06)),
     line('e5', p(0, 0.06), p(0, 0)),
     { id: 'e6', curve: { type: 'CIRCLE', origin: p(0.03, 0.03), normal: p(0, 0, 1), radius: 0.005 }, geometry: { startPoint: p(0.035, 0.03), endPoint: p(0.035, 0.03) }, vertices: [] },
-    line('t1', p(0, 0, 0.003), p(0.1, 0, 0.003)),
+    line('t1', p(0, 0, thickness), p(0.1, 0, thickness)),
   ];
   const loop = (outer: boolean, ids: string[]) => ({ isOuter: outer, isInner: !outer, coedges: ids.map(edgeId => ({ edgeId, orientation: true })) });
-  return { bodies: [{ id: partId, type: 'SOLID', edges, vertices: [{ id: 'v1', point: p(0, 0, 0) }, { id: 'v2', point: p(0, 0, 0.003) }], faces: [
+  return { bodies: [{ id: partId, type: 'SOLID', edges, vertices: [{ id: 'v1', point: p(0, 0, 0) }, { id: 'v2', point: p(0, 0, thickness) }], faces: [
     { id: 'bottom', area: 0.0059, surface: { type: 'PLANE', origin: p(0, 0, 0), normal: p(0, 0, -1), isOrientedWithFace: true }, loops: [loop(true, ['e1', 'e2', 'e3', 'e4', 'e5']), loop(false, ['e6'])] },
-    { id: 'top', area: 0.0058, surface: { type: 'PLANE', origin: p(0, 0, 0.003), normal: p(0, 0, 1), isOrientedWithFace: true }, loops: [loop(true, ['t1'])] },
-    { id: 'hole', area: 0.0001, surface: { type: 'CYLINDER', origin: p(0.03, 0.03), axis: p(0, 0, 1), radius: 0.005 }, loops: [] },
+    { id: 'top', area: 0.0058, surface: { type: 'PLANE', origin: p(0, 0, thickness), normal: p(0, 0, 1), isOrientedWithFace: true }, loops: [loop(true, ['t1', 't2', 't3', 't4', 't5']), loop(false, ['t6'])] },
+    // Side walls and the hole's wall join each bottom edge to the top face (top edges t2-t6 are named only by the loops).
+    ...['1', '2', '4', '5'].map(n => ({ id: `side${n}`, area: 0.0003, surface: { type: 'PLANE', origin: p(0, 0, 0), normal: p(1, 0, 0), isOrientedWithFace: true }, loops: [loop(true, [`e${n}`, `t${n}`])] })),
+    { id: 'fillet', area: 0.00005, surface: { type: 'CYLINDER', origin: p(0.09, 0.05), axis: p(0, 0, 1), radius: 0.01 }, loops: [loop(true, ['e3', 't3'])] },
+    { id: 'hole', area: 0.0001, surface: { type: 'CYLINDER', origin: p(0.03, 0.03), axis: p(0, 0, 1), radius: 0.005 }, loops: [loop(true, ['e6', 't6'])] },
   ] }] };
 }
 /** Onshape's tessellation of the curved plate's spline edge: a gentle bow from (90, 60) to (0, 60) mm. */

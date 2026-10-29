@@ -1,4 +1,4 @@
-import { checkStep, dxfFileName, needsTessellatedEdges, stepFileName, wantsDxf, wantsStep, type DxfPart, type ExportPart, type ScanResult } from '@control-kit/shared';
+import { checkStep, dxfFileName, needsTessellatedEdges, stepFileName, thicknessRule, wantsDxf, wantsStep, type DxfPart, type ExportPart, type ScanResult } from '@control-kit/shared';
 import type { Kv } from './index';
 import { SessionExpiredError } from './scan';
 
@@ -24,7 +24,7 @@ type FetchOnshape = (path: string, init?: RequestInit) => Promise<Response>;
 export const jobSummary = (job: ExportJob) => ({ jobId: job.jobId, assemblyName: job.assemblyName, documentName: job.documentName, revision: job.revision, scannedAt: job.scannedAt, createdAt: job.createdAt,
   done: job.parts.every(part => (part.state === 'ready' || part.state === 'failed') && part.dxf?.state !== 'pending'),
   rateLimited: Boolean(job.rateLimitedAt && Date.now() - job.rateLimitedAt < 60000),
-  parts: job.parts.map(({ lineKey, name, qty, disposition, partId, configuration, sourceUrl, fileName, state, error, units, nameMatches, bytes, dxf }) => ({ lineKey, name, qty, disposition, partId, configuration, sourceUrl, fileName, state, error, units, nameMatches, bytes, ...(dxf ? { dxf } : {}) })) });
+  parts: job.parts.map(({ lineKey, name, qty, disposition, partId, configuration, sourceUrl, fileName, state, error, units, nameMatches, bytes, dxf, manual, note }) => ({ lineKey, name, qty, disposition, partId, configuration, sourceUrl, fileName, state, error, units, nameMatches, bytes, ...(dxf ? { dxf } : {}), ...(manual ? { manual } : {}), ...(note ? { note } : {}) })) });
 
 export const jobKey = (userId: string, jobId: string) => `export:${userId}:${jobId}`;
 export const fileKey = (userId: string, jobId: string, index: number) => `export-file:${userId}:${jobId}:${index}`;
@@ -40,8 +40,11 @@ export function createExportJob(result: ScanResult, jobId: string, now = new Dat
     const missing = !line.partId ? 'Part ID unavailable' : !line.exportSource ? 'No workspace or version to export from (linked part without a version)' : null;
     const fileName = stepFileName(line, used);
     const dxf: DxfPart | undefined = wantsDxf(line) ? { fileName: dxfFileName(fileName), state: missing ? 'failed' : 'pending', error: missing, bytes: null, widthMm: null, heightMm: null, thicknessMm: null } : undefined;
-    return { lineKey: line.bomLineKey, name: line.name, qty: line.qty, disposition: line.disposition, partId: line.partId, configuration: line.configuration, sourceUrl: line.partStudioUrl, fileName,
+    // A 2D-cut part whose stated thickness is over 3 mm is printed instead (the owner's rule; a person's choice wins).
+    const { disposition, note } = thicknessRule(line);
+    return { lineKey: line.bomLineKey, name: line.name, qty: line.qty, disposition, partId: line.partId, configuration: line.configuration, sourceUrl: line.partStudioUrl, fileName,
       state: missing ? 'failed' : 'pending', error: missing, units: null, nameMatches: null, bytes: null, ...(dxf ? { dxf } : {}),
+      ...(line.dispositionSource === 'manual' ? { manual: true } : {}), ...(note ? { note } : {}),
       documentId: line.documentId, elementId: line.elementId, exportSource: line.exportSource ?? null, translationId: null, resultDocumentId: null, startedAt: null };
   });
   return { jobId, documentId: result.documentId, scanId: result.scanId!, assemblyName: result.assemblyName, documentName: result.documentName, revision: result.diagnostics?.revision ?? null,
@@ -78,8 +81,10 @@ export async function advanceExport(job: ExportJob, userId: string, kv: Kv, fetc
   const cutting = job.parts.flatMap((part, index) => part.dxf?.state === 'pending' ? [index] : []);
   const start = running.length ? (job.cursor ?? 0) % running.length : 0;
   let polled = 0;
-  // STEP translations start first (Onshape runs them in parallel), then flat parts' geometry is read for their DXFs, then running translations are polled.
-  const tasks = [...pending.map(index => ({ index, dxf: false })), ...cutting.map(index => ({ index, dxf: true })), ...[...running.slice(start), ...running.slice(0, start)].map(index => ({ index, dxf: false }))];
+  // STEP translations start first (Onshape runs them in parallel) and running ones are polled next, so their
+  // deadline is never spent waiting on DXF geometry; flat parts' geometry is read with whatever budget is left, and a
+  // rate limit on it ends only the rest of this poll.
+  const tasks = [...pending.map(index => ({ index, dxf: false })), ...[...running.slice(start), ...running.slice(0, start)].map(index => ({ index, dxf: false })), ...cutting.map(index => ({ index, dxf: true }))];
   for (const { index, dxf } of tasks) {
     if (budget.remaining <= 0) break;
     const part = job.parts[index];

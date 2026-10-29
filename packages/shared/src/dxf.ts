@@ -9,7 +9,8 @@
  * several milliseconds to parse and draw and the free plan gives a Worker request 10 ms of CPU.
  */
 
-import type { DxfPart } from './step';
+import type { ExportPart } from './step';
+import { cutsFromSheet, tooThickText } from './thickness';
 
 export type Vec3 = { x: number; y: number; z: number };
 /** Onshape writes vectors as `{x, y, z}`; arrays are accepted too, so a different serialization fails nothing. */
@@ -73,9 +74,52 @@ export function pickFlatFace(details: BodyDetails, partId: string | null): { ok:
   const missing = loops.flatMap(loop => loop.edgeIds).find(id => !edges.has(id));
   if (missing) return { ok: false, error: 'Onshape body details name an edge they do not describe' };
   const needsTessellation = [...new Set(loops.flatMap(loop => loop.edgeIds).filter(id => !['LINE', 'CIRCLE'].includes(edges.get(id)!.curve?.type ?? '')))];
-  const along = bodyPoints(body).map(point => dot(sub(point, best!.origin), best!.normal));
-  const thicknessMm = along.length ? Math.round(span(along) * 1000 * 1000) / 1000 : null;
-  return { ok: true, face: { faceId: best.face.id ?? '', areaMm2: best.area * 1e6, normal: best.normal, origin: best.origin, body, loops, needsTessellation, thicknessMm } };
+  const through = runsThrough(body, best.face, best.normal, best.origin, loops);
+  if (!through.ok) return through;
+  return { ok: true, face: { faceId: best.face.id ?? '', areaMm2: best.area * 1e6, normal: best.normal, origin: best.origin, body, loops, needsTessellation, thicknessMm: through.thicknessMm } };
+}
+
+/**
+ * A cut file is only right when the face is a plate's outside and every loop on it runs through to the other side.
+ * The face must be at the part's extreme along its normal (a pocket floor is not), a flat face must face the other
+ * way at the far extreme, and each loop's walls must connect, face to face, to that far face: a blind recess on the
+ * face reaches only its own floor and walls, so it would be wrongly cut as a hole. A recess whose floor has a
+ * through hole still passes; that case is left to the manifest's "check before cutting".
+ */
+function runsThrough(body: BodyDetailsBody, chosen: BodyDetailsFace, normal: Vec3, origin: Vec3, loops: FlatFace['loops']): { ok: true; thicknessMm: number | null } | { ok: false; error: string } {
+  const tolerance = 1e-6;
+  const along = bodyPoints(body).map(point => dot(sub(point, origin), normal));
+  if (!along.length) return { ok: true, thicknessMm: null };
+  if (along.some(value => value > tolerance)) return { ok: false, error: 'The largest flat face is inside the part (a pocket floor), so it is not a cut outline' };
+  const depth = least(along);
+  const faces = body.faces ?? [];
+  const far = new Set(faces.filter(face => {
+    if (face === chosen || face.surface?.type !== 'PLANE') return false;
+    const raw = unit(vec(face.surface.normal) ?? { x: 0, y: 0, z: 0 });
+    const at = vec(face.surface.origin);
+    const facing = raw && (face.surface.isOrientedWithFace === false ? scale(raw, -1) : raw);
+    return facing && at && dot(facing, normal) < -0.999999 && Math.abs(dot(sub(at, origin), normal) - depth) < tolerance;
+  }));
+  if (!far.size) return { ok: false, error: 'No flat face on the other side of the part, so it is not a plate' };
+  const facesOf = new Map<string, BodyDetailsFace[]>();
+  for (const face of faces) for (const loop of face.loops ?? []) for (const coedge of loop.coedges ?? []) {
+    if (coedge.edgeId) facesOf.set(coedge.edgeId, [...(facesOf.get(coedge.edgeId) ?? []), face]);
+  }
+  const edgesOf = (face: BodyDetailsFace) => (face.loops ?? []).flatMap(loop => (loop.coedges ?? []).flatMap(coedge => coedge.edgeId ? [coedge.edgeId] : []));
+  for (const loop of loops) {
+    const seen = new Set<BodyDetailsFace>([chosen]);
+    const queue = loop.edgeIds.flatMap(id => facesOf.get(id) ?? []).filter(face => !seen.has(face));
+    let reached = false;
+    while (queue.length && !reached) {
+      const face = queue.shift()!;
+      if (seen.has(face)) continue;
+      seen.add(face);
+      if (far.has(face)) { reached = true; break; }
+      for (const id of edgesOf(face)) for (const next of facesOf.get(id) ?? []) if (!seen.has(next)) queue.push(next);
+    }
+    if (!reached) return { ok: false, error: loop.outer ? 'The outline does not run through the part, so it is not a plain plate' : 'A recess on the flat face does not run through the part, so it would be cut as a hole' };
+  }
+  return { ok: true, thicknessMm: Math.round(-depth * 1000 * 1000) / 1000 };
 }
 
 /** Tessellated points by edge ID, from Onshape's tessellated edges response. */
@@ -201,10 +245,14 @@ export function drawFlatPart(details: BodyDetails, edges: TessellatedEdges | nul
 
 /**
  * A part after the browser has drawn its DXF: the sizes and byte count filled in, or the drawing's reason for failing.
- * `drawn` is null when Onshape's geometry could not be downloaded.
+ * `drawn` is null when Onshape's geometry could not be downloaded. A part the geometry shows is over 3 mm thick, and
+ * that no person set to 2D cut, becomes a print with a note and no DXF (the owner's thickness rule).
  */
-export function withDrawnDxf<P extends { dxf?: DxfPart }>(part: P, drawn: DxfResult | null): P {
+export function withDrawnDxf<P extends ExportPart>(part: P, drawn: DxfResult | null): P {
   if (!part.dxf || part.dxf.state !== 'ready') return part;
+  if (drawn?.ok && drawn.thicknessMm !== null && !cutsFromSheet(drawn.thicknessMm) && !part.manual) {
+    return { ...part, disposition: 'print', dxf: undefined, note: tooThickText(drawn.thicknessMm) };
+  }
   if (!drawn) return { ...part, dxf: { ...part.dxf, state: 'failed', error: 'DXF was not downloaded' } };
   if (!drawn.ok) return { ...part, dxf: { ...part.dxf, state: 'failed', error: drawn.error } };
   return { ...part, dxf: { ...part.dxf, error: null, bytes: new TextEncoder().encode(drawn.text).byteLength, widthMm: drawn.widthMm, heightMm: drawn.heightMm, thicknessMm: drawn.thicknessMm } };

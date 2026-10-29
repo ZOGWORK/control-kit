@@ -10,6 +10,8 @@ export type ScanStep = 'revision' | 'assembly' | 'bom' | 'choices' | 'catalogs' 
 export type ScanCounts = { parts?: number; subassemblies?: number; bomRows?: number; cached?: boolean; lines?: number; catalogs?: number; catalogsTotal?: number; products?: number; matched?: number };
 export type ScanProgress = { stage: string; current: number; total: number; instances: number; retry?: string; step?: ScanStep; counts?: ScanCounts };
 export type ExportState = { running: boolean; ready: number; failed: number; total: number; failures: { name: string; reason: string; url: string }[]; zipMade: boolean | null;
+  /** Parts the export changed how they are made, with why (a flat part over 3 mm thick is printed). */
+  notes?: { name: string; reason: string; url: string }[];
   /** DXF cut files for 2D-cut parts: how many arrived of how many were wanted. */
   dxfReady?: number; dxfTotal?: number };
 type ScanEvent =
@@ -590,7 +592,8 @@ export function useControlKit(context: URLSearchParams) {
       // Failures are recorded before the ZIP is built, so an export where every part failed still lists each one.
       // The export counts as running, and the ZIP as not yet made, until the browser has been handed the file.
       const dxfTotal = job.parts.filter(part => part.dxf).length;
-      setStep({ running: true, ready, failed: stepFailures.length, total: job.parts.length, failures, zipMade: null, dxfReady: dxfTotal - dxfFailures.length, dxfTotal });
+      const notes = job.parts.filter(part => part.note).map(part => ({ name: part.name, reason: part.note!, url: part.sourceUrl }));
+      setStep({ running: true, ready, failed: stepFailures.length, total: job.parts.length, failures, notes, zipMade: null, dxfReady: dxfTotal - dxfFailures.length, dxfTotal });
       const { buildStepZip } = await exporters();
       if (!active()) return;
       const zip = buildStepZip({ ...job, files, dxfFiles });

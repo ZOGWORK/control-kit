@@ -1,11 +1,15 @@
 import type { BomLine } from './index';
 import { dispositionLabel, type Disposition } from './classifier';
+import { thicknessRule } from './thickness';
 
 /** Dispositions whose parts a team makes from a solid model, so they get a STEP file. */
 export const stepDispositions: Disposition[] = ['print', 'cnc', 'cut-2d', 'fabricate'];
 export const wantsStep = (line: BomLine) => !line.suppressed && stepDispositions.includes(line.disposition);
-/** A 2D-cut part also gets a DXF of its flat face, so it can go straight to a laser, router, or waterjet. */
-export const wantsDxf = (line: Pick<BomLine, 'suppressed' | 'disposition'>) => !line.suppressed && line.disposition === 'cut-2d';
+/**
+ * A 2D-cut part also gets a DXF of its flat face, so it can go straight to a laser, router, or waterjet, unless its
+ * stated thickness is over 3 mm and no person chose 2D cut: then it is printed (`thicknessRule`).
+ */
+export const wantsDxf = (line: Pick<BomLine, 'suppressed' | 'disposition' | 'dispositionSource' | 'name' | 'description' | 'configuration'>) => !line.suppressed && thicknessRule(line).disposition === 'cut-2d';
 
 /** Readable, unique, filesystem-safe name: part name, then part ID, then a short configuration tag when configured. */
 export function stepFileName(line: Pick<BomLine, 'name' | 'partId' | 'configuration'>, used: Set<string>) {
@@ -51,7 +55,11 @@ export type DxfPart = { fileName: string; state: 'pending' | 'ready' | 'failed';
 export type ExportPart = { lineKey: string; name: string; qty: number; disposition: Disposition; partId: string | null; configuration: string | null; sourceUrl: string; fileName: string;
   state: 'pending' | 'translating' | 'ready' | 'failed'; error: string | null; units: string | null; nameMatches: boolean | null; bytes: number | null;
   /** Present only for 2D-cut parts. */
-  dxf?: DxfPart };
+  dxf?: DxfPart;
+  /** A person chose this part's process, so the thickness rule leaves it alone. */
+  manual?: boolean;
+  /** Why the export changed how the part is made, e.g. a flat part over 3 mm thick filed as a print. */
+  note?: string | null };
 
 /** The manifest and failure report that go in every ZIP, in plain text so any team member can read them. */
 export function exportManifest(input: { assemblyName: string; documentName?: string; revision?: { type: string; id: string } | null; scannedAt: string; exportedAt: string; parts: ExportPart[] }) {
@@ -77,6 +85,8 @@ export function exportManifest(input: { assemblyName: string; documentName?: str
   ];
   if (cutReady.length) lines.push('', 'DXF cut files (2D cut folder):', 'File | Part | Qty | Size (mm) | Thickness (mm) | Onshape source',
     ...cutReady.map(part => `${part.dxf!.fileName} | ${part.name} | ${part.qty} | ${size(part.dxf!.widthMm)} x ${size(part.dxf!.heightMm)} | ${size(part.dxf!.thicknessMm)} | ${part.sourceUrl}`));
+  const noted = input.parts.filter(part => part.note);
+  if (noted.length) lines.push('', 'Notes:', ...noted.map(part => `${part.name}: ${part.note}`));
   if (failed.length) lines.push('', 'Failed parts (no file in this ZIP):', ...failed.map(part => `${part.name} (qty ${part.qty}): ${part.error ?? 'unknown error'} | ${part.sourceUrl}`));
   if (cutFailed.length) lines.push('', 'DXF not made (the STEP file is unaffected):', ...cutFailed.map(part => `${part.name} (qty ${part.qty}): ${part.dxf!.error ?? 'unknown error'} | ${part.sourceUrl}`));
   return `${lines.join('\n')}\n`;

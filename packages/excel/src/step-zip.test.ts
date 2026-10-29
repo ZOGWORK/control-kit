@@ -65,6 +65,11 @@ describe('STEP ZIP', () => {
     expect(manifest).toContain('Gusset (qty 2): This part has no flat face to cut from');
     expect(manifest).toContain('Arm (qty 2): DXF was not downloaded');
     expect(zip).toMatchObject({ ready: 3, failed: 1, dxf: 2 });
+    // A flat part found over 3 mm thick is filed as a print, with its reason in the manifest.
+    const printed = buildStepZip({ assemblyName: 'Robot', scannedAt: '', parts: [part('Thick Plate', 'ready', { disposition: 'print', fileName: 'Thick__p5.step', note: 'flat, 6 mm thick: over 3 mm, so 3D printed' })], files: { 0: step('Thick Plate') } });
+    const printedFiles = unzipSync(printed.bytes);
+    expect(Object.keys(printedFiles)).toContain('Robot_STEP/3D_print/Thick__p5.step');
+    expect(strFromU8(printedFiles['Robot_STEP/MANIFEST.txt'])).toContain('Notes:\nThick Plate: flat, 6 mm thick: over 3 mm, so 3D printed');
     // A DXF alone still makes a ZIP: the cut file is useful without its STEP.
     const only = buildStepZip({ assemblyName: 'Robot', scannedAt: '', parts: [parts[2]], files: {}, dxfFiles: { 0: cut } });
     expect(Object.keys(unzipSync(only.bytes))).toContain('Robot_STEP/2D_cut/Bracket__p3.dxf');

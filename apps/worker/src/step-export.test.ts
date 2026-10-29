@@ -166,6 +166,14 @@ describe('DXF for 2D-cut parts', () => {
     expect(work.parts[0].dxf!.state).toBe('pending');
     expect(jobSummary(work).done).toBe(false);
   });
+  it('files a tagged 2D-cut plate whose name says it is over 3 mm thick as a print, with no DXF, unless a person chose it', () => {
+    const work = job(2, n => n ? '6mm Side Plate' : '6mm Side Plate [laser]');
+    expect(work.parts[0]).toMatchObject({ disposition: 'print', note: 'flat, 6 mm thick: over 3 mm, so 3D printed' });
+    expect(work.parts[0].dxf).toBeUndefined();
+    // Without a tag the classifier already decided print.
+    expect(work.parts[1]).toMatchObject({ disposition: 'print' });
+    expect(jobSummary(work).parts[0]).toMatchObject({ note: 'flat, 6 mm thick: over 3 mm, so 3D printed' });
+  });
   it('gives a part with no export source a failed DXF too, and other processes none', () => {
     expect(job(1).parts[0].dxf).toBeUndefined();
     const result = aggregateAssembly({ rootAssembly: { instances: [{ id: 'i', name: 'Side Plate', type: 'Part', documentId: 'doc', elementId: 'studio', partId: 'p0' }] } },
