@@ -5,9 +5,10 @@ import { EmptyState } from '../components/arc/empty-state/empty-state';
 import { Progress } from '../components/arc/progress/progress';
 import type { ControlKit } from './useControlKit';
 import { makeGroups, type View } from './model';
+import type { Open } from './App';
 
 /** Parts the team makes, by process, with the STEP export and its per-part results. */
-export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) => void; go: (view: View) => void }) {
+export function Make({ kit, open, go }: { kit: ControlKit; open: Open; go: (view: View) => void }) {
   const groups = makeGroups(kit.result!);
   const total = groups.reduce((sum, group) => sum + group.lines.length, 0);
   const step = kit.step;
@@ -42,7 +43,7 @@ export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) =
       <div className="panel-head"><div><h2><span className="dot make" aria-hidden /> {group.label}</h2><p>{group.lines.length} part{group.lines.length === 1 ? '' : 's'}, {group.lines.reduce((sum, line) => sum + line.qty, 0)} pieces</p></div></div>
       <div className="rows">{group.lines.map(line => <div key={line.bomLineKey} className="row">
         <div className="row-main">
-          <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><span>{line.name}</span></button>
+          <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey, { keys: group.lines.map(item => item.bomLineKey), listed: item => item.disposition === group.disposition })}><span>{line.name}</span></button>
           <span className="row-meta"><span><span className="num">{line.qty}</span> needed</span>{line.material && <span>{line.material}</span>}
             <span>{line.dispositionSource === 'manual' ? 'chosen by your team' : line.dispositionEvidence[line.dispositionEvidence.length - 1] ?? ''}</span></span>
         </div>

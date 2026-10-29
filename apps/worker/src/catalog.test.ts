@@ -300,6 +300,14 @@ describe('known products and SKU choices', () => {
     // Picking another choice later replaces the first pick.
     const changed = applyMatchDecision(result, 'line-0', 'confirmed', { vendorId: 'gobilda', normalizedSku: normalizeSku('3110-0002-0001', 'gobilda') });
     expect(changed.lines[0].vendor?.sku).toBe('3110-0002-0001');
+    // After rejecting the shown product, Review offers the near matches; picking one confirms it.
+    const near = { ...changed.lines[0].vendor!, sku: '3110-0002-0009', normalizedSku: normalizeSku('3110-0002-0009', 'gobilda') };
+    const rejected = applyMatchDecision({ ...changed, lines: changed.lines.map(line => ({ ...line, matchStatus: 'possible' as const, nearMatches: [near] })) }, 'line-0', 'rejected');
+    expect(rejected.lines[0]).toMatchObject({ matchStatus: 'rejected', vendor: null });
+    const picked = applyMatchDecision(rejected, 'line-0', 'confirmed', near);
+    expect(picked.lines[0]).toMatchObject({ matchStatus: 'confirmed', vendor: { sku: '3110-0002-0009' } });
+    // A record that is none of the line's own still confirms nothing.
+    expect(applyMatchDecision(rejected, 'line-0', 'confirmed', { vendorId: 'gobilda', normalizedSku: '99999' }).lines[0].matchStatus).toBe('rejected');
   });
   it('asks which product a kit is when its own bodies name a different SKU of the same family', async () => {
     clearCatalogMemoryCache();
