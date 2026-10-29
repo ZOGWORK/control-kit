@@ -210,12 +210,15 @@ export async function matchCatalog(result: ScanResult, kv: CatalogReader, getDec
         : { vendor: null, confidence: 0, status: 'unmatched', reasons: [`no ${tag.vendor} product matches "${tag.name}"`] };
     }
     // A part numbered with a SKU its vendor has discontinued is ordered as the product sold in its place.
-    const next = !mapped && match.status !== 'exact' ? skus.map(successorOf).find(Boolean) : null;
-    if (next) {
-      const old = next.old;
-      const records = (await Promise.all(next.skus.map(([vendor, sku]) => recordAt(vendor, sku)))).filter((record): record is VendorRecord => Boolean(record));
-      if (records.length === 1 && next.skus.length === 1) match = { vendor: records[0], confidence: 1, status: 'exact', reasons: [`${old} is discontinued; ${next.product} is sold as ${records[0].sku}`] };
-      else if (records.length) match = { vendor: records[0], confidence: 0.9, status: 'possible', choices: records, reasons: [`${old} is discontinued; ${next.product} is sold as ${records.map(record => record.sku).join(' or ')}; pick one`] };
+    // Every discontinued number the part carries counts: a part number and a name that name different old products
+    // (a hub and a servo) leave all their replacements as choices rather than pricing one of them.
+    const retired = !mapped && match.status !== 'exact' ? [...new Map(skus.map(successorOf).filter(item => item !== null).map(item => [item.old, item])).values()] : [];
+    if (retired.length) {
+      const wanted = [...new Map(retired.flatMap(item => item.skus).map(([vendor, sku]) => [`${vendor}:${sku}`, [vendor, sku] as const])).values()];
+      const records = (await Promise.all(wanted.map(([vendor, sku]) => recordAt(vendor, sku)))).filter((record): record is VendorRecord => Boolean(record));
+      const said = retired.map(item => `${item.old} is discontinued; ${item.product} is sold as ${item.skus.map(([, sku]) => sku).join(' or ')}`).join('. ');
+      if (records.length === 1 && wanted.length === 1) match = { vendor: records[0], confidence: 1, status: 'exact', reasons: [said] };
+      else if (records.length) match = { vendor: records[0], confidence: 0.9, status: 'possible', choices: records, reasons: [`${said}; pick one`] };
     }
     // A part named exactly like a known FTC product ("Pinpoint", "Control Hub") is that product; with several SKUs, a person picks.
     const found = !mapped && match.status !== 'exact' ? knownProduct(tag ? tag.name : line.name) : null;

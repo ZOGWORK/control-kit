@@ -381,9 +381,11 @@ describe('parts library vendor tags', () => {
       record('gobilda', '1601-0414-0008', '1601 Series Flanged Ball Bearing (8mm ID x 14mm OD, 4mm Thickness) - 2 Pack', 4.99),
       record('gobilda', '1613-0514-0006', '1613 Series Thrust Ball Bearing (6mm ID x 14mm OD, 5mm Thickness)', 2.99),
     ];
-    const result = lines({ name: '8x14x5mm Bearing - Round Bore (GB)', configuration: 'List_a1=8×14×50;List_b2=Mediumm' }, { name: '8 × 14 × 5 mm Bearing - REX Bore (GB)' }, { name: '8x14mm Bearing (GB)' });
+    const result = lines({ name: '8x14x5mm Bearing - Round Bore (GB)', configuration: 'List_a1=8×14×50;List_b2=Mediumm' }, { name: '8 × 14 × 5 mm Bearing - REX Bore (GB)' }, { name: '8x14mm Bearing (GB)' }, { name: '5x14x8mm Bearing - Round Bore (GB)' });
     await enrichScan(result, catalog([...shelf, ...bearings]));
-    const [round, rex, unsized] = result.lines;
+    const [round, rex, unsized, reordered] = result.lines;
+    // The same numbers in another order are another bearing (5mm bore, 8mm thick), so it is never matched exactly.
+    expect(reordered.matchStatus).not.toBe('exact');
     expect(round).toMatchObject({ matchStatus: 'exact' });
     expect(round.vendor?.sku).toBe('1611-0514-0008');
     expect(round.matchReasons[0]).toContain('every size in the name');
@@ -419,5 +421,14 @@ describe('discontinued SKUs', () => {
     expect(servo.matchStatus).toBe('possible');
     expect(servo.choices?.map(choice => choice.sku)).toEqual(['REV-41-3334', 'REV-41-3336']);
     expect(servo.lineTotalUsd).toBeNull();
+  });
+  it('keeps every replacement a choice when a part names two discontinued products', async () => {
+    clearCatalogMemoryCache();
+    const result = lines({ name: 'Smart Robot Servo REV-41-1097', partNumber: 'REV-31-1152' });
+    await enrichScan(result, catalog(feed));
+    expect(result.lines[0].matchStatus).toBe('possible');
+    expect(result.lines[0].choices?.map(choice => choice.sku).sort()).toEqual(['REV-31-1595', 'REV-41-3334', 'REV-41-3336']);
+    expect(result.lines[0].matchReasons[0]).toContain('REV-31-1152 is discontinued');
+    expect(result.lines[0].matchReasons[0]).toContain('REV-41-1097 is discontinued');
   });
 });
