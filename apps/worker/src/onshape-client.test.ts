@@ -20,6 +20,8 @@ describe('Onshape request ledger', () => {
     expect(requestKind('/api/v9/parts/d/d1/m/m1/e/e1/partid/JHD/stl?mode=binary')).toBe('part-stl');
     expect(requestKind('/api/v9/partstudios/d/d1/m/m1/e/e1/translations', 'POST')).toBe('translation-start');
     expect(requestKind('/api/v9/translations/abc')).toBe('translation-status');
+    expect(requestKind('/api/v9/parts/d/d1/w/w1/e/e1/partid/JHD/bodydetails?includeGeometricData=true')).toBe('body-details');
+    expect(requestKind('/api/v9/parts/d/d1/v/v1/e/e1/partid/JHD/tessellatededges?edgeId=JHE')).toBe('tessellated-edges');
     expect(requestKind('/api/v9/documents/d/d1/externaldata/x1')).toBe('external-data');
     expect(requestKind('https://cad.onshape.com/api/v9/unknown')).toBe('other');
   });

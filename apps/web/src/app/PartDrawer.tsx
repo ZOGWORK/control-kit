@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { ExternalLink } from 'lucide-react';
-import { dispositions, dispositionLabel, type BomLine } from '@control-kit/shared';
+import { Check, ExternalLink } from 'lucide-react';
+import { dispositions, dispositionLabel, type BomLine, type ClassificationOverride, type VendorRecord } from '@control-kit/shared';
 import { Alert } from '../components/arc/alert/alert';
 import { Button, DispositionChip, LineCost, StockNote, Thumbnail } from './bits';
 import { Drawer, DrawerContent, useDrawerItem } from '../components/arc/drawer/drawer';
 import type { ControlKit } from './useControlKit';
-import { money, priceDate, vendorLabel, vendorLookup } from './model';
+import { matchedText, money, movedText, priceDate, productOptions, vendorLabel, vendorLookup } from './model';
 
 /** A `suggestion` that still waits in Review reads "Suggested"; one that decided the part reads as automatic. */
 const sourceLabel: Record<BomLine['dispositionSource'], string> = { manual: 'Chosen by your team', 'exact-sku': 'Exact vendor SKU', 'explicit-metadata': 'From Onshape data', provenance: 'From where the part comes from', suggestion: 'Decided automatically; change it if wrong', none: 'Not decided' };
@@ -47,22 +47,31 @@ function PartPicture({ kit, line }: { kit: ControlKit; line: BomLine }) {
 }
 
 /** Everything about one part: how it is obtained and why, its vendor product, and its Onshape source. */
-export function PartDrawer({ kit, line, onClose }: { kit: ControlKit; line: BomLine | null; onClose: () => void }) {
+/**
+ * After a choice saves, `onMoved` moves the drawer to the next part in the list it was opened from (or closes it) and
+ * `notice` says where the last part went.
+ */
+export function PartDrawer({ kit, line, onClose, onMoved, notice, hasNext }: { kit: ControlKit; line: BomLine | null; onClose: () => void; onMoved: (line: BomLine, text: string) => void; notice: string | null; hasNext: boolean }) {
   // Keeps the last part on screen while the drawer closes.
   const shown = useDrawerItem(line);
   return <Drawer open={Boolean(line)} onOpenChange={open => { if (!open) onClose(); }}>
     {shown && <DrawerContent title={shown.name} description={`${shown.qty} needed${shown.suppressed ? ', suppressed' : ''}`}>
       {/* The page's own error banner is behind the drawer, so a failed save is shown here too. */}
       {kit.error && <Alert tone="danger" title={kit.error} onDismiss={kit.clearError} />}
-      <PartDetails kit={kit} line={shown} />
+      {notice && <p className="drawer-notice" role="status"><Check aria-hidden size={14} /> {notice}. Showing the next part.</p>}
+      <PartDetails kit={kit} line={shown} onMoved={onMoved} hasNext={hasNext} />
     </DrawerContent>}
   </Drawer>;
 }
 
-function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
+function PartDetails({ kit, line, onMoved, hasNext }: { kit: ControlKit; line: BomLine; onMoved: (line: BomLine, text: string) => void; hasNext: boolean }) {
   const saving = kit.saving.has(line.bomLineKey);
   const locked = Boolean(kit.pending) || saving || !kit.result?.scanId || line.suppressed;
   const vendor = line.vendor;
+  // A saved choice moves on to the next part; a failed one stays here with its error.
+  const choose = async (choice: ClassificationOverride | null) => { if (await kit.setDisposition(line, choice)) onMoved(line, movedText(line.name, choice)); };
+  const pick = async (record?: VendorRecord) => { if (await kit.decide(line, 'confirmed', record)) onMoved(line, matchedText(line.name, record ?? line.vendor!)); };
+  const options = vendor ? [] : productOptions(line, 4);
   return <div className="stack">
     <PartPicture kit={kit} line={line} />
     {/* What this part is at a glance: how it is obtained, its match, its cost, its stock. */}
@@ -83,10 +92,10 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
       {line.suppressed ? <p className="muted small">Suppressed parts are not bought or made. Unsuppress it in Onshape and rescan to include it.</p> : <>
         <div className="inline-actions" role="group" aria-label="Choose how this part is obtained">
           {dispositions.map(value => <Button key={value} size="sm" variant={line.disposition === value && line.manualClassification ? 'primary' : 'secondary'}
-            aria-pressed={line.manualClassification === value} disabled={locked} onClick={() => void kit.setDisposition(line, value)}>{dispositionLabel[value].replace(' (laser/waterjet/router)', '')}</Button>)}
+            aria-pressed={line.manualClassification === value} disabled={locked} onClick={() => void choose(value)}>{dispositionLabel[value].replace(' (laser/waterjet/router)', '')}</Button>)}
         </div>
-        {line.manualClassification && <Button size="sm" variant="ghost" disabled={locked} onClick={() => void kit.setDisposition(line, null)}>Use the automatic choice</Button>}
-        <p className="muted small">Choices are shared with everyone who scans this document and kept across rescans.</p>
+        {line.manualClassification && <Button size="sm" variant="ghost" disabled={locked} onClick={() => void choose(null)}>Use the automatic choice</Button>}
+        <p className="muted small">Choices are shared with everyone who scans this document and kept across rescans. {hasNext ? 'After a choice, the next part in the list opens.' : 'After a choice, this panel closes.'}</p>
       </>}
     </section>
 
@@ -107,18 +116,26 @@ function PartDetails({ kit, line }: { kit: ControlKit; line: BomLine }) {
           {line.choices!.map(choice => {
             const chosen = line.matchStatus === 'confirmed' && choice.vendorId === vendor.vendorId && choice.normalizedSku === vendor.normalizedSku;
             return <div key={`${choice.vendorId}:${choice.normalizedSku}`} className="inline-actions">
-              <Button size="sm" variant={chosen ? 'primary' : 'secondary'} aria-pressed={chosen} disabled={locked || chosen} onClick={() => void kit.decide(line, 'confirmed', choice)}>{chosen ? 'Chosen' : 'Use this'}</Button>
+              <Button size="sm" variant={chosen ? 'primary' : 'secondary'} aria-pressed={chosen} disabled={locked || chosen} onClick={() => void pick(choice)}>{chosen ? 'Chosen' : 'Use this'}</Button>
               <a className="link small" href={choice.url} target="_blank" rel="noopener noreferrer">{vendorLabel[choice.vendorId]} {choice.sku} <ExternalLink aria-hidden size={11} /></a>
               <span className="muted small">{choice.name}{choice.priceUsd !== null ? `, ${money(choice.priceUsd)} (${priceDate(choice)})` : ''}</span>
             </div>;
           })}
         </div>}
         {line.matchStatus === 'possible' && <div className="inline-actions">
-          <Button size="sm" disabled={locked} onClick={() => void kit.decide(line, 'confirmed')}>Confirm this product</Button>
+          <Button size="sm" disabled={locked} onClick={() => void pick()}>Confirm this product</Button>
           <Button size="sm" variant="ghost" disabled={locked} onClick={() => void kit.decide(line, 'rejected')}>Not this product</Button>
         </div>}
       </> : <>
         <p className="muted small">{line.matchStatus === 'rejected' ? 'You rejected the suggested product.' : 'No vendor product matched. A part number holding the vendor SKU gives an exact match after the next rescan.'}</p>
+        {options.length > 0 && !line.suppressed && <div className="stack">
+          <p className="small">Closest products in the catalogs. Pick the one this part is:</p>
+          {options.map(option => <div key={`${option.vendorId}:${option.normalizedSku}`} className="inline-actions">
+            <Button size="sm" variant="secondary" disabled={locked} onClick={() => void pick(option)}>Use this</Button>
+            <a className="link small" href={option.url} target="_blank" rel="noopener noreferrer">{vendorLabel[option.vendorId]} {option.sku} <ExternalLink aria-hidden size={11} /></a>
+            <span className="muted small">{option.name}{option.priceUsd !== null ? `, ${money(option.priceUsd)} (${priceDate(option)})` : ''}</span>
+          </div>)}
+        </div>}
         {vendorLookup(line) && <a className="link small" href={vendorLookup(line)!.url} target="_blank" rel="noopener noreferrer">Look up {vendorLookup(line)!.sku} on {vendorLookup(line)!.vendor} <ExternalLink aria-hidden size={11} /></a>}
       </>}
     </section>

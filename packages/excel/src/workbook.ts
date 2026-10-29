@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from 'fflate';
-import { isBundle, metadataIssueText, stepFileName, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorRecord } from '../../shared/src/index';
+import { dxfFileName, isBundle, maxCutThicknessMm, metadataIssueText, statedThicknessMm, stepFileName, wantsDxf, wantsStep, type BomLine, type CatalogHealth, type Disposition, type ScanResult, type VendorHealth, type VendorRecord } from '../../shared/src/index';
 
 type Cell = { col: number; type: 's' | 'n' | 'f'; value: string | number; style: number; cached?: number };
 type Sheet = { name: string; rows: Map<number, Cell[]>; widths: number[]; fixed: Record<number, number>; merges: string[]; links: { cell: string; url: string }[]; filter?: string; frozen?: number; landscape?: boolean; drawing?: boolean; tall?: number[] };
@@ -88,7 +88,7 @@ function purchaseNotes(line: BomLine, result: ScanResult) {
   if (line.priceCheck) values.push(`${line.priceCheck}; not priced`);
   if (ordered(line) && line.vendor!.priceUsd === null) values.push('No price, so no total');
   if (result.stats.staleVendorData && ordered(line)) values.push('Vendor data may be out of date');
-  if (line.disposition === 'hardware') values.push('Fastener from stock: CAD count can be low if Replicate or patterns placed some');
+  if (line.disposition === 'hardware') values.push('Fastener from stock: CAD count includes pattern and Replicate copies, not fasteners that were never modelled');
   if (line.purchasedAssembly) values.push(`One product (${line.purchasedAssembly.parts} internal parts not listed${line.purchasedAssembly.includes?.length ? `; includes ${line.purchasedAssembly.includes.join(', ')}` : ''})`);
   if (line.order && line.order.lines > 1) values.push(`Packs cover ${line.order.qty} pieces across ${line.order.lines} CAD lines with this SKU`);
   if (line.orderedWith) values.push(`Ordered with ${result.lines.find(other => other.bomLineKey === line.orderedWith)?.name ?? 'another row'} (same SKU)`);
@@ -182,12 +182,12 @@ function buySheet(result: ScanResult, now: Date) {
   return { target, first, last, total, priced: pricedLines.length, lines: purchases.length };
 }
 
-/** Parts the team makes, by process, with the STEP file name each one gets in the export ZIP. */
+/** Parts the team makes, by process, with the STEP file name each one gets in the export ZIP, and a 2D-cut part's DXF. */
 function makeSheet(result: ScanResult, now: Date) {
-  const names = ['#', 'Part', 'Qty Needed', 'Process', 'Material', 'STEP file', 'Onshape Part Studio', 'Why'];
-  const target = sheet('Make', names.length, { 2: 44, 6: 44, 8: 52 });
+  const names = ['#', 'Part', 'Qty Needed', 'Process', 'Material', 'STEP file', 'DXF file', 'Onshape Part Studio', 'Why'];
+  const target = sheet('Make', names.length, { 2: 44, 6: 44, 7: 44, 9: 52 });
   heading(target, 'MAKE', result, now, 1);
-  put(target, 4, 1, 'STEP files come from Download STEP files in Control Kit; each file in the ZIP has the name shown here, in a folder for its process.', S.note);
+  put(target, 4, 1, 'STEP files come from Download STEP files in Control Kit; each file in the ZIP has the name shown here, in a folder for its process. A 2D-cut part also gets a DXF of its flat face, in millimetres.', S.note);
   target.merges.push(`A4:${cellRef(names.length, 4)}`); target.tall = [4];
   headers(target, 6, names);
   const files = stepNames(result);
@@ -201,9 +201,13 @@ function makeSheet(result: ScanResult, now: Date) {
     put(target, row, 3, line.qty, body);
     put(target, row, 4, shortLabel[line.disposition], body);
     put(target, row, 5, line.material ?? '', body);
-    put(target, row, 6, files.get(line.bomLineKey) ?? '', body);
-    put(target, row, 7, 'Open Part Studio', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
-    put(target, row, 8, line.dispositionEvidence.join('; '), band(index, S.wrap, S.wrapAlt));
+    const file = files.get(line.bomLineKey) ?? '';
+    put(target, row, 6, file, body);
+    // Without a stated thickness the export measures the part, and one over 3 mm is printed instead, so the name is conditional.
+    const dxf = file && wantsDxf(line) ? dxfFileName(file) : '';
+    put(target, row, 7, dxf && line.dispositionSource !== 'manual' && !statedThicknessMm(line) ? `${dxf} (if ${maxCutThicknessMm} mm thick or less; otherwise 3D printed)` : dxf, body);
+    put(target, row, 8, 'Open Part Studio', band(index, S.link, S.linkAlt), 's', line.partStudioUrl);
+    put(target, row, 9, line.dispositionEvidence.join('; '), band(index, S.wrap, S.wrapAlt));
   });
   if (!lines.length) put(target, 7, 1, 'No parts are marked to make yet.', S.muted);
   target.filter = `A6:${cellRef(names.length, Math.max(7, 6 + lines.length))}`;
@@ -333,7 +337,7 @@ function overviewSheet(result: ScanResult, now: Date, buy: ReturnType<typeof buy
   put(target, row, 1, 'How to read this workbook', S.section); for (let c = 2; c <= 10; c++) put(target, row, c, '', S.section); target.merges.push(`A${row}:J${row}`);
   const notes = [
     'Buy list: parts to order, grouped by vendor, with product links, packs, and live Line Total formulas.',
-    'Make: parts to 3D print, machine, cut, or fabricate, with the STEP file name each gets in the export ZIP.',
+    'Make: parts to 3D print, machine, cut, or fabricate, with the STEP file name each gets in the export ZIP (and the DXF for a 2D-cut part).',
     'Review: parts without a decision yet, with suggestions and possible products to confirm in Control Kit.',
     'Links: every part, with its vendor product page and its Onshape part.',
     'Exceptions: stock problems, unresolved subassemblies, parts missing data, and suppressed parts.',

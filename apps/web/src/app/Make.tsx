@@ -5,9 +5,10 @@ import { EmptyState } from '../components/arc/empty-state/empty-state';
 import { Progress } from '../components/arc/progress/progress';
 import type { ControlKit } from './useControlKit';
 import { makeGroups, type View } from './model';
+import type { Open } from './App';
 
 /** Parts the team makes, by process, with the STEP export and its per-part results. */
-export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) => void; go: (view: View) => void }) {
+export function Make({ kit, open, go }: { kit: ControlKit; open: Open; go: (view: View) => void }) {
   const groups = makeGroups(kit.result!);
   const total = groups.reduce((sum, group) => sum + group.lines.length, 0);
   const step = kit.step;
@@ -21,7 +22,7 @@ export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) =
 
     <section className="panel" aria-labelledby="step-export">
       <div className="panel-head">
-        <div><h2 id="step-export">STEP files</h2><p>For slicers and CAM. A 2D-cut part still needs a cut file (DXF) made from its flat face.</p></div>
+        <div><h2 id="step-export">STEP files</h2><p>For slicers and CAM. Each 2D-cut part 3 mm thick or less also gets a DXF of its flat face, in millimetres, ready for a laser, router, or waterjet; a thicker flat part is 3D printed.</p></div>
         <Button loading={step?.running} onClick={() => void kit.downloadStep()}><Download aria-hidden size={15} /> Download STEP files</Button>
       </div>
       {step?.running && <div className="panel-body stack" aria-live="polite">
@@ -29,8 +30,12 @@ export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) =
         <p className="muted small">{step.total ? `${step.ready} of ${step.total} exported${step.failed ? `, ${step.failed} failed` : ''}. Onshape translates each part; large parts take longer.` : 'Starting the export…'}</p>
       </div>}
       {step && !step.running && step.zipMade !== null && <div className="panel-body stack">
-        {step.zipMade ? <Alert tone={step.failures.length ? 'warning' : 'success'} title={`${step.ready} of ${step.total} STEP files downloaded`}>{step.failures.length ? 'The parts below failed. They are also listed in MANIFEST.txt in the ZIP.' : 'Every part exported and passed its file check.'}</Alert>
+        {step.zipMade ? <Alert tone={step.failures.length ? 'warning' : 'success'} title={`${step.ready} of ${step.total} STEP files${step.dxfTotal ? ` and ${step.dxfReady ?? 0} of ${step.dxfTotal} DXF cut files` : ''} downloaded`}>{step.failures.length ? 'The parts below failed. They are also listed in MANIFEST.txt in the ZIP.' : 'Every part exported and passed its file check.'}</Alert>
           : <Alert tone="danger" title="No STEP file could be exported">No ZIP was made. Each part and its reason is listed below.</Alert>}
+        {(step.notes?.length ?? 0) > 0 && <div className="rows" aria-label="Export notes">{step.notes!.map(note => <div key={`${note.name}:${note.reason}`} className="row">
+          <div className="row-main"><span className="row-title"><span>{note.name}</span></span><span className="muted small">{note.reason}</span></div>
+          <div className="row-aside"><a className="link small" href={note.url} target="_blank" rel="noopener noreferrer">Open in Onshape <ExternalLink aria-hidden size={11} /></a></div>
+        </div>)}</div>}
         {step.failures.length > 0 && <div className="rows">{step.failures.map(failure => <div key={`${failure.name}:${failure.reason}`} className="row">
           <div className="row-main"><span className="row-title"><span>{failure.name}</span></span><span className="muted small">{failure.reason}</span></div>
           <div className="row-aside"><a className="link small" href={failure.url} target="_blank" rel="noopener noreferrer">Open in Onshape <ExternalLink aria-hidden size={11} /></a></div>
@@ -42,7 +47,7 @@ export function Make({ kit, open, go }: { kit: ControlKit; open: (key: string) =
       <div className="panel-head"><div><h2><span className="dot make" aria-hidden /> {group.label}</h2><p>{group.lines.length} part{group.lines.length === 1 ? '' : 's'}, {group.lines.reduce((sum, line) => sum + line.qty, 0)} pieces</p></div></div>
       <div className="rows">{group.lines.map(line => <div key={line.bomLineKey} className="row">
         <div className="row-main">
-          <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey)}><span>{line.name}</span></button>
+          <button type="button" className="row-title link-button" onClick={() => open(line.bomLineKey, { keys: group.lines.map(item => item.bomLineKey), listed: item => item.disposition === group.disposition })}><span>{line.name}</span></button>
           <span className="row-meta"><span><span className="num">{line.qty}</span> needed</span>{line.material && <span>{line.material}</span>}
             <span>{line.dispositionSource === 'manual' ? 'chosen by your team' : line.dispositionEvidence[line.dispositionEvidence.length - 1] ?? ''}</span></span>
         </div>

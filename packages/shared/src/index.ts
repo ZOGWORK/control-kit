@@ -6,7 +6,7 @@ export type { ClassificationOverride, ClassificationOverrides, Confidence, Dispo
 export type { Attribution, LibraryMapping, LicensedImage, VendorId, VendorRecord, MatchResult } from './matching';
 export { buildControlPointPayload, controlPointIdempotencyKey, controlPointPictureKey, CONTROL_POINT_CAD_URL, ControlPointError, INLINE_FILE_LIMIT_BYTES, MockControlPointAdapter, PICTURE_FILL_PER_SEND, PICTURES_BODY_LIMIT_BYTES, PICTURES_PER_CALL, pictureTargets, UPLOAD_FILE_LIMIT_BYTES, uploadedAfterSend } from './control-point';
 export { recalculatePurchasing, updatePurchasing } from './purchasing';
-export { isBundle, knownProduct, withKnownPack } from './known-products';
+export { isBundle, knownProduct, successorOf, withKnownPack } from './known-products';
 export { AI_REVIEW_MAX_LINES, AI_REVIEW_VERSION, aiCandidateRecord, aiDispositions, aiReviewHash, aiReviewInstructions, aiReviewSchema, applyAiReview, buildAiReviewRequest, lineCandidates, needsAiReview, parseAiReview } from './ai-review';
 export type { AiCandidate, AiDisposition, AiProvider, AiReviewItem, AiReviewLine, AiReviewRequest, AiSuggestion } from './ai-review';
 import { recalculatePurchasing } from './purchasing';
@@ -14,8 +14,11 @@ export { batchKey, catalogReadKey, catalogVendors, clearCatalogMemoryCache, inde
 export type { MatchProgress } from './catalog-read';
 export type { CatalogReader, IndexEntry } from './catalog-read';
 export type { ControlPointAccount, ControlPointAdapter, ControlPointAiAnswer, ControlPointAiAsk, ControlPointPictureKey, ControlPointPictureResult, ControlPointUpload, PassThroughBody, ControlPointBomPayload, ControlPointCadExtra, ControlPointCadPart, ControlPointCandidate, ControlPointChoiceTimes, ControlPointDecision, ControlPointFile, ControlPointImport, ControlPointImportSummary, ControlPointLine, ControlPointWorkspace } from './control-point';
-export { checkStep, exportManifest, stepDispositions, stepFileName, wantsStep } from './step';
-export type { ExportPart, StepCheck } from './step';
+export { checkStep, exportManifest, stepDispositions, stepFileName, wantsDxf, wantsStep } from './step';
+export type { DxfPart, ExportPart, StepCheck } from './step';
+export { cutsFromSheet, maxCutThicknessMm, statedThicknessMm, thicknessRule, tooThickText } from './thickness';
+export { drawFlatPart, dxfFileName, flatFaceDxf, needsTessellatedEdges, pickFlatFace, tessellatedPoints, withDrawnDxf } from './dxf';
+export type { BodyDetails, DxfResult, FlatFace, TessellatedEdges } from './dxf';
 export { bomColumns, bomIdentity, bomProperties, bomText, flagMissingSources, mergeBom } from './bom';
 export type { BillOfMaterials, BomHeader, BomItemSource, BomProperties, BomReconciliation, BomRow } from './bom';
 import type { Attribution, LicensedImage, VendorRecord } from './matching';
@@ -117,7 +120,8 @@ export function applyMatchDecision(result: ScanResult, key: string, decision: 'c
   const picked = line && pick ? decisionRecord(line, pick) : null;
   // A pick that is none of the line's records must not confirm the record that happens to be shown.
   if (pick && !picked) return next;
-  if (!line || (line.matchStatus !== 'possible' && !(picked && ['confirmed', 'unmatched'].includes(line.matchStatus)))) return next;
+  // A pick can follow an earlier pick, no match at all, or a rejection (Review offers a rejected part's near matches).
+  if (!line || (line.matchStatus !== 'possible' && !(picked && ['confirmed', 'unmatched', 'rejected'].includes(line.matchStatus)))) return next;
   if (picked) line.vendor = picked;
   line.matchStatus = decision;
   if (decision === 'rejected') { line.vendor = null; line.alternatives = []; }

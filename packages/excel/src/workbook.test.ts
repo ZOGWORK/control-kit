@@ -122,6 +122,21 @@ describe('Excel export', () => {
     expect(text(zip, 1)).toContain('Out of date');
   });
 
+  it("names a 2D-cut part's DXF beside its STEP file on the Make sheet", () => {
+    const plated = robot();
+    const bracket = plated.lines.find(line => line.partId === 'bracket')!;
+    const cut = classifyScan(plated, { teamNumber: null }, { [bracket.bomLineKey]: 'cut-2d' });
+    const make = text(unzipSync(buildExcelWorkbook(cut, new Date('2026-10-24T12:00:00Z')).bytes), 3);
+    // Set by hand, so no thickness check applies.
+    expect(row(make, 'Mystery Bracket')).toMatch(/Mystery_Bracket__bracket\.step.*Mystery_Bracket__bracket\.dxf</);
+    // An automatic plate with no stated thickness depends on the export's measurement.
+    const auto = robot();
+    auto.lines.find(line => line.partId === 'bracket')!.name = 'Side Plate';
+    const measured = text(unzipSync(buildExcelWorkbook(classifyScan(auto, { teamNumber: null }, {}), new Date('2026-10-24T12:00:00Z')).bytes), 3);
+    expect(row(measured, 'Side Plate')).toContain('Side_Plate__bracket.dxf (if 3 mm thick or less; otherwise 3D printed)');
+    expect(row(make, 'Intake Guide')).not.toContain('.dxf');
+  });
+
   it('shows "None priced" rather than $0.00 when no line has a total', () => {
     const unpriced = robot();
     for (const line of unpriced.lines) Object.assign(line, { vendor: null, matchStatus: 'unmatched', packsToOrder: null, lineTotalUsd: null });

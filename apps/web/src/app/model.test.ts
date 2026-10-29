@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aggregateAssembly, classifyScan, recalculatePurchasing, type AssemblyInstance, type BomLine, type ScanResult, type VendorRecord } from '@control-kit/shared';
-import { buyList, catalogState, catalogStateText, catalogsComplete, composition, feedDates, filterParts, findParts, hasChanges, money, priceDate, primaryAction, readiness, reviewQueue, makeListKey, scanChanges, staleCatalogs, summarize, topCosts, workspaceAccent } from './model';
+import { buyList, catalogState, catalogStateText, catalogsComplete, composition, feedDates, filterParts, findParts, hasChanges, inReview, inSubassembly, matchedText, money, movedText, needsProduct, nextInList, priceDate, primaryAction, productOptions, queueKind, readiness, reviewQueue, makeListKey, scanChanges, staleCatalogs, subassemblyOf, summarize, topCosts, workspaceAccent } from './model';
 
 const vendor = (sku: string, packSize: number | null, priceUsd: number | null): VendorRecord => ({ vendorId: 'gobilda', sku, normalizedSku: sku.replace(/\D/g, ''), name: 'Screw', normalizedName: 'screw', url: 'https://www.gobilda.com/x/',
   priceUsd, packSize, packSizeVerified: packSize !== null, stock: 'in', stockQty: null, category: 'hardware', updatedAt: '2026-10-24T00:00:00Z', source: 'sitemap' });
@@ -55,9 +55,10 @@ describe('Control Kit view model', () => {
     const ready = readiness(result, summary);
     expect(ready.order).toMatchObject({ ready: 2, total: 2, unmatched: 0, unpriced: 0, outOfStock: 1 });
     expect(primaryAction(summary, ready)).toMatchObject({ kind: 'review', label: 'Review 1 part' });
-    expect(primaryAction({ ...summary, review: 0 }, ready)).toMatchObject({ kind: 'stock', label: 'Replace 1 out-of-stock part' });
-    expect(primaryAction({ ...summary, review: 0 }, { ...ready, order: { ...ready.order, unmatched: 3 } }).label).toBe('Fix 3 unmatched parts');
-    expect(primaryAction({ ...summary, review: 0 }, { ...ready, order: { ...ready.order, outOfStock: 0 } }).kind).toBe('build-pack');
+    expect(primaryAction({ ...summary, toReview: 0 }, ready)).toMatchObject({ kind: 'stock', label: 'Replace 1 out-of-stock part' });
+    // Parts to buy without a product are counted in Review's number, so "Review N parts" covers them.
+    expect(primaryAction({ ...summary, review: 0, unmatched: 3, toReview: 3 }, ready).label).toBe('Review 3 parts');
+    expect(primaryAction({ ...summary, toReview: 0 }, { ...ready, order: { ...ready.order, outOfStock: 0 } }).kind).toBe('build-pack');
     expect(topCosts(result).map(line => line.partId)).toEqual(['screw', 'bearing']);
     expect(money(1768.05)).toBe('$1,768.05');
   });
@@ -120,8 +121,74 @@ describe('Control Kit view model', () => {
     const result = scan([...parts('Mystery part', 1, 'a'), ...parts('8mm ball bearing', 5, 'b'), ...parts('Wheel', 1, 'c')], lines => {
       const wheel = lines.find(line => line.partId === 'c')!; wheel.vendor = vendor('3606-0014-0096', 1, 12); wheel.matchStatus = 'possible';
     });
-    // The bearing is decided automatically (standard hardware), so only the match question and the open one remain.
-    expect(reviewQueue(result).map(item => [item.line.name, item.kind])).toEqual([['Wheel', 'match'], ['Mystery part', 'undecided']]);
+    // The bearing is decided Buy automatically (standard hardware), but no product matched, so it waits for one last.
+    expect(reviewQueue(result).map(item => [item.line.name, item.kind])).toEqual([['Wheel', 'match'], ['Mystery part', 'undecided'], ['8mm ball bearing', 'product']]);
+  });
+  it('puts parts to buy without a vendor product in Review, counted the same everywhere', () => {
+    const result = scan([...parts('M4 screw', 12, 'screw'), ...parts('8mm ball bearing', 4, 'bearing'), ...parts('Motor 5203-2402-0019', 1, 'motor'), ...parts('Mystery part', 1, 'mystery')], lines => {
+      Object.assign(lines.find(line => line.partId === 'screw')!, { vendor: vendor('2802-0004-0010', 10, 8.99), matchStatus: 'exact' });
+      // A possible product on a part already decided Buy still needs a person to confirm it.
+      Object.assign(lines.find(line => line.partId === 'motor')!, { vendor: vendor('5203-2402-0019', 1, 41.99), matchStatus: 'possible' });
+    });
+    const bearing = result.lines.find(line => line.partId === 'bearing')!;
+    const motor = result.lines.find(line => line.partId === 'motor')!;
+    expect([bearing.disposition, motor.disposition]).toEqual(['buy', 'buy']);
+    // Their group is No product, so a drawer working through another group never returns to them.
+    expect([queueKind(bearing), queueKind(motor)]).toEqual(['product', 'product']);
+    expect(result.lines.filter(needsProduct).map(line => line.partId).sort()).toEqual(['bearing', 'motor']);
+    const summary = summarize(result);
+    expect(summary).toMatchObject({ review: 1, unmatched: 2, toReview: 3 });
+    // The same parts the Buy list holds under "No vendor match yet".
+    expect(buyList(result).needsSku.map(line => line.partId).sort()).toEqual(['bearing', 'motor']);
+    expect(readiness(result, summary).order.unmatched).toBe(2);
+    expect(reviewQueue(result).map(item => [item.line.partId, item.kind])).toEqual([['mystery', 'undecided'], ['bearing', 'product'], ['motor', 'product']]);
+    expect(primaryAction(summary, readiness(result, summary)).label).toBe('Review 3 parts');
+    // The type bar still adds up to the unique count: unmatched Buy parts are counted under Buy, not twice.
+    expect(composition(summary).reduce((sum, share) => sum + share.count, 0)).toBe(summary.uniqueLines);
+    expect(composition(summary).find(share => share.key === 'review')).toMatchObject({ label: 'Undecided', count: 1 });
+    // Matched and priced, a part leaves Review.
+    expect(inReview(result.lines.find(line => line.partId === 'screw')!)).toBe(false);
+  });
+  it('offers the possible product, then choices, then near matches, each once', () => {
+    const a = vendor('1611-0019-0006', 1, 2.5); const b = vendor('1611-0019-0008', 1, 2.5); const c = vendor('1611-0019-0010', 1, 2.5);
+    const result = scan(parts('8mm ball bearing', 4, 'bearing'), lines => Object.assign(lines[0], { vendor: a, matchStatus: 'possible', choices: [a, b], nearMatches: [b, c] }));
+    expect(productOptions(result.lines[0]).map(record => record.sku)).toEqual(['1611-0019-0006', '1611-0019-0008', '1611-0019-0010']);
+    expect(productOptions(result.lines[0], 2)).toHaveLength(2);
+    // Unmatched, only its own records are offered.
+    const unmatched = scan(parts('8mm ball bearing', 4, 'bearing'), lines => Object.assign(lines[0], { nearMatches: [c] }));
+    expect(productOptions(unmatched.lines[0]).map(record => record.sku)).toEqual(['1611-0019-0010']);
+    expect(matchedText('Bearing', c)).toBe('Bearing matched to goBILDA 1611-0019-0010');
+  });
+  it('groups parts by the subassembly they sit in, at any depth', () => {
+    const base = scan(parts('Mystery part', 1, 'top')).lines[0];
+    // Only the paths matter here.
+    const line = (name: string, ...paths: string[]) => ({ ...base, name, instancePaths: paths });
+    const roller = line('Roller', 'Robot > Right Pod <1> > Intake <1> > Roller <1>', 'Robot > Left Pod <1> > Intake <2> > Roller <1>');
+    const plate = line('Plate', 'Robot > Right Pod <2> > Plate <1>');
+    const top = line('Frame', 'Robot > Frame <1>');
+    const leftIntake = line('Intake roller', 'Robot > Left Pod <1> > Intake <1> > Intake roller <1>');
+    const rightIntake = subassemblyOf(roller)!;
+    expect(rightIntake).toEqual({ name: 'Intake', path: ['Right Pod', 'Intake'] });
+    expect(subassemblyOf(plate)).toEqual({ name: 'Right Pod', path: ['Right Pod'] });
+    expect(subassemblyOf(top)).toBeNull();
+    // Every copy of the right pod is the same subassembly; the left pod's Intake is a different one of the same name.
+    expect(inSubassembly(plate, { name: 'Right Pod', path: ['Right Pod'] })).toBe(true);
+    expect(inSubassembly(roller, { name: 'Right Pod', path: ['Right Pod'] })).toBe(true);
+    expect(inSubassembly(leftIntake, rightIntake)).toBe(false);
+    expect(inSubassembly(plate, rightIntake)).toBe(false);
+    // The part itself is not its own subassembly.
+    expect(inSubassembly(top, { name: 'Frame', path: ['Frame'] })).toBe(false);
+  });
+  it('moves the drawer to the next part still in its list, wrapping to skipped ones, and closes when none is left', () => {
+    const keys = ['a', 'b', 'c', 'd'];
+    expect(nextInList(keys, 'b', () => true)).toBe('c');
+    expect(nextInList(keys, 'b', key => key !== 'c')).toBe('d');
+    expect(nextInList(keys, 'd', key => key === 'a')).toBe('a');
+    expect(nextInList(keys, 'b', key => key === 'b')).toBeNull();
+    expect(nextInList(keys, 'gone', key => key === 'c')).toBe('c');
+    expect(movedText('Bracket', 'print')).toBe('Bracket moved to 3D print');
+    expect(movedText('Bracket', 'ignore')).toBe('Bracket moved to Not needed');
+    expect(movedText('Bracket', null)).toBe('Bracket is back on the automatic choice');
   });
   it('filters and searches parts by disposition, part number, and SKU', () => {
     const result = scan([...parts('Sensor mount [3DP]', 1, 'm'), ...parts('M3 screw', 2, 's'), { id: 'x', name: 'Spare', type: 'Part', documentId: 'doc', elementId: 'studio', partId: 'x', suppressed: true }], lines => {

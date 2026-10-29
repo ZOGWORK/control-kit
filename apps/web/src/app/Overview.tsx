@@ -9,6 +9,7 @@ import type { ControlPoint } from './useControlPoint';
 import { ControlPointCard } from './ControlPoint';
 import { ago, buyList, catalogsComplete, catalogState, catalogStateText, composition, feedDates, findParts, hasChanges, money, percent, primaryAction, readiness, scanChanges, staleCatalogs, topCosts, unmatchedParts, vendorLabel,
   type PrimaryAction, type Readiness, type Summary, type View } from './model';
+import type { Open, ReviewFilter } from './App';
 
 /** "1 part", "3 parts". */
 const parts = (count: number) => `${count} ${count === 1 ? 'part' : 'parts'}`;
@@ -19,7 +20,7 @@ const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month
 /** A problem still standing between this scan and a complete order and build list. */
 type Move = { key: string; icon: ReactNode; tone: 'attention' | 'blocked'; title: string; detail: string; action?: ReactNode; lines?: BomLine[] };
 
-export function Overview({ kit, cp, summary, go, open, now }: { kit: ControlKit; cp: ControlPoint; summary: Summary; go: (view: View) => void; open: (key: string) => void; now: number | null }) {
+export function Overview({ kit, cp, summary, go, goReview, open, now }: { kit: ControlKit; cp: ControlPoint; summary: Summary; go: (view: View) => void; goReview: (filter: ReviewFilter) => void; open: Open; now: number | null }) {
   const result = kit.result!;
   const ready = readiness(result, summary);
   const primary = primaryAction(summary, ready);
@@ -32,18 +33,19 @@ export function Overview({ kit, cp, summary, go, open, now }: { kit: ControlKit;
 
   const moves: Move[] = [];
   const done: string[] = [];
-  if (summary.review) moves.push({ key: 'review', icon: <ListChecks aria-hidden />, tone: 'attention', title: `${parts(summary.review)} ${summary.review === 1 ? 'needs' : 'need'} a decision`,
-    detail: summary.possibleMatches ? `${summary.possibleMatches} have a possible vendor match to confirm. The rest need you to choose how they're made.` : 'Choose whether each part is bought, printed, or fabricated.',
-    action: <Button variant="secondary" size="sm" onClick={() => go('review')}>Review</Button> });
+  // Review holds parts whose type is undecided and parts to buy with no vendor product, so one move counts both.
+  if (summary.toReview) moves.push({ key: 'review', icon: <ListChecks aria-hidden />, tone: 'attention', title: `${parts(summary.toReview)} ${summary.toReview === 1 ? 'needs' : 'need'} a decision`,
+    detail: [
+      summary.review && (summary.possibleMatches ? `${summary.possibleMatches} of ${summary.review} undecided ${summary.review === 1 ? 'has' : 'have'} a possible vendor match to confirm; choose how the rest are made.` : `Choose how ${summary.review === 1 ? '1 part is' : `${summary.review} parts are`} made.`),
+      summary.unmatched && `${parts(summary.unmatched)} to buy ${summary.unmatched === 1 ? 'has' : 'have'} no vendor product yet: pick one, search the vendor, or add the SKU to the part number in Onshape${notReady.length ? '; some catalogs are still loading' : ''}.`,
+    ].filter(Boolean).join(' '),
+    action: <Button variant="secondary" size="sm" onClick={() => goReview('all')}>Review</Button>, lines: summary.unmatched ? unmatchedParts(result) : undefined });
   else done.push('Every part has a decision');
   // Loading catalogs explain unmatched parts, so they come before them.
   if (notReady.length) moves.push({ key: 'catalog', icon: <Store aria-hidden />, tone: 'attention', title: notReady.length === health!.vendors.length ? 'Vendor catalogs are still loading' : 'Some vendor catalogs are still loading',
     detail: `${notReady.map(vendor => `${vendorLabel[vendor.vendorId]} (${catalogStateText(vendor).toLowerCase()})`).join(', ')}. Parts from these vendors can't be matched or priced yet; rescan later to pick them up.` });
   else if (health) done.push('All vendor catalogs loaded');
-  if (ready.order.unmatched) moves.push({ key: 'sku', icon: <Tag aria-hidden />, tone: 'attention', title: `${parts(ready.order.unmatched)} to buy ${ready.order.unmatched === 1 ? 'has' : 'have'} no vendor match`,
-    detail: notReady.length ? 'Add the vendor SKU to the part number in Onshape, or confirm a match once catalogs finish loading.' : 'Add the vendor SKU to the part number in Onshape, then rescan.',
-    action: <Button variant="secondary" size="sm" onClick={() => go('buy')}>Open buy list</Button>, lines: unmatchedParts(result) });
-  else if (summary.buyLines) done.push('Every part to buy is matched');
+  if (!ready.order.unmatched && summary.buyLines) done.push('Every part to buy is matched');
   if (ready.order.unpriced) moves.push({ key: 'unpriced', icon: <Tag aria-hidden />, tone: 'attention', title: `${parts(ready.order.unpriced)} matched but not priced`,
     detail: 'Their pack size or price is unknown, so they stay out of the total. Check them on the vendor\'s site.', action: <Button variant="secondary" size="sm" onClick={() => go('buy')}>Open buy list</Button> });
   else if (summary.buyLines && !ready.order.unmatched) done.push('Every matched part is priced');
@@ -59,14 +61,14 @@ export function Overview({ kit, cp, summary, go, open, now }: { kit: ControlKit;
     <FindPart kit={kit} open={open} />
     <StatusCard kit={kit} summary={summary} ready={ready} />
     {kit.previous && <Changes kit={kit} />}
-    <PrimaryBar kit={kit} cp={cp} primary={primary} summary={summary} go={go} />
+    <PrimaryBar kit={kit} cp={cp} primary={primary} summary={summary} go={go} goReview={goReview} />
     {stale.length > 0 && <div className="stale-note"><Alert tone="warning" title="Some vendor prices may be out of date">
       {stale.map(vendor => `${vendorLabel[vendor.vendorId]} (${catalogStateText(vendor).toLowerCase()})`).join(', ')}. Prices are as of {result.vendorDataUpdatedAt ? day(result.vendorDataUpdatedAt) : 'an earlier date'}; check prices and stock on the vendor's site before ordering.
     </Alert></div>}
     <Moves kit={kit} moves={moves} done={done} />
     <div className="overview-side">
       <MoneyCard kit={kit} summary={summary} ready={ready} go={go} />
-      <BuyByVendor kit={kit} go={go} />
+      <BuyByVendor kit={kit} go={go} goReview={goReview} />
       {summary.make.total > 0 && <MakeByMethod summary={summary} go={go} />}
       <ControlPointCard kit={kit} cp={cp} now={now} />
       <Downloads kit={kit} summary={summary} go={go} />
@@ -82,7 +84,12 @@ function FindPart({ kit, open }: { kit: ControlKit; open: (key: string) => void 
   return <div className="find-part" role="search">
     <label className="find-field"><Search aria-hidden size={15} /><span className="sr-only">Find a part</span>
       <input type="search" value={query} placeholder="Find a part by name, part number, or SKU" onChange={event => setQuery(event.target.value)}
-        onKeyDown={event => { if (event.key === 'Enter' && found[0]) { open(found[0].bomLineKey); setQuery(''); } if (event.key === 'Escape') setQuery(''); }} /></label>
+        onKeyDown={event => {
+          // Enter opens the first match. The field lets go of focus first: the drawer otherwise sees focus still outside it
+          // as the person leaving, and closes again at once.
+          if (event.key === 'Enter' && found[0]) { event.preventDefault(); event.currentTarget.blur(); open(found[0].bomLineKey); setQuery(''); }
+          if (event.key === 'Escape') setQuery('');
+        }} /></label>
     {query.trim() && <ul className="find-results panel">{found.length ? found.map(line => <li key={line.bomLineKey}>
       <button type="button" onClick={() => { open(line.bomLineKey); setQuery(''); }}><span className="find-name">{line.name}</span><span className="num muted small">×{line.qty}</span><DispositionChip line={line} /></button>
     </li>) : <li className="muted small find-empty">No part matches “{query.trim()}”.</li>}</ul>}
@@ -147,7 +154,7 @@ function Meter({ tone, label, ready, total, detail }: { tone: 'buy' | 'make'; la
  * order and build list are complete and a Control Point workspace is chosen, sending there becomes the action; after
  * this scan is sent, viewing it there is.
  */
-function PrimaryBar({ kit, cp, primary, summary, go }: { kit: ControlKit; cp: ControlPoint; primary: PrimaryAction; summary: Summary; go: (view: View) => void }) {
+function PrimaryBar({ kit, cp, primary, summary, go, goReview }: { kit: ControlKit; cp: ControlPoint; primary: PrimaryAction; summary: Summary; go: (view: View) => void; goReview: (filter: ReviewFilter) => void }) {
   const workspace = primary.kind === 'build-pack' && cp.workspace?.canEditCad ? cp.workspace : null;
   // "View" only when this exact BOM, with the files a send would attach now, already went to this workspace.
   const sentNow = workspace && cp.sentCurrent ? cp.sent : null;
@@ -161,7 +168,7 @@ function PrimaryBar({ kit, cp, primary, summary, go }: { kit: ControlKit; cp: Co
     <Button variant="secondary" onClick={buildPack}><FileSpreadsheet aria-hidden size={15} />Build pack</Button>
   </div>;
   const run = () => {
-    if (primary.kind === 'review') return go('review');
+    if (primary.kind === 'review') return goReview('all');
     if (primary.kind !== 'build-pack') return go('buy');
     buildPack();
   };
@@ -313,7 +320,7 @@ function MoneyCard({ kit, summary, ready, go }: { kit: ControlKit; summary: Summ
 }
 
 /** Each vendor's share of the order, with stock problems called out in red. */
-function BuyByVendor({ kit, go }: { kit: ControlKit; go: (view: View) => void }) {
+function BuyByVendor({ kit, go, goReview }: { kit: ControlKit; go: (view: View) => void; goReview: (filter: ReviewFilter) => void }) {
   const { vendors, needsSku } = buyList(kit.result!);
   if (!vendors.length && !needsSku.length) return null;
   return <section className="panel" aria-labelledby="by-vendor">
@@ -327,9 +334,9 @@ function BuyByVendor({ kit, go }: { kit: ControlKit; go: (view: View) => void })
         <span className="num">{group.subtotal === null ? <span className="muted small">not priced</span> : money(group.subtotal)}</span>
       </button>;
     })}
-      {needsSku.length > 0 && <button type="button" className="row vendor-row" onClick={() => go('buy')}>
+      {needsSku.length > 0 && <button type="button" className="row vendor-row" onClick={() => goReview('product')}>
         <div className="row-main"><span className="row-title"><span className="dot attention" aria-hidden /><span>No vendor yet</span></span><span className="row-meta"><span>{parts(needsSku.length)}</span></span></div>
-        <span className="muted small">needs a SKU</span>
+        <span className="muted small">pick in Review</span>
       </button>}
     </div>
   </section>;

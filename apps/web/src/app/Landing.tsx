@@ -7,7 +7,7 @@ import { Policy, PolicyLinks, policyPages, type PolicyPage } from './Policies';
  * screenshots of a scanned FTC robot (HORS), and how to install it. Inside Onshape the panel always has assembly context.
  */
 const appStoreUrl = 'https://cad.onshape.com/appstore';
-// Set to true once Onshape publishes the listing; until then the page says the listing is pending.
+// Set to true once Onshape publishes the listing; until then the page says Control Kit is not listed yet.
 const listed = false;
 
 const features: Array<{ icon: ReactNode; title: string; text: string; image: string; alt: string }> = [
@@ -16,7 +16,7 @@ const features: Array<{ icon: ReactNode; title: string; text: string; image: str
   { icon: <ShoppingCart aria-hidden />, title: 'A buy list with real prices', image: 'buy-list', alt: 'Buy list grouped by vendor, with SKUs, quantities, packs to order, prices, and stock',
     text: 'Parts are matched by SKU against the goBILDA, REV, ServoCity, AndyMark, and Pitsco catalogs. Orders round up to whole packs, and a part is priced only when its match, pack size, and price are all verified, so the total never looks complete when it isn\'t.' },
   { icon: <Wrench aria-hidden />, title: 'STEP files for everything you make', image: 'make', alt: 'Make list of 3D-printed and 2D-cut parts with a Download STEP files button',
-    text: 'Printed, CNC, and 2D-cut parts download as one ZIP of STEP files straight from Onshape, with a manifest of sources and quantities.' },
+    text: 'Printed, CNC, and 2D-cut parts download as one ZIP of STEP files straight from Onshape, with a DXF cut file for every flat part and a manifest of sources and quantities.' },
   { icon: <FileSearch aria-hidden />, title: 'Every decision explained', image: 'part-drawer', alt: 'Part details for a goBILDA Yellow Jacket motor, with its Onshape picture and exact SKU match',
     text: 'Each part shows its picture from Onshape and why it was sorted the way it was, and one click changes it for the whole team. The Excel workbook carries the buy list with live totals, the make list, and links to every product and Part Studio.' },
 ];
@@ -33,7 +33,7 @@ export function Landing() {
         <a className="landing-cta" href="#install">How to install</a>
         <a className="landing-link" href={appStoreUrl} target="_blank" rel="noopener noreferrer">Onshape App Store</a>
       </div>
-      {!listed && <p className="muted small">Control Kit's App Store listing is waiting for Onshape's review. The steps below work once it is listed.</p>}
+      {!listed && <p className="muted small">Control Kit is not in the Onshape App Store yet. The steps below work once it is listed.</p>}
       <img className="landing-shot" src="/listing/in-onshape.webp" width={2000} height={1000} alt="Control Kit scanning the HORS robot in Onshape's right panel, beside the 3D assembly" />
     </header>
 
@@ -60,7 +60,7 @@ export function Landing() {
       <ul className="landing-list">
         <li>Control Kit only reads documents. It never edits your CAD.</li>
         <li>Onshape sign-in tokens are stored encrypted on our server; your browser holds only an opaque session cookie.</li>
-        <li>To make rescans fast and cheap, Control Kit keeps, for you alone, the assembly and its bill of materials for 30 days per revision, your latest scan for a week, part pictures for 30 days, and exported STEP files for an hour.</li>
+        <li>To make rescans fast and cheap, Control Kit keeps, for you alone, the assembly and its bill of materials for 30 days per revision, your latest scan for a week, part pictures for 30 days, and exported STEP and DXF files for an hour.</li>
         <li>Vendor prices come from the vendors' public catalogs. Totals are list prices before shipping, tax, or team discounts.</li>
         <li>If AI review is turned on and you ask for it, the undecided parts' names, descriptions, part numbers, and candidate products, with a few details from the assembly, are sent to Google Gemini, or to Anthropic if Gemini is unavailable. Nothing is sent unless you click it.</li>
       </ul>

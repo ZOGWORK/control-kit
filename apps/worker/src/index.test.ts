@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker, { cronVendors, decisionIdentity, type Env, type Kv } from './index';
 import { createMockOnshape } from './mock-onshape';
-import { aggregateAssembly, classificationIdentity, matchCatalog, type ScanResult, type VendorId } from '@control-kit/shared';
+import { aggregateAssembly, classificationIdentity, drawFlatPart, matchCatalog, type ScanResult, type VendorId } from '@control-kit/shared';
 import { clearCatalogMemoryCache } from './catalog';
 import { batchKey, indexKey, pointerKey } from './vendor-ingest';
 import { readFileSync } from 'node:fs';
@@ -384,6 +384,41 @@ describe('M5 settings and classification overrides against mock Onshape', () => 
     expect(foreign.status).toBe(403);
     const day = JSON.parse(env.APP_STATE.values.get(`onshape-ledger:${new Date().toISOString().slice(0, 10)}`)!);
     expect(day.byKind['translation-start']).toBeGreaterThanOrEqual(2);
+  });
+  it("reads a 2D-cut part's geometry beside its STEP and serves it from KV for the browser to draw its DXF", async () => {
+    const start = await call('/oauth/start?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const cookie = (await call(`/oauth/redirect?code=mock-code&state=${state}`)).headers.get('set-cookie')!.split(';')[0];
+    const scan = await call('/api/scan?documentId=robot&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1', cookie);
+    const result = (await scan.text()).trim().split('\n').map(row => JSON.parse(row)).find(event => event.type === 'result').result;
+    const plate = result.lines.find((line: { partId: string }) => line.partId === 'wheel-96');
+    const override = await worker.fetch(new Request('http://localhost:8787/api/classification/override', { method: 'POST', headers: { cookie, origin: env.WEB_ORIGIN, 'content-type': 'application/json' },
+      body: JSON.stringify({ documentId: 'robot', scanId: result.scanId, identity: classificationIdentity(plate), classification: 'cut-2d' }) }), env);
+    expect(override.status).toBe(200);
+    const day = () => JSON.parse(env.APP_STATE.values.get(`onshape-ledger:${new Date().toISOString().slice(0, 10)}`) ?? '{"byKind":{}}').byKind as Record<string, number>;
+    const bodyDetailsBefore = day()['body-details'] ?? 0;
+    const { status, job } = await exportJob(cookie, 'robot', result.scanId);
+    expect(status).toBe(200);
+    expect(job.done).toBe(true);
+    const index = job.parts.findIndex(part => part.name === '96mm Wheel');
+    const part = job.parts[index] as (typeof job.parts)[number] & { dxf?: { fileName: string; state: string; edges: boolean } };
+    expect(part).toMatchObject({ state: 'ready', dxf: { fileName: part.fileName.replace(/\.step$/, '.dxf'), state: 'ready', edges: false } });
+    // One body details request; the mock plate has only lines, an arc, and a circle, so no tessellation.
+    expect((day()['body-details'] ?? 0) - bodyDetailsBefore).toBe(1);
+    expect(day()['tessellated-edges']).toBeUndefined();
+    const before = mock.apiRequests;
+    const file = await call(`/api/exports/${job.jobId}/files/${index}.body`, cookie);
+    expect(file.status).toBe(200);
+    expect(file.headers.get('content-type')).toBe('application/json');
+    // The browser draws the DXF from it.
+    const drawn = drawFlatPart(await file.json(), null, 'wheel-96');
+    expect(drawn).toMatchObject({ ok: true, widthMm: 100, heightMm: 60 });
+    expect(drawn.ok && drawn.text.startsWith('0\nSECTION')).toBe(true);
+    expect(mock.apiRequests).toBe(before);
+    // No tessellated edges were needed, and a print has no geometry to serve.
+    expect((await call(`/api/exports/${job.jobId}/files/${index}.edges`, cookie)).status).toBe(404);
+    const guide = job.parts.findIndex(item => item.name === 'Custom Printed Intake Guide');
+    expect((await call(`/api/exports/${job.jobId}/files/${guide}.body`, cookie)).status).toBe(404);
   });
   it('rejects a non-STEP download instead of zipping it, and refuses an export with nothing to make', async () => {
     const start = await call('/oauth/start?documentId=simple&workspaceOrVersion=w&workspaceOrVersionId=work1&elementId=elem1');
