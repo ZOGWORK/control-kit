@@ -504,8 +504,8 @@ button.row:hover { background: var(--ck-raised); }
 .landing-features { display: grid; gap: 56px; }
 .landing-feature { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 32px; align-items: center; }
 .landing-feature:not(:has(img)) { grid-template-columns: minmax(0, 1fr); max-width: 64ch; }
-.landing-feature.flip { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
-.landing-feature.flip .landing-copy { order: 2; }
+.landing-feature.landing-alt { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+.landing-feature.landing-alt .landing-copy { order: 2; }
 .landing-copy { display: grid; gap: 10px; align-content: start; }
 .landing-copy p, .landing-steps, .landing-list { color: var(--ck-text-muted); line-height: 1.6; }
 .landing-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; background: var(--ck-volt-soft); color: var(--ck-volt); }
@@ -520,8 +520,8 @@ a.brand { color: inherit; text-decoration: none; }
 .policy .landing-list strong { color: var(--ck-text); font-weight: 500; }
 @media (max-width: 760px) {
   .landing { padding-top: 32px; gap: 48px; }
-  .landing-feature, .landing-feature.flip { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .landing-feature.flip .landing-copy { order: 0; }
+  .landing-feature, .landing-feature.landing-alt { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .landing-feature.landing-alt .landing-copy { order: 0; }
 }
 a.nav-item { text-decoration: none; }
 .control-point .panel-head > .link { white-space: nowrap; flex: none; }

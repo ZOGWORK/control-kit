@@ -38,7 +38,7 @@ export function Landing() {
     </header>
 
     <section className="landing-features" aria-label="What Control Kit does">
-      {features.map((feature, index) => <article key={feature.title} className={`landing-feature${index % 2 ? ' flip' : ''}`}>
+      {features.map((feature, index) => <article key={feature.title} className={`landing-feature${index % 2 ? ' landing-alt' : ''}`}>
         <div className="landing-copy"><span className="landing-icon">{feature.icon}</span><h2>{feature.title}</h2><p>{feature.text}</p></div>
         <img className="landing-shot" src={`/listing/${feature.image}.webp`} width={1600} height={1000} loading="lazy" alt={feature.alt} />
       </article>)}
